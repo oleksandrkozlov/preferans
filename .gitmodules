@@ -1,0 +1,15 @@
+[submodule "client/deps/raylib"]
+	path = client/deps/raylib
+	url = git@github.com:raysan5/raylib.git
+[submodule "client/deps/range-v3"]
+	path = client/deps/range-v3
+	url = git@github.com:ericniebler/range-v3.git
+[submodule "client/deps/raylib-cpp"]
+	path = client/deps/raylib-cpp
+	url = git@github.com:RobLoach/raylib-cpp.git
+[submodule "client/deps/fmt"]
+	path = client/deps/fmt
+	url = git@github.com:fmtlib/fmt.git
+[submodule "client/deps/protobuf"]
+	path = client/deps/protobuf
+	url = git@github.com:protocolbuffers/protobuf.git

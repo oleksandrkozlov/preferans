@@ -1,0 +1,12 @@
+[
+  { include: [ "<bits/exception.h>", private, "<exception>", public ] },
+  { include: [ "@<boost/asio/.*>", private, "<boost/asio.hpp>", public ] },
+  { include: [ "@<boost/beast/.*>", private, "<boost/beast.hpp>", public ] },
+  { include: [ "@<boost/system/.*>", private, "<boost/system.hpp>", public ] },
+  { include: [ "@<stdexec/__detail/.*>", private, "<boost/execution.hpp>", public ] },
+  { include: [ "@<catch2/.*>", private, "<catch2/catch_all.hpp>", public ] },
+  { include: [ "@<gsl/.*>", private, "<gsl/gsl>", public ] },
+  { include: [ "@<meta/.*>", private, "<range/v3/all.hpp>", public ] },
+  { include: [ "@<range/v3/.*>", private, "<range/v3/all.hpp>", public ] },
+  { include: [ "\"net/proto2/public/repeated_field.h\"", private, "\"proto/pref.pb.h\"", public ] },
+]

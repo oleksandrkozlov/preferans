@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package pref;
+
+service Preferans {
+  rpc SayHello (HelloRequest) returns (HelloResponse);
+}
+
+message HelloRequest {
+  string name = 1;
+}
+
+message HelloResponse {
+  string message = 1;
+}
+
+message RpcEnvelope {
+  string method = 1;
+  bytes payload = 2;
+}

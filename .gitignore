@@ -1,0 +1,9 @@
+build*/
+compile_commands.json
+proto/*.pb.cc
+proto/*.pb.h
+.cache
+tests/__pycache__/
+tests/.pytest_cache/
+tests/pref_pb2.py
+server/data/

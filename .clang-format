@@ -1,0 +1,34 @@
+---
+BasedOnStyle:  WebKit
+AlignAfterOpenBracket: AlwaysBreak
+AllowShortFunctionsOnASingleLine: None
+BreakTemplateDeclarations: Yes
+BinPackArguments: false
+BinPackParameters: OnePerLine
+ColumnLimit:     120
+FixNamespaceComments: true
+IncludeBlocks:   Regroup
+IncludeCategories:
+  - Regex:           '^".+\.(h|hh|hpp|hxx)"$'
+    Priority:        1
+  - Regex:           '^<.+\.(h|hh|hpp|hxx)>$'
+    Priority:        2
+  - Regex:           '^<[^.]+>$'
+    Priority:        3
+IncludeIsMainRegex: '(_test)?$'
+Cpp11BracedListStyle: true
+NamespaceIndentation: None
+SpaceAfterTemplateKeyword: false
+SpaceBeforeCpp11BracedList: false
+PenaltyReturnTypeOnItsOwnLine: 999
+BreakBinaryOperations: RespectPrecedence
+SpaceInEmptyBlock: false
+AllowShortBlocksOnASingleLine: true
+AllowShortCaseExpressionOnASingleLine: true
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortCompoundRequirementOnASingleLine: true
+AllowShortEnumsOnASingleLine: true
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AllowShortLambdasOnASingleLine: All
+AllowShortLoopsOnASingleLine: true
+...

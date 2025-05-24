@@ -1,0 +1,69 @@
+HeaderInsertion: Never
+InlayHints:
+  BlockEnd: No
+  Designators: No
+  Enabled: Yes
+  ParameterNames: Yes
+  DeducedTypes: No
+  DefaultArguments: No
+  TypeNameLimit: 24
+Diagnostics:
+  ClangTidy:
+    Add:
+      - abseil*
+      - altera*
+      - android*
+      - boost*
+      - bugprone*
+      - cert*
+      - clang*
+      - concurrency*
+      - cppcoreguidelines*
+      - darwin*
+      - fuchsia*
+      - google*
+      - hicpp*
+      - linuxkernel*
+      - llvm*
+      - misc*
+      - modernize*
+      - mpi*
+      - objc*
+      - openmp*
+      - performance*
+      - portability*
+      - readability*
+      - zircon*
+
+    Remove:
+      - altera-struct-pack-align
+      - altera-unroll-loops
+      - bugprone-easily-swappable-parameters
+      - concurrency-mt-unsafe
+      - cppcoreguidelines-avoid-magic-numbers
+      - cppcoreguidelines-avoid-reference-coroutine-parameters
+      - cppcoreguidelines-macro-usage
+      - fuchsia-default-arguments-calls
+      - fuchsia-default-arguments-declarations
+      - fuchsia-overloaded-operator
+      - fuchsia-statically-constructed-objects
+      - fuchsia-trailing-return
+      - google-readability-todo
+      - hicpp-uppercase-literal-suffix
+      - llvm-header-guard
+      - llvm-qualified-auto
+      - llvmlibc-callee-namespace
+      - llvmlibc-implementation-in-namespace
+      - llvmlibc-inline-function-decl
+      - llvmlibc-restrict-system-libc-headers
+      - misc-include-cleaner
+      - misc-non-private-member-variables-in
+      - misc-non-private-member-variables-in-classes
+      - performance-enum-size
+      - readability-identifier-length
+      - readability-magic-numbers
+      - readability-qualified-auto
+      - readability-static-accessed-through-instance
+      - readability-uppercase-literal-suffix
+      - unused-includes
+
