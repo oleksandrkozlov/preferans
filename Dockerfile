@@ -4,7 +4,9 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt update && apt install -y \
     build-essential \
+    clang-format \
     cmake \
+    cmake-format \
     emscripten \
     git \
     libasound2-dev \
@@ -16,6 +18,7 @@ RUN apt update && apt install -y \
     libmsgsl-dev \
     libprotobuf-dev \
     librange-v3-dev \
+    libspdlog-dev \
     libwayland-dev \
     libx11-dev \
     libxcursor-dev \
@@ -25,10 +28,11 @@ RUN apt update && apt install -y \
     libxrandr-dev \
     ninja-build \
     protobuf-compiler \
-    sudo \
-    vim \
+    python3 \
     python3-dev \
-    clang-format
+    python3-pip \
+    sudo \
+    vim
 #   ccache \
 #   clang \
 #   clang-tidy \
@@ -42,12 +46,9 @@ RUN apt update && apt install -y \
 #   libgtest-dev \
 #   libspdlog-dev \
 #   pkg-config \
-#   python3 \
-#   python3-pip
 
-#RUN pip3 install \
+# RUN pip3 install \
 #    breathe \
-#    cmakelang \
 #    sphinx \
 #    sphinx_rtd_theme
 

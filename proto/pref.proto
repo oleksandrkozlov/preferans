@@ -4,6 +4,21 @@ package pref;
 
 service Preferans {
   rpc SayHello (HelloRequest) returns (HelloResponse);
+  rpc Join (JoinRequest) returns (JoinResponse);
+}
+
+message Player {
+  string player_id = 1;
+  string player_name = 2;
+}
+
+message JoinRequest {
+  string player_name = 1;
+}
+
+message JoinResponse {
+  string player_id = 1;             // ID of the player who just joined
+  repeated Player players = 2;      // Full list of connected players
 }
 
 message HelloRequest {
@@ -12,6 +27,10 @@ message HelloRequest {
 
 message HelloResponse {
   string message = 1;
+}
+
+message PlayerLeft {
+  string player_id = 1;
 }
 
 message RpcEnvelope {
