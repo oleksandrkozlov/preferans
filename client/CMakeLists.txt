@@ -12,6 +12,7 @@ add_subdirectory(deps/range-v3)
 add_subdirectory(deps/raylib)
 add_subdirectory(deps/raylib-cpp)
 add_subdirectory(deps/protobuf)
+add_subdirectory(deps/spdlog)
 
 add_executable(client src/client.cpp ../proto/pref.pb.cc)
 
@@ -40,7 +41,9 @@ target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/raylib-
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/range-v3/include)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/protobuf/src)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/raygui/src)
+target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/spdlog/include)
 target_include_directories(client PRIVATE ${PROJECT_SOURCE_DIR}/..)
+target_include_directories(client PRIVATE ${PROJECT_SOURCE_DIR}/../include)
 
 if("${PLATFORM}" STREQUAL "Web")
     set_target_properties(client PROPERTIES SUFFIX ".html")
@@ -50,7 +53,8 @@ if("${PLATFORM}" STREQUAL "Web")
         PUBLIC
         -sUSE_GLFW=3
         -sASYNCIFY
-        -sTOTAL_MEMORY=67108864
+        #-sTOTAL_MEMORY=67108864
+        -sALLOW_MEMORY_GROWTH
         -sFORCE_FILESYSTEM=1
         --shell-file
         resources/shell.html

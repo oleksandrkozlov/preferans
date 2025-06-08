@@ -10,7 +10,9 @@ RUN apt update && apt install -y \
     emscripten \
     git \
     libasound2-dev \
-    libboost-dev \
+    clangd \
+    libboost1.88-dev \
+    libdocopt-dev \
     libfmt-dev \
     libgl1-mesa-dev \
     libglfw3-dev \
@@ -32,7 +34,8 @@ RUN apt update && apt install -y \
     python3-dev \
     python3-pip \
     sudo \
-    vim
+    vim-gtk3\
+    xsel
 #   ccache \
 #   clang \
 #   clang-tidy \
@@ -42,7 +45,6 @@ RUN apt update && apt install -y \
 #   graphviz \
 #   iwyu \
 #   kcov \
-#   libdocopt-dev \
 #   libgtest-dev \
 #   libspdlog-dev \
 #   pkg-config \

@@ -10,6 +10,7 @@ include(flags)
 find_package(boost_headers REQUIRED)
 find_package(Protobuf REQUIRED)
 find_package(spdlog REQUIRED)
+find_package(docopt REQUIRED)
 
 file(GLOB_RECURSE PREF_PROTO_FILES ${PROJECT_SOURCE_DIR}/../proto/*.proto)
 protobuf_generate_cpp(
@@ -19,8 +20,10 @@ protobuf_generate_cpp(
 
 if(CMAKE_BUILD_TYPE STREQUAL Debug)
     include(cmake-format)
+    include(ccache)
 endif()
 
 add_executable(server src/server.cpp ${PREF_PROTO_SOURCES})
-target_link_libraries(server Boost::headers protobuf::libprotobuf spdlog::spdlog)
+target_link_libraries(server Boost::headers protobuf::libprotobuf spdlog::spdlog docopt)
 target_include_directories(server PRIVATE ${PROJECT_SOURCE_DIR}/..)
+target_include_directories(server PRIVATE ${PROJECT_SOURCE_DIR}/../include)

@@ -1,21 +1,23 @@
-#include <array>
 #if defined(PLATFORM_WEB)
 #include "proto/pref.pb.h"
 
 #include <emscripten/emscripten.h>
+#include <emscripten/val.h>
 #include <emscripten/websocket.h>
 #endif // PLATFORM_WEB
 
 #include <fmt/format.h>
 #include <range/v3/all.hpp>
 #include <raylib-cpp.hpp>
+#include <spdlog/spdlog.h>
 #define RAYGUI_IMPLEMENTATION
+#include "common/logger.hpp"
+
 #include <raygui.h>
 
+#include <array>
 #include <cassert>
-#include <cstdio>
 #include <initializer_list>
-#include <iostream>
 #include <string_view>
 #include <vector>
 
@@ -26,19 +28,45 @@ constexpr const auto ratioHeigh = 9;
 constexpr const auto screenWidth = 1920;
 constexpr const auto screenHeight = (screenWidth * ratioHeigh) / ratioWidth;
 
+constexpr auto originalCardHeight = 726.0f;
+constexpr auto originalCardWidth = 500.0f;
+constexpr auto cardAspectRatio = originalCardWidth / originalCardHeight;
+constexpr auto cardHeight = screenHeight / 5.0f; // 5th part of screen's height
+constexpr auto cardWidth = cardHeight * cardAspectRatio;
+constexpr auto cardOverlapX = cardWidth * 0.6f; // 60% overlap
+constexpr auto cardOverlapY = cardHeight * 0.2f;
+
 using namespace std::literals;
 
-struct Card {
-    Card(const std::string_view suit, const std::string_view rank, RVector2 pos)
-        : position{pos}
-        , image{RImage{fmt::format("resources/cards/{}_of_{}.png", rank, suit)}}
-    {
+[[nodiscard]] constexpr auto getCloseReason(const std::uint16_t code) -> std::string_view
+{
+    switch (code) { // clang-format off
+    case 1000: return "Normal Closure";
+    case 1001: return "Going Away";
+    case 1002: return "Protocol Error";
+    case 1003: return "Unsupported Data";
+    case 1005: return "No Status Received";
+    case 1006: return "Abnormal Closure";
+    case 1007: return "Invalid Payload";
+    case 1008: return "Policy Violation";
+    case 1009: return "Message Too Big";
+    case 1010: return "Mandatory Extension";
+    case 1011: return "Internal Error";
+    case 1012: return "Service Restart";
+    case 1013: return "Try Again Later";
+    case 1014: return "Bad Gateway";
+    case 1015: return "TLS Handshake Failed";
+    } // clang-format on
+    return "Unknown";
+}
 
-        // image = LoadImage("resources/cards/cardBackRed.png");
-        const auto newImageHeight = screenHeight / 5.0; // 5th part of screen's height
-        const auto imageScale = image.height / newImageHeight;
-        const auto newImageWidth = image.width / imageScale;
-        image.Resize(static_cast<int>(newImageWidth), static_cast<int>(newImageHeight));
+
+struct Card {
+    Card(const std::string_view card, RVector2 pos)
+        : position{pos}
+        , image{RImage{fmt::format("resources/cards/{}.png", card)}}
+    {
+        image.Resize(static_cast<int>(cardWidth), static_cast<int>(cardHeight));
         texture = image.LoadTexture();
     }
 
@@ -54,206 +82,217 @@ struct Player {
 };
 
 struct Context {
-    Context()
-    {
-        const auto cardCount = 32 + 1;
-        const auto suits = std::vector<std::string>{"spades", "diamonds", "clubs", "hearts"};
-        const auto ranks = std::vector<std::string>{"7", "8", "9", "10", "jack", "queen", "king", "ace"};
-        auto deck = ranges::views::cartesian_product(suits, ranks) //
-            | ranges::to_vector //
-            | ranges::actions::shuffle(std::mt19937{std::invoke(std::random_device{})});
-
-        for (int p = 0; p < 3; ++p) {
-            auto x = 600.0f;
-            for (int i = 0; i < 10; ++i) {
-                auto& [suit, rank] = deck.back();
-                auto card = Card{suit, rank, RVector2{x, (p + 1) * 250.f}};
-                players[p].cards.push_back(std::move(card));
-                deck.pop_back();
-                const auto cardVisability = (screenWidth /* - card.image.width*/) / cardCount;
-                x += cardVisability;
-            }
-        }
-    }
-
     RFont font{"resources/mecha.png"};
     RVector2 screen{screenWidth, screenHeight};
     RWindow window{static_cast<int>(screen.x), static_cast<int>(screen.y), "Preferans"};
-    std::array<Player, 3> players;
 
-    std::string playerName;
-    bool hasEnteredName = false;
-    std::map<std::string, std::string> connectedPlayers;
+    Player player;
     std::string myPlayerId;
+    std::string myPlayerName;
+    bool hasEnteredName{};
+    std::map<std::string, std::string> connectedPlayers;
+    Card backCard{"cardBackRed", {}};
 };
 
 #if defined(PLATFORM_WEB)
+
+[[nodiscard]] auto toContext(void* userData) noexcept -> Context&
+{
+    return *static_cast<Context*>(userData);
+}
+
+[[nodiscard]] auto toUserData(Context& ctx) noexcept -> void*
+{
+    return static_cast<void*>(&ctx);
+}
+
+std::string loadPlayerIdFromLocalStorage()
+{
+    char buffer[128] = {};
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
+    EM_ASM_(
+        {
+            var id = localStorage.getItem("preferans_player_id") || "";
+            stringToUTF8(id, $0, $1);
+        },
+        buffer,
+        sizeof(buffer));
+#pragma GCC diagnostic pop
+
+    return std::string(buffer);
+}
+
+void savePlayerIdToLocalStorage(const std::string& playerId)
+{
+    std::string js = "localStorage.setItem('preferans_player_id', '" + playerId + "');";
+    emscripten_run_script(js.c_str());
+}
+
+[[maybe_unused]] void clearPlayerIdFromLocalStorage()
+{
+    emscripten_run_script("localStorage.removeItem('preferans_player_id');");
+}
+
 EM_BOOL on_open([[maybe_unused]] int eventType, const EmscriptenWebSocketOpenEvent* e, void* userData)
 {
+    INFO("{}, socket: {}", VAR(eventType), e->socket);
     assert(userData);
-    auto& ctx = *static_cast<Context*>(userData);
-
-    printf("WebSocket opened!\n");
+    auto& ctx = toContext(userData);
 
     pref::JoinRequest join;
-    join.set_player_name(ctx.playerName);
+    join.set_player_name(ctx.myPlayerName);
+    if (not std::empty(ctx.myPlayerId)) {
+        join.set_player_id(ctx.myPlayerId);
+    }
+    pref::Message msg;
+    msg.set_method("JoinRequest");
+    msg.set_payload(join.SerializeAsString());
 
-    pref::RpcEnvelope env;
-    env.set_method("JoinRequest");
-    env.set_payload(join.SerializeAsString());
-
-    auto data = env.SerializeAsString();
+    auto data = msg.SerializeAsString();
     emscripten_websocket_send_binary(e->socket, data.data(), data.size());
-    /*
-        auto env = pref::RpcEnvelope{};
-        env.set_method("SayHello");
-        auto request = pref::HelloRequest{};
-        request.set_name("Venichka");
-        auto requestPayload = std::string{};
-        if (not request.SerializeToString(&requestPayload)) {
-            printf("Failed to serialize HelloRequest\n");
-            return EM_FALSE;
-        }
-        env.set_payload(requestPayload);
-        auto envPayload = std::string{};
-        if (not env.SerializeToString(&envPayload)) {
-            printf("Failed to serialize RpcEnvelope\n");
-            return EM_FALSE;
-        }
-
-        auto result = emscripten_websocket_send_binary(e->socket, envPayload.data(), envPayload.size());
-
-        if (result != EMSCRIPTEN_RESULT_SUCCESS) {
-            printf("Failed to send protobuf message: %d\n", result);
-        }
-        */
     return EM_TRUE;
 }
 
 auto on_message([[maybe_unused]] int eventType, const EmscriptenWebSocketMessageEvent* e, void* userData) -> EM_BOOL
 {
-    printf("on_message\n");
+    INFO("{}, socket: {}, numBytes: {}, isText: {}", VAR(eventType), e->socket, e->numBytes, e->isText);
     assert(userData);
-    auto& ctx = *static_cast<Context*>(userData);
+    auto& ctx = toContext(userData);
 
     if (e->isText) {
+        WARN("error: expect binary data");
         return EM_TRUE;
     }
-    pref::RpcEnvelope env;
-    if (!env.ParseFromArray(e->data, static_cast<int>(e->numBytes))) {
-        printf("Failed to parse RpcEnvelope\n");
+    pref::Message msg;
+    if (not msg.ParseFromArray(e->data, static_cast<int>(e->numBytes))) {
+        WARN("Failed to parse Message");
         return EM_TRUE;
     }
 
-    const std::string& method = env.method();
-    const std::string& payload = env.payload();
-    printf("%s\n", method.c_str());
-
-    if (env.method() == "JoinResponse") {
-        pref::JoinResponse msg;
-        if (!msg.ParseFromString(env.payload())) {
-            printf("Failed to parse JoinResponse\n");
-            return EM_TRUE;
-        }
-
-        ctx.connectedPlayers.clear();
-
-        for (const auto& player : msg.players()) {
-            ctx.connectedPlayers[player.player_id()] = player.player_name();
-        }
-
-        printf("You joined as: %s\n", msg.player_id().c_str());
-        printf("Connected players:\n");
-        for (const auto& [id, name] : ctx.connectedPlayers) {
-            printf("  - %s (%s)\n", name.c_str(), id.c_str());
-        }
-    }
+    const std::string& method = msg.method();
+    const std::string& payload = msg.payload();
+    INFO("{}", method);
 
     if (method == "JoinResponse") {
-        pref::JoinResponse join;
-        if (!join.ParseFromString(payload)) {
-            printf("Failed to parse JoinResponse\n");
+        auto join = pref::JoinResponse{};
+        if (not join.ParseFromString(payload)) {
+            WARN("Failed to parse JoinResponse");
             return EM_TRUE;
         }
 
-        ctx.myPlayerId = join.player_id();
+        if (ctx.myPlayerId != join.player_id()) {
+            ctx.myPlayerId = join.player_id();
+            INFO("save myPlayerId: {}", ctx.myPlayerId);
+            savePlayerIdToLocalStorage(ctx.myPlayerId);
+        }
+
         ctx.connectedPlayers.clear();
         for (const auto& player : join.players()) {
+            if (player.player_id() == ctx.myPlayerId and ctx.myPlayerName != player.player_name()) {
+                ctx.myPlayerName = player.player_name();
+            }
             ctx.connectedPlayers.insert_or_assign(player.player_id(), player.player_name());
         }
-    } else if (env.method() == "PlayerLeft") {
-        pref::PlayerLeft msg;
-        if (!msg.ParseFromString(env.payload())) {
-            printf("Failed to parse PlayerLeft\n");
+    } else if (method == "PlayerJoined") {
+        auto joined = pref::PlayerJoined{};
+        if (not joined.ParseFromString(msg.payload())) {
+            printf("Failed to parse PlayerJoined\n");
+            return EM_TRUE;
+        }
+        const auto& joinedId = joined.player_id();
+        const auto& joinedName = joined.player_name();
+
+        INFO("New player joined: {} ({})", joinedName, joinedId);
+        ctx.connectedPlayers.insert_or_assign(joinedId, joinedName);
+    } else if (msg.method() == "PlayerLeft") {
+        pref::PlayerLeft playerLeft;
+        if (not playerLeft.ParseFromString(msg.payload())) {
+            WARN("Failed to parse PlayerLeft");
             return EM_TRUE;
         }
 
-        const std::string& id = msg.player_id();
+        const std::string& id = playerLeft.player_id();
         auto it = ctx.connectedPlayers.find(id);
 
         if (it != ctx.connectedPlayers.end()) {
-            printf("Player left: %s (%s)\n", it->second.c_str(), id.c_str());
+            INFO("Player left: {} ({})", it->second, id);
             ctx.connectedPlayers.erase(it);
-            printf("Updated player list:\n");
+            INFO("Updated player list:");
             for (const auto& [i, name] : ctx.connectedPlayers) {
-                printf("  - %s (%s)\n", name.c_str(), i.c_str());
+                INFO("  - {} ({})", name, i);
             }
         } else {
-            printf("Player with ID %s left (name unknown)\n", id.c_str());
+            WARN("Player with ID {} left (name unknown)", id);
         }
-    }
-
-    /*
-    if (!e->isText) {
-        pref::RpcEnvelope env;
-        if (!env.ParseFromArray(e->data, e->numBytes)) {
-            printf("Failed to parse RpcEnvelope\n");
+        return EM_TRUE;
+    } else if (msg.method() == "DealCards") {
+        auto dealCards = pref::DealCards{};
+        if (not dealCards.ParseFromString(payload)) {
+            WARN("Failed to parse DealCards");
             return EM_TRUE;
         }
 
-        const std::string& method = env.method();
-        const std::string& payload = env.payload();
+        assert(std::size(dealCards.cards()) == 10u);
+        const auto totalWidth = static_cast<float>(std::size(dealCards.cards()) - 1) * cardOverlapX + cardWidth;
+        const auto startX = (screenWidth - totalWidth) / 2.0f;
+        const auto y = screenHeight - cardHeight - 20.0f; // bottom padding
 
-        if (method == "SayHelloResponse") {
-            pref::HelloResponse response;
-            if (!response.ParseFromString(payload)) {
-                printf("Failed to parse HelloResponse\n");
-                return EM_TRUE;
-            }
-
-            printf("Got message: %s\n", response.message().c_str());
-        } else {
-            printf("Unknown RPC method: %s\n", method.c_str());
+        for (int i = 0; i < std::size(dealCards.cards()); ++i) {
+            const auto x = startX + static_cast<float>(i) * cardOverlapX;
+            ctx.player.cards.emplace_back(dealCards.cards()[static_cast<int>(i)], RVector2{x, y});
         }
+    } else {
+        WARN("error: unknown method: {}", msg.method());
     }
+
+    return EM_TRUE;
+}
+
+auto on_error(
+    [[maybe_unused]] int eventType,
+    [[maybe_unused]] const EmscriptenWebSocketErrorEvent* e,
+    [[maybe_unused]] void* userData) -> EM_BOOL
+{
+    INFO("{}, socket: {}", VAR(eventType), e->socket);
+    assert(userData);
+    [[maybe_unused]] auto& ctx = toContext(userData);
+
+    return EM_TRUE;
+}
+
+auto on_close(
+    [[maybe_unused]] int eventType,
+    [[maybe_unused]] const EmscriptenWebSocketCloseEvent* e,
+    [[maybe_unused]] void* userData) -> EM_BOOL
+{
+    INFO(
+        "{}, socket: {}, wasClean: {}, code: {}, reason: {}",
+        VAR(eventType),
+        e->socket,
+        e->wasClean,
+        getCloseReason(e->code),
+        e->reason);
+    assert(userData);
+    [[maybe_unused]] auto& ctx = toContext(userData);
+    emscripten_websocket_delete(e->socket);
+    // TODO: try to reconnect if not clean?
+    /*
+        emscripten_async_call(
+            [&](void*) {
+                setup_websocket(&ctx); // try again
+            },
+            nullptr,
+            2000); // after 2 seconds
     */
-
-    return EM_TRUE;
-}
-
-EM_BOOL on_error(
-    [[maybe_unused]] int eventType,
-    [[maybe_unused]] const EmscriptenWebSocketErrorEvent* websocketEvent,
-    [[maybe_unused]] void* userData)
-{
-    puts("on_error");
-
-    return EM_TRUE;
-}
-EM_BOOL on_close(
-    [[maybe_unused]] int eventType,
-    [[maybe_unused]] const EmscriptenWebSocketCloseEvent* websocketEvent,
-    [[maybe_unused]] void* userData)
-{
-    puts("on_close");
-
     return EM_TRUE;
 }
 
 void setup_websocket(Context& ctx)
 {
-    if (!emscripten_websocket_is_supported()) {
-        printf("WebSocket is not supported\n");
+    if (not emscripten_websocket_is_supported()) {
+        WARN("WebSocket is not supported");
         return;
     }
 
@@ -264,7 +303,7 @@ void setup_websocket(Context& ctx)
 
     EMSCRIPTEN_WEBSOCKET_T ws = emscripten_websocket_new(&attr);
     if (ws <= 0) {
-        printf("Failed to create WebSocket\n");
+        WARN("Failed to create WebSocket");
         return;
     }
 
@@ -277,8 +316,11 @@ void setup_websocket(Context& ctx)
 
 void DrawGameplayScreen(Context& ctx)
 {
-    RRectangle{{}, ctx.screen}.Draw(DARKGREEN);
-    ctx.font.DrawText("PREFERANS GAME", {20, 10}, static_cast<float>(ctx.font.baseSize) * 3.0f, 4, BLACK);
+    const std::string title = "PREFERANS GAME";
+    const float fontSize = static_cast<float>(ctx.font.baseSize) * 3.0f;
+    const auto textSize = MeasureText(title.c_str(), fontSize);
+    const auto x = (screenWidth - textSize) / 2.0f;
+    RText::Draw(title, {x, 20}, fontSize, GetColor(GuiGetStyle(LABEL, TEXT_COLOR_NORMAL)));
 }
 
 void DrawEnterNameScreen(Context& ctx)
@@ -294,7 +336,7 @@ void DrawEnterNameScreen(Context& ctx)
 
     // Label
     const RVector2 labelPos{boxPos.x, boxPos.y - 40.0f};
-    ctx.font.DrawText("Enter your name:", labelPos, 20.0f, 1.0f, BLACK);
+    RText::Draw("Enter your name:", labelPos, 20.0f, GetColor(GuiGetStyle(LABEL, TEXT_COLOR_NORMAL)));
 
     // Text box
     RRectangle inputBox = {boxPos, {boxWidth, boxHeight}};
@@ -306,7 +348,7 @@ void DrawEnterNameScreen(Context& ctx)
 
     // Accept with Enter or button click
     if ((clicked || RKeyboard::IsKeyPressed(KEY_ENTER)) && nameBuffer[0] != '\0' && editMode) {
-        ctx.playerName = nameBuffer;
+        ctx.myPlayerName = nameBuffer;
         ctx.hasEnteredName = true;
         editMode = false; // Disable further typing
 
@@ -318,85 +360,103 @@ void DrawEnterNameScreen(Context& ctx)
 
 void DrawConnectedPlayersPanel(const Context& ctx)
 {
-    const float x = ctx.screen.x - 260.0f;
-    const float y = 20.0f;
+    // from the left edge
+    const float x = 20.0f;
+    // from the top edge
+    const float y = 50.0f;
+
+    // Set panel dimensions
     const float width = 240.0f;
     const float height = 160.0f; // Reduced height to fit 4 names comfortably
 
+    // Define the panel rectangle
     Rectangle panelRect = {x, y, width, height};
-    GuiPanel(panelRect, nullptr); // No title
 
+    // Draw the panel (no title bar)
+    GuiPanel(panelRect, nullptr);
+
+    // Start drawing text 10px inside the panel
     RVector2 textPos = {x + 10.0f, y + 10.0f};
-    ctx.font.DrawText("Connected Players", textPos, 20.0f, 1.0f, BLACK);
 
+    // Draw panel heading
+    RText::Draw("Connected Players", textPos, 20.0f, GetColor(GuiGetStyle(LABEL, TEXT_COLOR_NORMAL)));
+
+    // Move text position down for player list
     textPos.y += 30.0f;
 
-    for (const auto& [_, name] : ctx.connectedPlayers) {
-        Color color = (name == ctx.playerName) ? DARKBLUE : DARKGRAY;
-        ctx.font.DrawText(name, textPos, 18.0f, 1.0f, color);
+    for (const auto& [id, name] : ctx.connectedPlayers) {
+        // Highlight the current player's name in dark blue
+        Color color = (id == ctx.myPlayerId) ? GetColor(GuiGetStyle(DEFAULT, TEXT_COLOR_NORMAL))
+                                             : GetColor(GuiGetStyle(DEFAULT, TEXT_COLOR_DISABLED));
+        // Draw the player's name
+        RText::Draw(name, textPos, 18.0f, color);
+        // ctx.font.DrawText(name, textPos, 18.0f, 1.0f, color);
+
+        // Move down for the next name
         textPos.y += 24.0f;
+    }
+}
+
+void DrawVerticalStackedCards(Context& ctx, int count, float x)
+{
+    const auto startY = (screenHeight - (count - 1) * cardOverlapY - cardHeight) / 2.0f;
+    for (int i = 0; i < count; ++i) {
+        const auto posY = startY + i * cardOverlapY;
+        ctx.backCard.texture.Draw(RVector2{x, posY});
     }
 }
 
 void UpdateDrawFrame(void* userData)
 {
     assert(userData);
-    auto& ctx = *static_cast<Context*>(userData);
-    /*
-        const auto mouse = RMouse::GetPosition();
-        // Handle mouse press - start isDragging if on top of a card
-        auto isCarPicked = false;
-        for (auto& player : ctx.players) {
-            for (auto i = static_cast<int>(std::size(player.cards)) - 1; i >= 0; --i) {
+    auto& ctx = toContext(userData);
+    if (std::empty(ctx.myPlayerId)) {
+        ctx.myPlayerId = loadPlayerIdFromLocalStorage();
+    }
 
-                auto& card = player.cards[static_cast<std::size_t>(i)];
-                auto cardBounds = RRectangle{card.position, card.texture.GetSize()};
+    const auto mouse = RMouse::GetPosition();
+    // Handle mouse press - start isDragging if on top of a card
+    for (auto i = static_cast<int>(std::size(ctx.player.cards)) - 1; i >= 0; --i) {
 
-                if (RMouse::IsButtonPressed(MOUSE_LEFT_BUTTON) and mouse.CheckCollision(cardBounds)) {
-                    card.isDragging = true;
-                    card.offset = RVector2{mouse.x - card.position.x, mouse.y - card.position.y};
-                    auto draggedCard = std::move(card);
-                    player.cards.erase(std::begin(player.cards) + i);
-                    player.cards.push_back(std::move(draggedCard)); // now on top
-                    isCarPicked = true;
-                    break; // Only pick the topmost card
-                }
-            }
-            if (isCarPicked) {
-                isCarPicked = false;
-                break;
-            }
-            if (auto draggedCard = ranges::find_if(player.cards, &Card::isDragging);
-                draggedCard != ranges::end(player.cards)) {
-                if (RMouse::IsButtonReleased(MOUSE_LEFT_BUTTON)) {
-                    draggedCard->isDragging = false;
-                } else if (RMouse::IsButtonDown(MOUSE_LEFT_BUTTON)) {
-                    draggedCard->position.x = mouse.x - draggedCard->offset.x;
-                    draggedCard->position.y = mouse.y - draggedCard->offset.y;
-                }
-            }
+        auto& card = ctx.player.cards[static_cast<std::size_t>(i)];
+        auto cardBounds = RRectangle{card.position, card.texture.GetSize()};
+
+        if (RMouse::IsButtonPressed(MOUSE_LEFT_BUTTON) and mouse.CheckCollision(cardBounds)) {
+            card.isDragging = true;
+            card.offset = RVector2{mouse.x - card.position.x, mouse.y - card.position.y};
+            auto draggedCard = std::move(card);
+            ctx.player.cards.erase(std::begin(ctx.player.cards) + i);
+            ctx.player.cards.push_back(std::move(draggedCard)); // now on top
+            break; // Only pick the topmost card
         }
-        */
+    }
+    if (auto draggedCard = ranges::find_if(ctx.player.cards, &Card::isDragging);
+        draggedCard != ranges::end(ctx.player.cards)) {
+        if (RMouse::IsButtonReleased(MOUSE_LEFT_BUTTON)) {
+            draggedCard->isDragging = false;
+        } else if (RMouse::IsButtonDown(MOUSE_LEFT_BUTTON)) {
+            draggedCard->position.x = mouse.x - draggedCard->offset.x;
+            draggedCard->position.y = mouse.y - draggedCard->offset.y;
+        }
+    }
 
     ctx.window.BeginDrawing();
-    ctx.window.ClearBackground();
+    ctx.window.ClearBackground(GetColor(GuiGetStyle(DEFAULT, BACKGROUND_COLOR)));
     DrawGameplayScreen(ctx);
 
-    if (!ctx.hasEnteredName) {
+    if (not ctx.hasEnteredName) {
         DrawEnterNameScreen(ctx);
         ctx.window.EndDrawing();
         return;
     }
     DrawConnectedPlayersPanel(ctx);
 
-    // Draw all cards
-    /*
-        for (const auto& player : ctx.players) {
-            for (const auto& card : player.cards) {
-                card.texture.Draw(card.position);
-            }
-        }
-        */
+    for (const auto& card : ctx.player.cards) {
+        card.texture.Draw(card.position);
+    }
+
+    DrawVerticalStackedCards(ctx, 10, 40.0f); // Left
+    DrawVerticalStackedCards(ctx, 10, screenWidth - cardWidth - 40.0f); // Right
 
     ctx.window.DrawFPS(screenWidth - 80, 0);
     ctx.window.EndDrawing();
@@ -406,13 +466,16 @@ void UpdateDrawFrame(void* userData)
 
 auto main() -> int
 {
+    spdlog::set_pattern("[%^%l%$][%!] %v");
     auto ctx = Context{};
+    GuiLoadStyleDefault();
+    // GuiLoadStyle("resources/styles/style_amber.rgs");
 
 #if defined(PLATFORM_WEB)
-    emscripten_set_main_loop_arg(UpdateDrawFrame, static_cast<void*>(&ctx), 0, true);
+        emscripten_set_main_loop_arg(UpdateDrawFrame, toUserData(ctx), 0, true);
 #else // PLATFORM_WEB
-    while (!WindowShouldClose()) {
-        UpdateDrawFrame(static_cast<void*>(&ctx));
+        while (!WindowShouldClose()) {
+        UpdateDrawFrame(toUserData(ctx));
     }
 #endif // PLATFORM_WEB
     return 0;

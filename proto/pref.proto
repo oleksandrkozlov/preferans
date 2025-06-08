@@ -2,11 +2,6 @@ syntax = "proto3";
 
 package pref;
 
-service Preferans {
-  rpc SayHello (HelloRequest) returns (HelloResponse);
-  rpc Join (JoinRequest) returns (JoinResponse);
-}
-
 message Player {
   string player_id = 1;
   string player_name = 2;
@@ -14,26 +9,28 @@ message Player {
 
 message JoinRequest {
   string player_name = 1;
+  optional string player_id = 2;
 }
 
 message JoinResponse {
-  string player_id = 1;             // ID of the player who just joined
-  repeated Player players = 2;      // Full list of connected players
+  string player_id = 1;
+  repeated Player players = 2;
 }
 
-message HelloRequest {
-  string name = 1;
-}
-
-message HelloResponse {
-  string message = 1;
+message PlayerJoined {
+  string player_id = 1;
+  string player_name = 2;
 }
 
 message PlayerLeft {
   string player_id = 1;
 }
 
-message RpcEnvelope {
+message DealCards {
+  repeated string cards = 1;
+}
+
+message Message {
   string method = 1;
   bytes payload = 2;
 }
