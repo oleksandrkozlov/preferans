@@ -2,6 +2,7 @@
 #include "proto/pref.pb.h"
 
 #include <boost/asio.hpp>
+#include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/beast.hpp>
 #include <boost/uuid/random_generator.hpp>
 #include <boost/uuid/uuid_io.hpp>
@@ -22,6 +23,7 @@ namespace beast = boost::beast;
 namespace web = beast::websocket;
 
 using namespace std::literals;
+using namespace boost::asio::experimental::awaitable_operators;
 
 namespace boost::system {
 #pragma GCC diagnostic push
@@ -213,7 +215,7 @@ auto handleJoinRequest(Message msg, const std::shared_ptr<Stream> stream, GameSt
 {
     auto joinRequest = JoinRequest{};
     if (not joinRequest.ParseFromString(msg.payload())) {
-        WARN("error: failed to parse JoinRequest payload");
+        WARN("error: failed to parse JoinRequest");
         co_return PlayerSession{};
     }
     auto session = PlayerSession{};
@@ -252,6 +254,19 @@ auto handleJoinRequest(Message msg, const std::shared_ptr<Stream> stream, GameSt
         co_await sendToAllExcept(msg, state.players, session.playerId);
     }
     co_return session;
+}
+
+auto handlePlayCard(const Message& msg, GameState& state) -> Awaitable<>
+{
+    auto playCard = PlayCard{};
+    if (not playCard.ParseFromString(msg.payload())) {
+        WARN("error: failed to parse PlayCard");
+        co_return;
+    }
+    const auto& card = playCard.card();
+    const auto& playerId = playCard.player_id();
+    INFO_VAR(playerId, card);
+    co_await sendToAllExcept(msg, state.players, playerId);
 }
 
 auto handleDisconnect(const Player::Id playerId, GameState& state) -> Awaitable<>
@@ -358,6 +373,8 @@ auto launchSession(const std::shared_ptr<Stream> stream, GameState& state) -> Aw
             if (std::size(state.players) == numberOfPlayers) {
                 co_await dealCards(state);
             }
+        } else if (msg.method() == "PlayCard") {
+            co_await handlePlayCard(msg, state);
         } else {
             WARN("error: unknown method: {}", msg.method());
             continue;

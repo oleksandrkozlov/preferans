@@ -30,6 +30,11 @@ message DealCards {
   repeated string cards = 1;
 }
 
+message PlayCard {
+  string player_id = 1;
+  string card = 2; // e.g. "queen_of_hearts"
+}
+
 message Message {
   string method = 1;
   bytes payload = 2;

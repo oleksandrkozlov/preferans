@@ -18,9 +18,11 @@
 #include <array>
 #include <cassert>
 #include <initializer_list>
+#include <list>
 #include <string_view>
 #include <vector>
 
+namespace pref {
 namespace {
 
 constexpr const auto ratioWidth = 16;
@@ -38,47 +40,63 @@ constexpr auto cardOverlapY = cardHeight * 0.2f;
 
 using namespace std::literals;
 
-[[nodiscard]] constexpr auto getCloseReason(const std::uint16_t code) -> std::string_view
+[[nodiscard]] constexpr auto getCloseReason(const std::uint16_t code) noexcept -> std::string_view
 {
     switch (code) { // clang-format off
-    case 1000: return "Normal Closure";
-    case 1001: return "Going Away";
-    case 1002: return "Protocol Error";
-    case 1003: return "Unsupported Data";
-    case 1005: return "No Status Received";
-    case 1006: return "Abnormal Closure";
-    case 1007: return "Invalid Payload";
-    case 1008: return "Policy Violation";
-    case 1009: return "Message Too Big";
-    case 1010: return "Mandatory Extension";
-    case 1011: return "Internal Error";
-    case 1012: return "Service Restart";
-    case 1013: return "Try Again Later";
-    case 1014: return "Bad Gateway";
-    case 1015: return "TLS Handshake Failed";
+    case 1000: return "Normal closure";
+    case 1001: return "Going away";
+    case 1002: return "Protocol error";
+    case 1003: return "Unsupported data";
+    case 1005: return "No status heceived";
+    case 1006: return "Abnormal closure";
+    case 1007: return "Invalid payload";
+    case 1008: return "Policy violation";
+    case 1009: return "Message too big";
+    case 1010: return "Mandatory extension";
+    case 1011: return "Internal error";
+    case 1012: return "Service sestart";
+    case 1013: return "Try again later";
+    case 1014: return "Bad gateway";
+    case 1015: return "TLS handshake failed";
     } // clang-format on
     return "Unknown";
 }
 
+[[nodiscard]] constexpr auto what(const EMSCRIPTEN_RESULT result) noexcept -> std::string_view
+{
+    switch (result) { // clang-format off
+    case EMSCRIPTEN_RESULT_SUCCESS: return "Success";
+    case EMSCRIPTEN_RESULT_DEFERRED: return "Deferred";
+    case EMSCRIPTEN_RESULT_NOT_SUPPORTED: return "WebSockets not supported";
+    case EMSCRIPTEN_RESULT_FAILED_NOT_DEFERRED: return "Send failed, not deferred";
+    case EMSCRIPTEN_RESULT_INVALID_TARGET: return "Invalid WebSocket handle";
+    case EMSCRIPTEN_RESULT_UNKNOWN_TARGET: return "Unknown WebSocket target";
+    case EMSCRIPTEN_RESULT_INVALID_PARAM: return "Invalid parameter";
+    case EMSCRIPTEN_RESULT_FAILED: return "Generic failure";
+    case EMSCRIPTEN_RESULT_NO_DATA: return "No data to send";
+    case EMSCRIPTEN_RESULT_TIMED_OUT: return "Operation timed out";
+    } // clang-format on
+    return "Unknown";
+}
 
 struct Card {
-    Card(const std::string_view card, RVector2 pos)
-        : position{pos}
-        , image{RImage{fmt::format("resources/cards/{}.png", card)}}
+    Card(std::string n, RVector2 pos)
+        : name{std::move(n)}
+        , position{pos}
+        , image{RImage{fmt::format("resources/cards/{}.png", name)}}
     {
         image.Resize(static_cast<int>(cardWidth), static_cast<int>(cardHeight));
         texture = image.LoadTexture();
     }
 
+    std::string name;
     RVector2 position;
-    bool isDragging{};
-    RVector2 offset;
     RImage image;
     RTexture texture{};
 };
 
 struct Player {
-    std::vector<Card> cards;
+    std::list<Card> cards;
 };
 
 struct Context {
@@ -92,7 +110,52 @@ struct Context {
     bool hasEnteredName{};
     std::map<std::string, std::string> connectedPlayers;
     Card backCard{"cardBackRed", {}};
+    EMSCRIPTEN_WEBSOCKET_T ws{};
+    int leftCardCount = 10;
+    int rightCardCount = 10;
+    std::map<std::string, Card> cardsOnTable;
 };
+
+[[nodiscard]] auto getOpponentIds(Context& ctx) -> std::pair<std::string, std::string>
+{
+    assert(std::size(ctx.connectedPlayers) == 3U);
+    std::vector<std::string> order;
+    for (const auto& [id, _] : ctx.connectedPlayers) {
+        order.push_back(id);
+    }
+
+    const auto it = std::find(order.begin(), order.end(), ctx.myPlayerId);
+    assert(it != order.end());
+
+    const auto selfIndex = std::distance(order.begin(), it);
+    const auto leftIndex = (selfIndex + 1) % 3;
+    const auto rightIndex = (selfIndex + 2) % 3;
+
+    return {order[leftIndex], order[rightIndex]};
+}
+
+auto handlePlayCard(Context& ctx, const pref::PlayCard& playCard)
+{
+    auto [leftOpponentId, rightOpponentId] = getOpponentIds(ctx);
+    const auto& playerId = playCard.player_id();
+    const auto& cardName = playCard.card(); // "queen_of_hearts"
+    INFO_VAR(playerId, cardName);
+
+    if (playerId == leftOpponentId) {
+        if (ctx.leftCardCount > 0) {
+            --ctx.leftCardCount;
+        }
+    } else if (playerId == rightOpponentId) {
+        if (ctx.rightCardCount > 0) {
+            --ctx.rightCardCount;
+        }
+    } else {
+        // Not an opponent - possibly local player or spectator
+        return;
+    }
+
+    ctx.cardsOnTable.insert_or_assign(playerId, Card{cardName, RVector2{}});
+}
 
 #if defined(PLATFORM_WEB)
 
@@ -141,17 +204,20 @@ EM_BOOL on_open([[maybe_unused]] int eventType, const EmscriptenWebSocketOpenEve
     assert(userData);
     auto& ctx = toContext(userData);
 
-    pref::JoinRequest join;
+    JoinRequest join;
     join.set_player_name(ctx.myPlayerName);
     if (not std::empty(ctx.myPlayerId)) {
         join.set_player_id(ctx.myPlayerId);
     }
-    pref::Message msg;
+    Message msg;
     msg.set_method("JoinRequest");
     msg.set_payload(join.SerializeAsString());
 
     auto data = msg.SerializeAsString();
-    emscripten_websocket_send_binary(e->socket, data.data(), data.size());
+    if (const auto error = emscripten_websocket_send_binary(e->socket, data.data(), data.size());
+        error != EMSCRIPTEN_RESULT_SUCCESS) {
+        WARN("error: could not send JoinRequest: {}", what(error));
+    }
     return EM_TRUE;
 }
 
@@ -165,7 +231,7 @@ auto on_message([[maybe_unused]] int eventType, const EmscriptenWebSocketMessage
         WARN("error: expect binary data");
         return EM_TRUE;
     }
-    pref::Message msg;
+    Message msg;
     if (not msg.ParseFromArray(e->data, static_cast<int>(e->numBytes))) {
         WARN("Failed to parse Message");
         return EM_TRUE;
@@ -176,7 +242,7 @@ auto on_message([[maybe_unused]] int eventType, const EmscriptenWebSocketMessage
     INFO("{}", method);
 
     if (method == "JoinResponse") {
-        auto join = pref::JoinResponse{};
+        auto join = JoinResponse{};
         if (not join.ParseFromString(payload)) {
             WARN("Failed to parse JoinResponse");
             return EM_TRUE;
@@ -196,7 +262,7 @@ auto on_message([[maybe_unused]] int eventType, const EmscriptenWebSocketMessage
             ctx.connectedPlayers.insert_or_assign(player.player_id(), player.player_name());
         }
     } else if (method == "PlayerJoined") {
-        auto joined = pref::PlayerJoined{};
+        auto joined = PlayerJoined{};
         if (not joined.ParseFromString(msg.payload())) {
             printf("Failed to parse PlayerJoined\n");
             return EM_TRUE;
@@ -207,7 +273,7 @@ auto on_message([[maybe_unused]] int eventType, const EmscriptenWebSocketMessage
         INFO("New player joined: {} ({})", joinedName, joinedId);
         ctx.connectedPlayers.insert_or_assign(joinedId, joinedName);
     } else if (msg.method() == "PlayerLeft") {
-        pref::PlayerLeft playerLeft;
+        PlayerLeft playerLeft;
         if (not playerLeft.ParseFromString(msg.payload())) {
             WARN("Failed to parse PlayerLeft");
             return EM_TRUE;
@@ -228,7 +294,7 @@ auto on_message([[maybe_unused]] int eventType, const EmscriptenWebSocketMessage
         }
         return EM_TRUE;
     } else if (msg.method() == "DealCards") {
-        auto dealCards = pref::DealCards{};
+        auto dealCards = DealCards{};
         if (not dealCards.ParseFromString(payload)) {
             WARN("Failed to parse DealCards");
             return EM_TRUE;
@@ -243,6 +309,13 @@ auto on_message([[maybe_unused]] int eventType, const EmscriptenWebSocketMessage
             const auto x = startX + static_cast<float>(i) * cardOverlapX;
             ctx.player.cards.emplace_back(dealCards.cards()[static_cast<int>(i)], RVector2{x, y});
         }
+    } else if (msg.method() == "PlayCard") {
+        auto playCard = PlayCard{};
+        if (not playCard.ParseFromString(msg.payload())) {
+            WARN("error: failed to parse PlayCard");
+            return EM_TRUE;
+        }
+        handlePlayCard(ctx, playCard);
     } else {
         WARN("error: unknown method: {}", msg.method());
     }
@@ -301,16 +374,16 @@ void setup_websocket(Context& ctx)
     attr.protocols = nullptr;
     attr.createOnMainThread = EM_TRUE;
 
-    EMSCRIPTEN_WEBSOCKET_T ws = emscripten_websocket_new(&attr);
-    if (ws <= 0) {
+    ctx.ws = emscripten_websocket_new(&attr);
+    if (ctx.ws <= 0) {
         WARN("Failed to create WebSocket");
         return;
     }
 
-    emscripten_websocket_set_onopen_callback(ws, &ctx, on_open);
-    emscripten_websocket_set_onmessage_callback(ws, &ctx, on_message);
-    emscripten_websocket_set_onerror_callback(ws, &ctx, on_error);
-    emscripten_websocket_set_onclose_callback(ws, &ctx, on_close);
+    emscripten_websocket_set_onopen_callback(ctx.ws, &ctx, on_open);
+    emscripten_websocket_set_onmessage_callback(ctx.ws, &ctx, on_message);
+    emscripten_websocket_set_onerror_callback(ctx.ws, &ctx, on_error);
+    emscripten_websocket_set_onclose_callback(ctx.ws, &ctx, on_close);
 }
 #endif // PLATFORM_WEB
 
@@ -318,9 +391,13 @@ void DrawGameplayScreen(Context& ctx)
 {
     const std::string title = "PREFERANS GAME";
     const float fontSize = static_cast<float>(ctx.font.baseSize) * 3.0f;
-    const auto textSize = MeasureText(title.c_str(), fontSize);
-    const auto x = (screenWidth - textSize) / 2.0f;
-    RText::Draw(title, {x, 20}, fontSize, GetColor(GuiGetStyle(LABEL, TEXT_COLOR_NORMAL)));
+    const auto textSize = MeasureText(title.c_str(), static_cast<int>(fontSize));
+    const auto x = static_cast<float>(screenWidth - textSize) / 2.0f;
+    RText::Draw(
+        title,
+        {x, 20},
+        static_cast<int>(fontSize),
+        RColor{static_cast<unsigned int>(GuiGetStyle(LABEL, TEXT_COLOR_NORMAL))});
 }
 
 void DrawEnterNameScreen(Context& ctx)
@@ -336,7 +413,8 @@ void DrawEnterNameScreen(Context& ctx)
 
     // Label
     const RVector2 labelPos{boxPos.x, boxPos.y - 40.0f};
-    RText::Draw("Enter your name:", labelPos, 20.0f, GetColor(GuiGetStyle(LABEL, TEXT_COLOR_NORMAL)));
+    RText::Draw(
+        "Enter your name:", labelPos, 20.0f, RColor{static_cast<unsigned int>(GuiGetStyle(LABEL, TEXT_COLOR_NORMAL))});
 
     // Text box
     RRectangle inputBox = {boxPos, {boxWidth, boxHeight}};
@@ -379,15 +457,17 @@ void DrawConnectedPlayersPanel(const Context& ctx)
     RVector2 textPos = {x + 10.0f, y + 10.0f};
 
     // Draw panel heading
-    RText::Draw("Connected Players", textPos, 20.0f, GetColor(GuiGetStyle(LABEL, TEXT_COLOR_NORMAL)));
+    RText::Draw(
+        "Connected Players", textPos, 20.0f, RColor{static_cast<unsigned int>(GuiGetStyle(LABEL, TEXT_COLOR_NORMAL))});
 
     // Move text position down for player list
     textPos.y += 30.0f;
 
     for (const auto& [id, name] : ctx.connectedPlayers) {
         // Highlight the current player's name in dark blue
-        Color color = (id == ctx.myPlayerId) ? GetColor(GuiGetStyle(DEFAULT, TEXT_COLOR_NORMAL))
-                                             : GetColor(GuiGetStyle(DEFAULT, TEXT_COLOR_DISABLED));
+        Color color = (id == ctx.myPlayerId)
+            ? RColor{static_cast<unsigned int>(GuiGetStyle(DEFAULT, TEXT_COLOR_NORMAL))}
+            : RColor{static_cast<unsigned int>(GuiGetStyle(DEFAULT, TEXT_COLOR_DISABLED))};
         // Draw the player's name
         RText::Draw(name, textPos, 18.0f, color);
         // ctx.font.DrawText(name, textPos, 18.0f, 1.0f, color);
@@ -397,16 +477,65 @@ void DrawConnectedPlayersPanel(const Context& ctx)
     }
 }
 
-void DrawVerticalStackedCards(Context& ctx, int count, float x)
+auto playCard(Context& ctx, const std::string& cardName) -> void
 {
-    const auto startY = (screenHeight - (count - 1) * cardOverlapY - cardHeight) / 2.0f;
-    for (int i = 0; i < count; ++i) {
+    auto playCard = PlayCard{};
+    playCard.set_player_id(ctx.myPlayerId);
+    playCard.set_card(cardName);
+    auto msg = Message{};
+    msg.set_method("PlayCard");
+    msg.set_payload(playCard.SerializeAsString());
+    auto data = msg.SerializeAsString();
+    if (const auto error = emscripten_websocket_send_binary(ctx.ws, data.data(), data.size());
+        error != EMSCRIPTEN_RESULT_SUCCESS) {
+        WARN("error: could not send PlayCard: {}", what(error));
+    }
+}
+
+auto DrawMyHand(Context& ctx) -> void
+{
+    for (const auto& card : ctx.player.cards) {
+        card.texture.Draw(card.position);
+    }
+}
+
+auto DrawOpponentHand(Context& ctx, std::size_t count, const float x) -> void
+{
+    const auto countF = static_cast<float>(count);
+    const auto startY = (screenHeight - cardHeight - (countF - 1.0f) * cardOverlapY) / 2.0f;
+    for (auto i = 0.0f; i < countF; ++i) {
         const auto posY = startY + i * cardOverlapY;
         ctx.backCard.texture.Draw(RVector2{x, posY});
     }
 }
 
-void UpdateDrawFrame(void* userData)
+void DrawPlayedCards(Context& ctx)
+{
+    if (std::empty(ctx.cardsOnTable)) {
+        return;
+    }
+    const float cardSpacing = cardWidth * 0.1f;
+
+    const RVector2 centerPos = {screenWidth / 2.0f, screenHeight / 2.0f - cardHeight / 2.0f};
+    const RVector2 leftPlayPos = {centerPos.x - cardWidth - cardSpacing, centerPos.y};
+    const RVector2 middlePlayPos = centerPos;
+    const RVector2 rightPlayPos = {centerPos.x + cardWidth + cardSpacing, centerPos.y};
+
+    auto [leftOpponentId, rightOpponentId] = getOpponentIds(ctx);
+    if (auto it = ctx.cardsOnTable.find(leftOpponentId); it != ctx.cardsOnTable.end()) {
+        it->second.texture.Draw(leftPlayPos);
+    }
+
+    if (auto it = ctx.cardsOnTable.find(rightOpponentId); it != ctx.cardsOnTable.end()) {
+        it->second.texture.Draw(rightPlayPos);
+    }
+
+    if (auto it = ctx.cardsOnTable.find(ctx.myPlayerId); it != ctx.cardsOnTable.end()) {
+        it->second.texture.Draw(middlePlayPos);
+    }
+}
+
+auto UpdateDrawFrame(void* userData) -> void
 {
     assert(userData);
     auto& ctx = toContext(userData);
@@ -414,34 +543,24 @@ void UpdateDrawFrame(void* userData)
         ctx.myPlayerId = loadPlayerIdFromLocalStorage();
     }
 
-    const auto mouse = RMouse::GetPosition();
-    // Handle mouse press - start isDragging if on top of a card
-    for (auto i = static_cast<int>(std::size(ctx.player.cards)) - 1; i >= 0; --i) {
-
-        auto& card = ctx.player.cards[static_cast<std::size_t>(i)];
-        auto cardBounds = RRectangle{card.position, card.texture.GetSize()};
-
-        if (RMouse::IsButtonPressed(MOUSE_LEFT_BUTTON) and mouse.CheckCollision(cardBounds)) {
-            card.isDragging = true;
-            card.offset = RVector2{mouse.x - card.position.x, mouse.y - card.position.y};
-            auto draggedCard = std::move(card);
-            ctx.player.cards.erase(std::begin(ctx.player.cards) + i);
-            ctx.player.cards.push_back(std::move(draggedCard)); // now on top
-            break; // Only pick the topmost card
-        }
-    }
-    if (auto draggedCard = ranges::find_if(ctx.player.cards, &Card::isDragging);
-        draggedCard != ranges::end(ctx.player.cards)) {
-        if (RMouse::IsButtonReleased(MOUSE_LEFT_BUTTON)) {
-            draggedCard->isDragging = false;
-        } else if (RMouse::IsButtonDown(MOUSE_LEFT_BUTTON)) {
-            draggedCard->position.x = mouse.x - draggedCard->offset.x;
-            draggedCard->position.y = mouse.y - draggedCard->offset.y;
+    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        const auto mousePosition = RMouse::GetPosition();
+        const auto isClicked = [&](auto& card) {
+            return RRectangle{card.position, card.texture.GetSize()}.CheckCollision(mousePosition);
+        };
+        for (auto&& card : ctx.player.cards //
+                 | ranges::views::reverse //
+                 | ranges::views::filter(isClicked) //
+                 | ranges::views::take(1)) { // only first match
+            const auto name = card.name;
+            ctx.cardsOnTable.insert_or_assign(ctx.myPlayerId, std::move(card));
+            ctx.player.cards.remove_if([&](const Card& card) { return (card.name == name); });
+            playCard(ctx, name);
         }
     }
 
     ctx.window.BeginDrawing();
-    ctx.window.ClearBackground(GetColor(GuiGetStyle(DEFAULT, BACKGROUND_COLOR)));
+    ctx.window.ClearBackground(RColor{static_cast<unsigned int>(GuiGetStyle(DEFAULT, BACKGROUND_COLOR))});
     DrawGameplayScreen(ctx);
 
     if (not ctx.hasEnteredName) {
@@ -451,31 +570,31 @@ void UpdateDrawFrame(void* userData)
     }
     DrawConnectedPlayersPanel(ctx);
 
-    for (const auto& card : ctx.player.cards) {
-        card.texture.Draw(card.position);
-    }
-
-    DrawVerticalStackedCards(ctx, 10, 40.0f); // Left
-    DrawVerticalStackedCards(ctx, 10, screenWidth - cardWidth - 40.0f); // Right
-
+    DrawMyHand(ctx);
+    auto leftX = 40.0f;
+    auto rightX = screenWidth - cardWidth - 40.0f;
+    DrawOpponentHand(ctx, ctx.leftCardCount, leftX); // Left
+    DrawOpponentHand(ctx, ctx.rightCardCount, rightX); // Right
+    DrawPlayedCards(ctx);
     ctx.window.DrawFPS(screenWidth - 80, 0);
     ctx.window.EndDrawing();
 }
 
 } // namespace
+} // namespace pref
 
 auto main() -> int
 {
     spdlog::set_pattern("[%^%l%$][%!] %v");
-    auto ctx = Context{};
+    auto ctx = pref::Context{};
     GuiLoadStyleDefault();
     // GuiLoadStyle("resources/styles/style_amber.rgs");
 
 #if defined(PLATFORM_WEB)
-        emscripten_set_main_loop_arg(UpdateDrawFrame, toUserData(ctx), 0, true);
+    emscripten_set_main_loop_arg(pref::UpdateDrawFrame, pref::toUserData(ctx), 0, true);
 #else // PLATFORM_WEB
-        while (!WindowShouldClose()) {
-        UpdateDrawFrame(toUserData(ctx));
+    while (!WindowShouldClose()) {
+        pref::UpdateDrawFrame(pref::toUserData(ctx));
     }
 #endif // PLATFORM_WEB
     return 0;
