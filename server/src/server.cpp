@@ -18,12 +18,15 @@
 #include <iterator>
 #include <memory>
 
+namespace sys = boost::system;
 namespace net = boost::asio;
 namespace beast = boost::beast;
 namespace web = beast::websocket;
+namespace rng = ranges;
+namespace rv = rng::views;
 
 using namespace std::literals;
-using namespace boost::asio::experimental::awaitable_operators;
+using namespace net::experimental::awaitable_operators;
 
 namespace boost::system {
 #pragma GCC diagnostic push
@@ -40,7 +43,7 @@ namespace {
 
 // NOLINTEND(performance-unnecessary-value-param, cppcoreguidelines-avoid-reference-coroutine-parameters)
 
-constexpr auto numberOfPlayers = 3UZ;
+constexpr auto numberOfPlayers = 3uz;
 
 using SteadyTimer = net::steady_timer;
 using TcpAcceptor = net::ip::tcp::acceptor;
@@ -54,6 +57,7 @@ template<typename Callable>
 {
     return [cb = std::move(callable)](const auto& pair) { return cb(pair.first, pair.second); };
 }
+
 constexpr auto detached = [](const std::string_view func) { // NOLINT(fuchsia-statically-constructed-objects)
     return [func](const std::exception_ptr& eptr) {
         if (not eptr) {
@@ -61,7 +65,7 @@ constexpr auto detached = [](const std::string_view func) { // NOLINT(fuchsia-st
         }
         try {
             std::rethrow_exception(eptr);
-        } catch (const boost::system::system_error& error) {
+        } catch (const sys::system_error& error) {
             if (error.code() != net::error::operation_aborted) {
                 WARN("[{}][Detached] error: {}", func, error);
             }
@@ -98,7 +102,7 @@ struct Player {
     Id id;
     Name name;
     PlayerSession::Id sessionId{};
-    std::shared_ptr<Stream> stream;
+    std::shared_ptr<Stream> ws;
     std::optional<SteadyTimer> reconnectTimer;
 };
 
@@ -110,7 +114,20 @@ struct Player {
 struct GameState {
     using Players = std::map<Player::Id, Player>;
     Players players;
+    Players::const_iterator turnPlayerId;
 };
+
+auto resetTurnPlayerId(GameState& state) -> void
+{
+    state.turnPlayerId = std::cbegin(state.players);
+}
+
+auto advanceTurnPlayerId(GameState& state) -> void
+{
+    if (++state.turnPlayerId == std::cend(state.players)) {
+        resetTurnPlayerId(state);
+    }
+}
 
 constexpr auto getPlayerId = &GameState::Players::value_type::first;
 
@@ -119,21 +136,20 @@ constexpr auto getPlayerId = &GameState::Players::value_type::first;
     return std::empty(playerId) or not players.contains(playerId);
 }
 
-auto sendToOne(const Message& msg, const std::shared_ptr<Stream>& stream) -> Awaitable<boost::system::error_code>
+auto sendToOne(const Message& msg, const std::shared_ptr<Stream>& ws) -> Awaitable<sys::error_code>
 {
-    if (not stream->is_open()) {
+    if (not ws->is_open()) {
         co_return net::error::not_connected;
     }
     const auto data = msg.SerializeAsString();
-    const auto buf = net::buffer(data);
-    const auto [error, _] = co_await stream->async_write(buf, net::as_tuple);
+    const auto [error, _] = co_await ws->async_write(net::buffer(data), net::as_tuple);
     co_return error;
 }
 
-auto sendToMany(const Message& msg, const std::vector<std::shared_ptr<Stream>>& streams) -> Awaitable<>
+auto sendToMany(const Message& msg, const std::vector<std::shared_ptr<Stream>>& wss) -> Awaitable<>
 {
-    for (const auto& stream : streams) {
-        if (const auto error = co_await sendToOne(msg, stream)) {
+    for (const auto& ws : wss) {
+        if (const auto error = co_await sendToOne(msg, ws)) {
             WARN("{}: failed to send message", VAR(error));
         }
     }
@@ -141,24 +157,24 @@ auto sendToMany(const Message& msg, const std::vector<std::shared_ptr<Stream>>& 
 
 auto sendToAll(const Message& msg, const GameState::Players& players) -> Awaitable<>
 {
-    const auto streams = players //
-        | ranges::views::values //
-        | ranges::views::transform(&Player::stream) //
-        | ranges::to_vector; //
-    co_await sendToMany(msg, streams);
+    const auto wss = players //
+        | rv::values //
+        | rv::transform(&Player::ws) //
+        | rng::to_vector; //
+    co_await sendToMany(msg, wss);
 }
 
 auto sendToAllExcept(const Message& msg, const GameState::Players& players, const Player::Id& excludedId) -> Awaitable<>
 {
-    const auto streams = players //
-        | ranges::views::filter(std::bind_front(std::not_equal_to{}, excludedId), getPlayerId) //
-        | ranges::views::values //
-        | ranges::views::transform(&Player::stream) //
-        | ranges::to_vector;
-    co_await sendToMany(msg, streams);
+    const auto wss = players //
+        | rv::filter(std::bind_front(std::not_equal_to{}, excludedId), getPlayerId) //
+        | rv::values //
+        | rv::transform(&Player::ws) //
+        | rng::to_vector;
+    co_await sendToMany(msg, wss);
 }
 
-auto joinPlayer(const std::shared_ptr<Stream>& stream, GameState::Players& players, PlayerSession& session) -> void
+auto joinPlayer(const std::shared_ptr<Stream>& ws, GameState::Players& players, PlayerSession& session) -> void
 {
     session.playerId = generateUuid();
     INFO_VAR(session.playerId, session.playerName, session.id);
@@ -168,7 +184,7 @@ auto joinPlayer(const std::shared_ptr<Stream>& stream, GameState::Players& playe
             .id = session.playerId,
             .name = session.playerName,
             .sessionId = session.id,
-            .stream = stream,
+            .ws = ws,
             .reconnectTimer = {}});
 }
 
@@ -183,35 +199,33 @@ auto prepareNewSession(const Player::Id& playerId, GameState::Players& players, 
     if (player.reconnectTimer) {
         player.reconnectTimer->cancel();
     }
-    if (player.stream->is_open()) {
-        if (const auto [error] = co_await player.stream->async_close(
-                web::close_reason(web::close_code::policy_error, "Another tab connected"), net::as_tuple);
-            error) {
-            WARN("{}: failed to close stream", VAR(error));
-        }
+    if (not player.ws->is_open()) {
+        co_return;
+    }
+    if (const auto [error] = co_await player.ws->async_close(
+            web::close_reason(web::close_code::policy_error, "Another tab connected"), net::as_tuple);
+        error) {
+        WARN("{}: failed to close ws", VAR(error));
     }
 }
 
-auto replaceStream(const Player::Id& playerId, GameState::Players& players, const std::shared_ptr<Stream>& stream)
-    -> void
+auto replaceStream(const Player::Id& playerId, GameState::Players& players, const std::shared_ptr<Stream>& ws) -> void
 {
     assert(players.contains(playerId));
     auto& player = players[playerId];
-    player.stream = stream;
+    player.ws = ws;
 }
 
 auto reconnectPlayer(
-    const std::shared_ptr<Stream>& stream,
-    const Player::Id& playerId,
-    GameState::Players& players,
-    PlayerSession& session) -> Awaitable<>
+    const std::shared_ptr<Stream>& ws, const Player::Id& playerId, GameState::Players& players, PlayerSession& session)
+    -> Awaitable<>
 {
     co_await prepareNewSession(playerId, players, session);
-    replaceStream(playerId, players, stream);
+    replaceStream(playerId, players, ws);
     INFO_VAR(session.playerName, session.playerId, session.id);
 }
 
-auto handleJoinRequest(Message msg, const std::shared_ptr<Stream> stream, GameState& state) -> Awaitable<PlayerSession>
+auto handleJoinRequest(Message msg, const std::shared_ptr<Stream> ws, GameState& state) -> Awaitable<PlayerSession>
 {
     auto joinRequest = JoinRequest{};
     if (not joinRequest.ParseFromString(msg.payload())) {
@@ -221,18 +235,16 @@ auto handleJoinRequest(Message msg, const std::shared_ptr<Stream> stream, GameSt
     auto session = PlayerSession{};
     const auto& playerId = joinRequest.player_id();
     session.playerName = joinRequest.player_name();
-    const auto address = stream->next_layer().socket().remote_endpoint().address().to_string();
+    const auto address = ws->next_layer().socket().remote_endpoint().address().to_string();
+    // TODO: hide address
     INFO_VAR(playerId, session.playerName, address);
-
     if (isNewPlayer(playerId, state.players)) {
-        joinPlayer(stream, state.players, session);
+        joinPlayer(ws, state.players, session);
     } else {
-        co_await reconnectPlayer(stream, playerId, state.players, session);
+        co_await reconnectPlayer(ws, playerId, state.players, session);
     }
-
     auto joinResponse = JoinResponse{};
     joinResponse.set_player_id(session.playerId);
-
     for (const auto& [id, player] : state.players) {
         auto p = joinResponse.add_players();
         p->set_player_id(id);
@@ -241,7 +253,7 @@ auto handleJoinRequest(Message msg, const std::shared_ptr<Stream> stream, GameSt
     msg = Message{};
     msg.set_method("JoinResponse");
     msg.set_payload(joinResponse.SerializeAsString());
-    if (const auto error = co_await sendToOne(msg, stream)) {
+    if (const auto error = co_await sendToOne(msg, ws)) {
         WARN("{}: failed to send JoinResponse", VAR(error));
     }
     if (playerId != session.playerId) {
@@ -297,29 +309,29 @@ auto handleDisconnect(const Player::Id playerId, GameState& state) -> Awaitable<
 
 auto dealCards(GameState& state) -> Awaitable<>
 {
-    const auto suits = std::vector<std::string>{"spades", "diamonds", "clubs", "hearts"};
-    const auto ranks = std::vector<std::string>{"7", "8", "9", "10", "jack", "queen", "king", "ace"};
+    const auto suits = std::array{"spades"sv, "diamonds"sv, "clubs"sv, "hearts"sv};
+    const auto ranks = std::array{"7"sv, "8"sv, "9"sv, "10"sv, "jack"sv, "queen"sv, "king"sv, "ace"sv};
     const auto toCard = [](const auto& card) {
         const auto& [rank, suit] = card;
         return fmt::format("{}_of_{}", rank, suit);
     };
-    const auto deck = ranges::views::cartesian_product(ranks, suits) //
-        | ranges::views::transform(toCard) //
-        | ranges::to_vector //
-        | ranges::actions::shuffle(std::mt19937{std::invoke(std::random_device{})});
-    const auto chunks = deck | ranges::views::chunk(10);
-    const auto hands = chunks | ranges::views::take(numberOfPlayers) | ranges::to_vector;
+    const auto deck = rv::cartesian_product(ranks, suits) //
+        | rv::transform(toCard) //
+        | rng::to_vector //
+        | rng::actions::shuffle(std::mt19937{std::invoke(std::random_device{})});
+    const auto chunks = deck | rv::chunk(10);
+    const auto hands = chunks | rv::take(numberOfPlayers) | rng::to_vector;
     [[maybe_unused]] const auto talon = chunks //
-        | ranges::views::drop(numberOfPlayers) //
-        | ranges::views::join //
-        | ranges::to_vector;
+        | rv::drop(numberOfPlayers) //
+        | rv::join //
+        | rng::to_vector;
     INFO_VAR(talon, hands);
-    const auto streams = state.players //
-        | ranges::views::values //
-        | ranges::views::transform(&Player::stream) //
-        | ranges::to_vector;
-    assert((std::size(streams) == numberOfPlayers) and (std::size(hands) == numberOfPlayers));
-    for (const auto& [stream, hand] : ranges::views::zip(streams, hands)) {
+    const auto wss = state.players //
+        | rv::values //
+        | rv::transform(&Player::ws) //
+        | rng::to_vector;
+    assert((std::size(wss) == numberOfPlayers) and (std::size(hands) == numberOfPlayers));
+    for (const auto& [ws, hand] : rv::zip(wss, hands)) {
         auto dealCards = DealCards{};
         for (const auto& card : hand) {
             *dealCards.add_cards() = card;
@@ -327,27 +339,50 @@ auto dealCards(GameState& state) -> Awaitable<>
         auto msg = Message{};
         msg.set_method("DealCards");
         msg.set_payload(dealCards.SerializeAsString());
-        co_await sendToOne(msg, stream);
+        co_await sendToOne(msg, ws);
     }
 }
 
-auto launchSession(const std::shared_ptr<Stream> stream, GameState& state) -> Awaitable<>
+auto playerTurn(GameState& state, const std::string_view stage) -> Awaitable<>
+{
+    auto playerTurn = PlayerTurn{};
+    playerTurn.set_player_id((*state.turnPlayerId).first);
+    playerTurn.set_stage(std::string{stage});
+    auto msg = Message{};
+    msg.set_method("PlayerTurn");
+    msg.set_payload(playerTurn.SerializeAsString());
+    co_await sendToAll(msg, state.players);
+}
+
+auto handleBidding(const Message& msg, GameState& state) -> Awaitable<>
+{
+    auto bidding = Bidding{};
+    if (not bidding.ParseFromString(msg.payload())) {
+        WARN("error: failed to parse Bidding");
+        co_return;
+    }
+    const auto& playerId = bidding.player_id();
+    const auto& bid = bidding.bid();
+    INFO_VAR(playerId, bid);
+    co_await sendToAllExcept(msg, state.players, playerId);
+}
+
+auto launchSession(const std::shared_ptr<Stream> ws, GameState& state) -> Awaitable<>
 {
     INFO();
-
     // TODO: What if we received a text?
-    stream->binary(true);
-    stream->set_option(web::stream_base::timeout::suggested(beast::role_type::server));
-    stream->set_option(web::stream_base::decorator([](web::response_type& res) {
+    ws->binary(true);
+    ws->set_option(web::stream_base::timeout::suggested(beast::role_type::server));
+    ws->set_option(web::stream_base::decorator([](web::response_type& res) {
         res.set(beast::http::field::server, std::string{BOOST_BEAST_VERSION_STRING} + " preferans-server");
     }));
 
-    co_await stream->async_accept();
+    co_await ws->async_accept();
     auto session = PlayerSession{};
 
     while (true) {
         auto buffer = beast::flat_buffer{};
-        if (const auto [error, _] = co_await stream->async_read(buffer, net::as_tuple); error) {
+        if (const auto [error, _] = co_await ws->async_read(buffer, net::as_tuple); error) {
             if (error == web::error::closed //
                 or error == net::error::not_connected //
                 or error == net::error::connection_reset //
@@ -369,12 +404,21 @@ auto launchSession(const std::shared_ptr<Stream> stream, GameState& state) -> Aw
         const auto& msg = *maybeMsg;
 
         if (msg.method() == "JoinRequest") {
-            session = co_await handleJoinRequest(msg, stream, state);
+            session = co_await handleJoinRequest(msg, ws, state);
             if (std::size(state.players) == numberOfPlayers) {
                 co_await dealCards(state);
+                resetTurnPlayerId(state);
+                co_await playerTurn(state, "Bidding");
             }
+        } else if (msg.method() == "Bidding") {
+            co_await handleBidding(msg, state);
+            advanceTurnPlayerId(state);
+            co_await playerTurn(state, "Bidding");
+            // TODO: check the bid and break on two pass
         } else if (msg.method() == "PlayCard") {
             co_await handlePlayCard(msg, state);
+            advanceTurnPlayerId(state);
+            co_await playerTurn(state, "Playing");
         } else {
             WARN("error: unknown method: {}", msg.method());
             continue;
@@ -400,7 +444,6 @@ auto acceptConnectionAndLaunchSession(const net::ip::tcp::endpoint endpoint, Gam
     INFO();
     const auto ex = co_await net::this_coro::executor;
     auto acceptor = TcpAcceptor{ex, endpoint};
-
     while (true) {
         net::co_spawn(
             ex,
@@ -417,7 +460,6 @@ auto handleSignals() -> Awaitable<>
     INFO_VAR(signal);
     static_cast<net::io_context&>(ex.context()).stop(); // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
 }
-
 
 constexpr auto usage = R"(
 Usage:
@@ -436,10 +478,8 @@ int main(const int argc, const char* const argv[])
     try {
         const auto args = docopt::docopt(pref::usage, {std::next(argv), std::next(argv, argc)});
         spdlog::set_pattern("[%^%l%$][%!] %v");
-
         auto const address = net::ip::make_address(args.at("<address>").asString());
         auto const port = gsl::narrow<std::uint16_t>(args.at("<port>").asLong());
-
         auto loop = net::io_context{};
         auto state = pref::GameState{};
         net::co_spawn(loop, pref::handleSignals(), pref::detached("handleStop"));
@@ -448,7 +488,6 @@ int main(const int argc, const char* const argv[])
             pref::acceptConnectionAndLaunchSession({address, port}, state),
             pref::detached("acceptConnectionAndLaunchSession"));
         loop.run();
-
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
         ERROR("{}", VAR(error));

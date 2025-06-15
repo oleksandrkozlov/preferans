@@ -35,6 +35,17 @@ message PlayCard {
   string card = 2; // e.g. "queen_of_hearts"
 }
 
+message PlayerTurn {
+  string player_id = 1;
+  string stage = 2; // Bidding, TalonPicking, Playing, Whisting
+}
+
+message Bidding {
+    string player_id = 1;
+    string bid = 2; // e.g., "8H", "PASS", "MISER", etc.
+}
+
+
 message Message {
   string method = 1;
   bytes payload = 2;

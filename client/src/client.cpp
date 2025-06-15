@@ -99,6 +99,19 @@ struct Player {
     std::list<Card> cards;
 };
 
+struct BiddingMenu {
+    bool isVisible{}; // render / accept clicks
+    std::string selection; // text button
+};
+
+constexpr auto bidLabels = std::array<std::array<std::string_view, 6>, 6>{
+    {{"6S", "6C", "6D", "6H", "6WT", ""},
+     {"7S", "7C", "7D", "7H", "7WT", ""},
+     {"8S", "8C", "8D", "8H", "8WT", ""},
+     {"9S", "9C", "9D", "9H", "9WT", "9WP"},
+     {"10S", "10C", "10D", "10H", "10WT", "10WP"},
+     {"", "", "", "MISER", "MISER WP", "PASS"}}};
+
 struct Context {
     RFont font{"resources/mecha.png"};
     RVector2 screen{screenWidth, screenHeight};
@@ -114,27 +127,45 @@ struct Context {
     int leftCardCount = 10;
     int rightCardCount = 10;
     std::map<std::string, Card> cardsOnTable;
+    std::string turnPlayerId;
+    BiddingMenu bidding;
+    std::string stage;
 };
+
 
 [[nodiscard]] auto getOpponentIds(Context& ctx) -> std::pair<std::string, std::string>
 {
     assert(std::size(ctx.connectedPlayers) == 3U);
-    std::vector<std::string> order;
+    auto order = std::vector<std::string>{};
     for (const auto& [id, _] : ctx.connectedPlayers) {
         order.push_back(id);
     }
 
-    const auto it = std::find(order.begin(), order.end(), ctx.myPlayerId);
+    const auto it = ranges::find(order, ctx.myPlayerId);
     assert(it != order.end());
 
     const auto selfIndex = std::distance(order.begin(), it);
     const auto leftIndex = (selfIndex + 1) % 3;
     const auto rightIndex = (selfIndex + 2) % 3;
 
-    return {order[leftIndex], order[rightIndex]};
+    return {order[static_cast<std::size_t>(leftIndex)], order[static_cast<std::size_t>(rightIndex)]};
 }
 
-auto handlePlayCard(Context& ctx, const pref::PlayCard& playCard)
+auto handlePlayerTurn(Context& ctx, const PlayerTurn& playerTurn) -> void
+{
+    ctx.turnPlayerId = playerTurn.player_id();
+    ctx.stage = playerTurn.stage();
+    if (ctx.turnPlayerId == ctx.myPlayerId) {
+        INFO("Your turn");
+        if (ctx.stage == "Bidding") {
+            ctx.bidding.isVisible = true;
+        }
+    } else {
+        INFO_VAR(ctx.turnPlayerId);
+    }
+}
+
+auto handlePlayCard(Context& ctx, const PlayCard& playCard) -> void
 {
     auto [leftOpponentId, rightOpponentId] = getOpponentIds(ctx);
     const auto& playerId = playCard.player_id();
@@ -204,14 +235,14 @@ EM_BOOL on_open([[maybe_unused]] int eventType, const EmscriptenWebSocketOpenEve
     assert(userData);
     auto& ctx = toContext(userData);
 
-    JoinRequest join;
-    join.set_player_name(ctx.myPlayerName);
+    auto joinRequest = JoinRequest{};
+    joinRequest.set_player_name(ctx.myPlayerName);
     if (not std::empty(ctx.myPlayerId)) {
-        join.set_player_id(ctx.myPlayerId);
+        joinRequest.set_player_id(ctx.myPlayerId);
     }
-    Message msg;
+    auto msg = Message{};
     msg.set_method("JoinRequest");
-    msg.set_payload(join.SerializeAsString());
+    msg.set_payload(joinRequest.SerializeAsString());
 
     auto data = msg.SerializeAsString();
     if (const auto error = emscripten_websocket_send_binary(e->socket, data.data(), data.size());
@@ -221,7 +252,8 @@ EM_BOOL on_open([[maybe_unused]] int eventType, const EmscriptenWebSocketOpenEve
     return EM_TRUE;
 }
 
-auto on_message([[maybe_unused]] int eventType, const EmscriptenWebSocketMessageEvent* e, void* userData) -> EM_BOOL
+auto on_message([[maybe_unused]] const int eventType, const EmscriptenWebSocketMessageEvent* e, void* userData)
+    -> EM_BOOL
 {
     INFO("{}, socket: {}, numBytes: {}, isText: {}", VAR(eventType), e->socket, e->numBytes, e->isText);
     assert(userData);
@@ -231,55 +263,54 @@ auto on_message([[maybe_unused]] int eventType, const EmscriptenWebSocketMessage
         WARN("error: expect binary data");
         return EM_TRUE;
     }
-    Message msg;
+    auto msg = Message{};
     if (not msg.ParseFromArray(e->data, static_cast<int>(e->numBytes))) {
         WARN("Failed to parse Message");
         return EM_TRUE;
     }
 
-    const std::string& method = msg.method();
-    const std::string& payload = msg.payload();
-    INFO("{}", method);
+    const auto& method = msg.method();
+    const auto& payload = msg.payload();
+    INFO_VAR(method);
 
     if (method == "JoinResponse") {
-        auto join = JoinResponse{};
-        if (not join.ParseFromString(payload)) {
+        auto joinResponse = JoinResponse{};
+        if (not joinResponse.ParseFromString(payload)) {
             WARN("Failed to parse JoinResponse");
             return EM_TRUE;
         }
-
-        if (ctx.myPlayerId != join.player_id()) {
-            ctx.myPlayerId = join.player_id();
+        if (ctx.myPlayerId != joinResponse.player_id()) {
+            ctx.myPlayerId = joinResponse.player_id();
             INFO("save myPlayerId: {}", ctx.myPlayerId);
             savePlayerIdToLocalStorage(ctx.myPlayerId);
         }
 
         ctx.connectedPlayers.clear();
-        for (const auto& player : join.players()) {
+        for (const auto& player : joinResponse.players()) {
             if (player.player_id() == ctx.myPlayerId and ctx.myPlayerName != player.player_name()) {
                 ctx.myPlayerName = player.player_name();
             }
             ctx.connectedPlayers.insert_or_assign(player.player_id(), player.player_name());
         }
     } else if (method == "PlayerJoined") {
-        auto joined = PlayerJoined{};
-        if (not joined.ParseFromString(msg.payload())) {
+        auto playerJoined = PlayerJoined{};
+        if (not playerJoined.ParseFromString(msg.payload())) {
             printf("Failed to parse PlayerJoined\n");
             return EM_TRUE;
         }
-        const auto& joinedId = joined.player_id();
-        const auto& joinedName = joined.player_name();
+        const auto& playerJoinedId = playerJoined.player_id();
+        const auto& playerJoinedName = playerJoined.player_name();
 
-        INFO("New player joined: {} ({})", joinedName, joinedId);
-        ctx.connectedPlayers.insert_or_assign(joinedId, joinedName);
+        INFO("New player playerJoined: {} ({})", playerJoinedName, playerJoinedId);
+        ctx.connectedPlayers.insert_or_assign(playerJoinedId, playerJoinedName);
     } else if (msg.method() == "PlayerLeft") {
-        PlayerLeft playerLeft;
+        auto playerLeft = PlayerLeft{};
         if (not playerLeft.ParseFromString(msg.payload())) {
             WARN("Failed to parse PlayerLeft");
             return EM_TRUE;
         }
 
-        const std::string& id = playerLeft.player_id();
+        const auto& id = playerLeft.player_id();
         auto it = ctx.connectedPlayers.find(id);
 
         if (it != ctx.connectedPlayers.end()) {
@@ -309,6 +340,22 @@ auto on_message([[maybe_unused]] int eventType, const EmscriptenWebSocketMessage
             const auto x = startX + static_cast<float>(i) * cardOverlapX;
             ctx.player.cards.emplace_back(dealCards.cards()[static_cast<int>(i)], RVector2{x, y});
         }
+    } else if (msg.method() == "PlayerTurn") {
+        auto playerTurn = PlayerTurn{};
+        if (not playerTurn.ParseFromString(msg.payload())) {
+            WARN("error: failed to parse PlayerTurn");
+            return EM_TRUE;
+        }
+        handlePlayerTurn(ctx, playerTurn);
+    } else if (msg.method() == "Bidding") {
+        auto bidding = Bidding{};
+        if (not bidding.ParseFromString(msg.payload())) {
+            WARN("error: failed to parse Bidding");
+            return EM_TRUE;
+        }
+        const auto& playerId = bidding.player_id();
+        const auto& bid = bidding.bid();
+        INFO_VAR(playerId, bid);
     } else if (msg.method() == "PlayCard") {
         auto playCard = PlayCard{};
         if (not playCard.ParseFromString(msg.payload())) {
@@ -436,7 +483,7 @@ void DrawEnterNameScreen(Context& ctx)
     }
 }
 
-void DrawConnectedPlayersPanel(const Context& ctx)
+auto DrawConnectedPlayersPanel(const Context& ctx) -> void
 {
     // from the left edge
     const float x = 20.0f;
@@ -492,6 +539,21 @@ auto playCard(Context& ctx, const std::string& cardName) -> void
     }
 }
 
+auto sendBidding(Context& ctx, const std::string_view bid) -> void
+{
+    auto bidding = Bidding{};
+    bidding.set_player_id(ctx.myPlayerId);
+    bidding.set_bid(std::string{bid});
+    auto msg = Message{};
+    msg.set_method("Bidding");
+    msg.set_payload(bidding.SerializeAsString());
+    auto data = msg.SerializeAsString();
+    if (const auto error = emscripten_websocket_send_binary(ctx.ws, data.data(), data.size());
+        error != EMSCRIPTEN_RESULT_SUCCESS) {
+        WARN("could not send Bidding: {}", what(error));
+    }
+}
+
 auto DrawMyHand(Context& ctx) -> void
 {
     for (const auto& card : ctx.player.cards) {
@@ -499,8 +561,12 @@ auto DrawMyHand(Context& ctx) -> void
     }
 }
 
-auto DrawOpponentHand(Context& ctx, std::size_t count, const float x) -> void
+auto DrawOpponentHand(Context& ctx, int count, const float x) -> void
 {
+    // draw if I have cards
+    if (std::empty(ctx.player.cards)) {
+        return;
+    }
     const auto countF = static_cast<float>(count);
     const auto startY = (screenHeight - cardHeight - (countF - 1.0f) * cardOverlapY) / 2.0f;
     for (auto i = 0.0f; i < countF; ++i) {
@@ -535,6 +601,40 @@ void DrawPlayedCards(Context& ctx)
     }
 }
 
+auto DrawBiddingMenu(Context& ctx) -> void
+{
+    if (!ctx.bidding.isVisible) {
+        return;
+    }
+
+    constexpr float gap = 8.0f;
+    constexpr float cellW = 120.0f;
+    constexpr float cellH = 60.0f;
+    constexpr int rows = bidLabels.size();
+    constexpr int cols = bidLabels[0].size();
+
+    const float menuW = cols * cellW + (cols - 1) * gap;
+    const float menuH = rows * cellH + (rows - 1) * gap;
+    const float originX = (screenWidth - menuW) / 2.0f;
+    const float originY = (screenHeight - menuH) / 2.0f;
+
+    for (int r = 0; r < rows; ++r) {
+        for (int c = 0; c < cols; ++c) {
+            const auto& label = bidLabels[static_cast<std::size_t>(r)][static_cast<std::size_t>(c)];
+            if (label.empty())
+                continue;
+
+            Rectangle rect{originX + c * (cellW + gap), originY + r * (cellH + gap), cellW, cellH};
+
+            if (GuiButton(rect, label.data())) {
+                ctx.bidding.selection = std::string(label);
+                ctx.bidding.isVisible = false;
+                sendBidding(ctx, label);
+            }
+        }
+    }
+}
+
 auto UpdateDrawFrame(void* userData) -> void
 {
     assert(userData);
@@ -543,7 +643,9 @@ auto UpdateDrawFrame(void* userData) -> void
         ctx.myPlayerId = loadPlayerIdFromLocalStorage();
     }
 
-    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+    if ((ctx.myPlayerId == ctx.turnPlayerId) //
+        and (ctx.stage == "Playing") //
+        and IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
         const auto mousePosition = RMouse::GetPosition();
         const auto isClicked = [&](auto& card) {
             return RRectangle{card.position, card.texture.GetSize()}.CheckCollision(mousePosition);
@@ -562,6 +664,7 @@ auto UpdateDrawFrame(void* userData) -> void
     ctx.window.BeginDrawing();
     ctx.window.ClearBackground(RColor{static_cast<unsigned int>(GuiGetStyle(DEFAULT, BACKGROUND_COLOR))});
     DrawGameplayScreen(ctx);
+    DrawBiddingMenu(ctx);
 
     if (not ctx.hasEnteredName) {
         DrawEnterNameScreen(ctx);
@@ -588,6 +691,9 @@ auto main() -> int
     spdlog::set_pattern("[%^%l%$][%!] %v");
     auto ctx = pref::Context{};
     GuiLoadStyleDefault();
+    GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
+    GuiSetStyle(DEFAULT, TEXT_SPACING, 2);
+
     // GuiLoadStyle("resources/styles/style_amber.rgs");
 
 #if defined(PLATFORM_WEB)
