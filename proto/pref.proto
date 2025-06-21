@@ -38,6 +38,7 @@ message PlayCard {
 message PlayerTurn {
   string player_id = 1;
   string stage = 2; // Bidding, TalonPicking, Playing, Whisting
+  repeated string talon = 3; // queen_of_hearts, etc.
 }
 
 message Bidding {
@@ -45,6 +46,11 @@ message Bidding {
     string bid = 2; // e.g., "8H", "PASS", "MISER", etc.
 }
 
+message DiscardTalon {
+    string player_id = 1;
+    repeated string cards = 2; // queen_of_hearts, etc.
+    string bid = 3;
+}
 
 message Message {
   string method = 1;

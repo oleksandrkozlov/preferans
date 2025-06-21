@@ -19,3 +19,6 @@
 [submodule "client/deps/spdlog"]
 	path = client/deps/spdlog
 	url = git@github.com:gabime/spdlog.git
+[submodule "client/deps/gsl"]
+	path = client/deps/gsl
+	url = git@github.com:microsoft/GSL.git

@@ -1,3 +1,27 @@
+#include "common/common.hpp"
+#include "common/logger.hpp"
+
+#include <fmt/format.h>
+#include <fmt/ranges.h>
+#include <fmt/std.h>
+#include <range/v3/all.hpp>
+#include <raylib-cpp.hpp>
+#include <spdlog/spdlog.h>
+
+#include <chrono>
+#include <thread>
+
+#define RAYGUI_IMPLEMENTATION
+#include <raygui.h>
+
+#include <array>
+#include <cassert>
+#include <gsl/gsl>
+#include <initializer_list>
+#include <list>
+#include <string_view>
+#include <vector>
+
 #if defined(PLATFORM_WEB)
 #include "proto/pref.pb.h"
 
@@ -6,29 +30,20 @@
 #include <emscripten/websocket.h>
 #endif // PLATFORM_WEB
 
-#include <fmt/format.h>
-#include <range/v3/all.hpp>
-#include <raylib-cpp.hpp>
-#include <spdlog/spdlog.h>
-#define RAYGUI_IMPLEMENTATION
-#include "common/logger.hpp"
-
-#include <raygui.h>
-
-#include <array>
-#include <cassert>
-#include <initializer_list>
-#include <list>
-#include <string_view>
-#include <vector>
-
 namespace pref {
 namespace {
 
-constexpr const auto ratioWidth = 16;
-constexpr const auto ratioHeigh = 9;
-constexpr const auto screenWidth = 1920;
-constexpr const auto screenHeight = (screenWidth * ratioHeigh) / ratioWidth;
+// 1920x1080 @ 16:9 - Full HD
+[[maybe_unused]] constexpr auto ratioWidth = 16;
+[[maybe_unused]] constexpr auto ratioHeigh = 9;
+constexpr auto screenWidth = 1920;
+constexpr auto screenHeight = 1080;
+
+// 3440x1440 @ 21:9 - Ultra-Wide
+// constexpr auto ratioWidth = 21;
+// constexpr auto ratioHeigh = 9;
+// constexpr auto screenWidth = 3440;
+// constexpr auto screenHeight = 1440;
 
 constexpr auto originalCardHeight = 726.0f;
 constexpr auto originalCardWidth = 500.0f;
@@ -39,6 +54,8 @@ constexpr auto cardOverlapX = cardWidth * 0.6f; // 60% overlap
 constexpr auto cardOverlapY = cardHeight * 0.2f;
 
 using namespace std::literals;
+namespace rng = ranges;
+namespace rv = rng::views;
 
 [[nodiscard]] constexpr auto getCloseReason(const std::uint16_t code) noexcept -> std::string_view
 {
@@ -62,6 +79,7 @@ using namespace std::literals;
     return "Unknown";
 }
 
+#if defined(PLATFORM_WEB)
 [[nodiscard]] constexpr auto what(const EMSCRIPTEN_RESULT result) noexcept -> std::string_view
 {
     switch (result) { // clang-format off
@@ -78,6 +96,7 @@ using namespace std::literals;
     } // clang-format on
     return "Unknown";
 }
+#endif // PLATFORM_WEB
 
 struct Card {
     Card(std::string n, RVector2 pos)
@@ -99,39 +118,69 @@ struct Player {
     std::list<Card> cards;
 };
 
+// clang-format off
+constexpr auto bidsFlat = std::array{
+      "6S",  "6C",  "6D",  "6H",    "6WT",
+      "7S",  "7C",  "7D",  "7H",    "7WT",
+      "8S",  "8C",  "8D",  "8H",    "8WT",
+      "9S",  "9C",  "9D",  "9H",    "9WT",      "9WP",
+      "10S", "10C", "10D", "10H",   "10WT",     "10WP",
+                           "MISER", "MISER WP", "PASS"};
+
+constexpr auto bidTable = std::array<std::array<std::string_view, 6>, 6>{
+    {{"6S",  "6C",  "6D",  "6H",    "6WT",      ""},
+     {"7S",  "7C",  "7D",  "7H",    "7WT",      ""},
+     {"8S",  "8C",  "8D",  "8H",    "8WT",      ""},
+     {"9S",  "9C",  "9D",  "9H",    "9WT",      "9WP"},
+     {"10S", "10C", "10D", "10H",   "10WT",     "10WP"},
+     {"",    "",    "",    "MISER", "MISER WP", "PASS"}}};
+// clang-format on
+
+constexpr auto allRanks = bidsFlat.size();
+
 struct BiddingMenu {
-    bool isVisible{}; // render / accept clicks
-    std::string selection; // text button
+    bool isVisible{};
+    std::string bid; // text button
+    std::size_t rank = allRanks;
 };
 
-constexpr auto bidLabels = std::array<std::array<std::string_view, 6>, 6>{
-    {{"6S", "6C", "6D", "6H", "6WT", ""},
-     {"7S", "7C", "7D", "7H", "7WT", ""},
-     {"8S", "8C", "8D", "8H", "8WT", ""},
-     {"9S", "9C", "9D", "9H", "9WT", "9WP"},
-     {"10S", "10C", "10D", "10H", "10WT", "10WP"},
-     {"", "", "", "MISER", "MISER WP", "PASS"}}};
+constexpr auto rankOf(const std::string_view bid) noexcept -> std::size_t
+{
+    for (std::size_t i = 0; i < bidsFlat.size(); ++i) {
+        if (bidsFlat[i] == bid) {
+            return i;
+        }
+    }
+    return allRanks;
+}
+
+[[nodiscard]] auto getGuiColor(const int control, const int property) -> RColor
+{
+    return {static_cast<unsigned int>(GuiGetStyle(control, property))};
+}
 
 struct Context {
     RFont font{"resources/mecha.png"};
     RVector2 screen{screenWidth, screenHeight};
     RWindow window{static_cast<int>(screen.x), static_cast<int>(screen.y), "Preferans"};
-
     Player player;
     std::string myPlayerId;
     std::string myPlayerName;
     bool hasEnteredName{};
     std::map<std::string, std::string> connectedPlayers;
     Card backCard{"cardBackRed", {}};
+#if defined(PLATFORM_WEB)
     EMSCRIPTEN_WEBSOCKET_T ws{};
+#endif // PLATFORM_WEB
     int leftCardCount = 10;
     int rightCardCount = 10;
     std::map<std::string, Card> cardsOnTable;
     std::string turnPlayerId;
     BiddingMenu bidding;
     std::string stage;
+    std::vector<std::string> discardedTalon;
+    std::string leadSuit;
 };
-
 
 [[nodiscard]] auto getOpponentIds(Context& ctx) -> std::pair<std::string, std::string>
 {
@@ -140,10 +189,8 @@ struct Context {
     for (const auto& [id, _] : ctx.connectedPlayers) {
         order.push_back(id);
     }
-
     const auto it = ranges::find(order, ctx.myPlayerId);
     assert(it != order.end());
-
     const auto selfIndex = std::distance(order.begin(), it);
     const auto leftIndex = (selfIndex + 1) % 3;
     const auto rightIndex = (selfIndex + 2) % 3;
@@ -151,25 +198,36 @@ struct Context {
     return {order[static_cast<std::size_t>(leftIndex)], order[static_cast<std::size_t>(rightIndex)]};
 }
 
-auto handlePlayerTurn(Context& ctx, const PlayerTurn& playerTurn) -> void
+auto handlePlayerTurn(Context& ctx, PlayerTurn playerTurn) -> void
 {
+    if (std::size(ctx.cardsOnTable) >= 3) {
+        // TODO: remove sleep
+        std::this_thread::sleep_for(1s);
+        ctx.cardsOnTable.clear();
+    }
     ctx.turnPlayerId = playerTurn.player_id();
     ctx.stage = playerTurn.stage();
     if (ctx.turnPlayerId == ctx.myPlayerId) {
         INFO("Your turn");
         if (ctx.stage == "Bidding") {
             ctx.bidding.isVisible = true;
+            return;
+        }
+        if (ctx.stage == "TalonPicking") {
+            for (auto&& card : *playerTurn.mutable_talon()) {
+                ctx.player.cards.emplace_back(std::move(card), RVector2{});
+            }
         }
     } else {
         INFO_VAR(ctx.turnPlayerId);
     }
 }
 
-auto handlePlayCard(Context& ctx, const PlayCard& playCard) -> void
+auto handlePlayCard(Context& ctx, PlayCard playCard) -> void
 {
     auto [leftOpponentId, rightOpponentId] = getOpponentIds(ctx);
-    const auto& playerId = playCard.player_id();
-    const auto& cardName = playCard.card(); // "queen_of_hearts"
+    auto& playerId = *playCard.mutable_player_id();
+    auto& cardName = *playCard.mutable_card(); // "queen_of_hearts"
     INFO_VAR(playerId, cardName);
 
     if (playerId == leftOpponentId) {
@@ -185,10 +243,11 @@ auto handlePlayCard(Context& ctx, const PlayCard& playCard) -> void
         return;
     }
 
-    ctx.cardsOnTable.insert_or_assign(playerId, Card{cardName, RVector2{}});
+    if (std::empty(ctx.cardsOnTable)) {
+        ctx.leadSuit = suitOf(cardName);
+    }
+    ctx.cardsOnTable.insert_or_assign(std::move(playerId), Card{std::move(cardName), RVector2{}});
 }
-
-#if defined(PLATFORM_WEB)
 
 [[nodiscard]] auto toContext(void* userData) noexcept -> Context&
 {
@@ -200,6 +259,7 @@ auto handlePlayCard(Context& ctx, const PlayCard& playCard) -> void
     return static_cast<void*>(&ctx);
 }
 
+#if defined(PLATFORM_WEB)
 std::string loadPlayerIdFromLocalStorage()
 {
     char buffer[128] = {};
@@ -224,12 +284,12 @@ void savePlayerIdToLocalStorage(const std::string& playerId)
     emscripten_run_script(js.c_str());
 }
 
-[[maybe_unused]] void clearPlayerIdFromLocalStorage()
+[[maybe_unused]] auto clearPlayerIdFromLocalStorage() -> void
 {
     emscripten_run_script("localStorage.removeItem('preferans_player_id');");
 }
 
-EM_BOOL on_open([[maybe_unused]] int eventType, const EmscriptenWebSocketOpenEvent* e, void* userData)
+EM_BOOL onWsOpen(const int eventType, const EmscriptenWebSocketOpenEvent* e, void* userData)
 {
     INFO("{}, socket: {}", VAR(eventType), e->socket);
     assert(userData);
@@ -241,19 +301,18 @@ EM_BOOL on_open([[maybe_unused]] int eventType, const EmscriptenWebSocketOpenEve
         joinRequest.set_player_id(ctx.myPlayerId);
     }
     auto msg = Message{};
-    msg.set_method("JoinRequest");
+    static constexpr auto method = "JoinRequest";
+    msg.set_method(method);
     msg.set_payload(joinRequest.SerializeAsString());
-
     auto data = msg.SerializeAsString();
     if (const auto error = emscripten_websocket_send_binary(e->socket, data.data(), data.size());
         error != EMSCRIPTEN_RESULT_SUCCESS) {
-        WARN("error: could not send JoinRequest: {}", what(error));
+        WARN("error: could not send {}: {}", VAR(method), what(error));
     }
     return EM_TRUE;
 }
 
-auto on_message([[maybe_unused]] const int eventType, const EmscriptenWebSocketMessageEvent* e, void* userData)
-    -> EM_BOOL
+auto onWsMessage(const int eventType, const EmscriptenWebSocketMessageEvent* e, void* userData) -> EM_BOOL
 {
     INFO("{}, socket: {}, numBytes: {}, isText: {}", VAR(eventType), e->socket, e->numBytes, e->isText);
     assert(userData);
@@ -286,11 +345,13 @@ auto on_message([[maybe_unused]] const int eventType, const EmscriptenWebSocketM
         }
 
         ctx.connectedPlayers.clear();
-        for (const auto& player : joinResponse.players()) {
+        for (auto& player : *joinResponse.mutable_players()) {
             if (player.player_id() == ctx.myPlayerId and ctx.myPlayerName != player.player_name()) {
                 ctx.myPlayerName = player.player_name();
             }
-            ctx.connectedPlayers.insert_or_assign(player.player_id(), player.player_name());
+            ctx.connectedPlayers.insert_or_assign(
+                std::move(*player.mutable_player_id()), //
+                std::move(*player.mutable_player_name()));
         }
     } else if (method == "PlayerJoined") {
         auto playerJoined = PlayerJoined{};
@@ -298,11 +359,11 @@ auto on_message([[maybe_unused]] const int eventType, const EmscriptenWebSocketM
             printf("Failed to parse PlayerJoined\n");
             return EM_TRUE;
         }
-        const auto& playerJoinedId = playerJoined.player_id();
-        const auto& playerJoinedName = playerJoined.player_name();
+        auto& playerJoinedId = *playerJoined.mutable_player_id();
+        auto& playerJoinedName = *playerJoined.mutable_player_name();
 
         INFO("New player playerJoined: {} ({})", playerJoinedName, playerJoinedId);
-        ctx.connectedPlayers.insert_or_assign(playerJoinedId, playerJoinedName);
+        ctx.connectedPlayers.insert_or_assign(std::move(playerJoinedId), std::move(playerJoinedName));
     } else if (msg.method() == "PlayerLeft") {
         auto playerLeft = PlayerLeft{};
         if (not playerLeft.ParseFromString(msg.payload())) {
@@ -331,14 +392,9 @@ auto on_message([[maybe_unused]] const int eventType, const EmscriptenWebSocketM
             return EM_TRUE;
         }
 
-        assert(std::size(dealCards.cards()) == 10u);
-        const auto totalWidth = static_cast<float>(std::size(dealCards.cards()) - 1) * cardOverlapX + cardWidth;
-        const auto startX = (screenWidth - totalWidth) / 2.0f;
-        const auto y = screenHeight - cardHeight - 20.0f; // bottom padding
-
-        for (int i = 0; i < std::size(dealCards.cards()); ++i) {
-            const auto x = startX + static_cast<float>(i) * cardOverlapX;
-            ctx.player.cards.emplace_back(dealCards.cards()[static_cast<int>(i)], RVector2{x, y});
+        assert(std::size(dealCards.cards()) == 10);
+        for (auto&& cardName : *dealCards.mutable_cards()) {
+            ctx.player.cards.emplace_back(std::move(cardName), RVector2{});
         }
     } else if (msg.method() == "PlayerTurn") {
         auto playerTurn = PlayerTurn{};
@@ -346,7 +402,7 @@ auto on_message([[maybe_unused]] const int eventType, const EmscriptenWebSocketM
             WARN("error: failed to parse PlayerTurn");
             return EM_TRUE;
         }
-        handlePlayerTurn(ctx, playerTurn);
+        handlePlayerTurn(ctx, std::move(playerTurn));
     } else if (msg.method() == "Bidding") {
         auto bidding = Bidding{};
         if (not bidding.ParseFromString(msg.payload())) {
@@ -355,14 +411,19 @@ auto on_message([[maybe_unused]] const int eventType, const EmscriptenWebSocketM
         }
         const auto& playerId = bidding.player_id();
         const auto& bid = bidding.bid();
-        INFO_VAR(playerId, bid);
+        const auto rank = rankOf(bid);
+        INFO_VAR(playerId, bid, rank);
+        if (bid != "PASS") {
+            ctx.bidding.rank = rank;
+        }
+        ctx.bidding.bid = bid;
     } else if (msg.method() == "PlayCard") {
         auto playCard = PlayCard{};
         if (not playCard.ParseFromString(msg.payload())) {
             WARN("error: failed to parse PlayCard");
             return EM_TRUE;
         }
-        handlePlayCard(ctx, playCard);
+        handlePlayCard(ctx, std::move(playCard));
     } else {
         WARN("error: unknown method: {}", msg.method());
     }
@@ -370,10 +431,7 @@ auto on_message([[maybe_unused]] const int eventType, const EmscriptenWebSocketM
     return EM_TRUE;
 }
 
-auto on_error(
-    [[maybe_unused]] int eventType,
-    [[maybe_unused]] const EmscriptenWebSocketErrorEvent* e,
-    [[maybe_unused]] void* userData) -> EM_BOOL
+auto onWsError(const int eventType, const EmscriptenWebSocketErrorEvent* e, void* userData) -> EM_BOOL
 {
     INFO("{}, socket: {}", VAR(eventType), e->socket);
     assert(userData);
@@ -382,10 +440,7 @@ auto on_error(
     return EM_TRUE;
 }
 
-auto on_close(
-    [[maybe_unused]] int eventType,
-    [[maybe_unused]] const EmscriptenWebSocketCloseEvent* e,
-    [[maybe_unused]] void* userData) -> EM_BOOL
+auto onWsClosed(const int eventType, const EmscriptenWebSocketCloseEvent* e, void* userData) -> EM_BOOL
 {
     INFO(
         "{}, socket: {}, wasClean: {}, code: {}, reason: {}",
@@ -417,7 +472,7 @@ void setup_websocket(Context& ctx)
     }
 
     EmscriptenWebSocketCreateAttributes attr = {};
-    attr.url = "ws://localhost:8080"; // Or wss:// if using HTTPS
+    attr.url = "ws://192.168.2.194:8080"; // Or wss:// if using HTTPS
     attr.protocols = nullptr;
     attr.createOnMainThread = EM_TRUE;
 
@@ -427,27 +482,23 @@ void setup_websocket(Context& ctx)
         return;
     }
 
-    emscripten_websocket_set_onopen_callback(ctx.ws, &ctx, on_open);
-    emscripten_websocket_set_onmessage_callback(ctx.ws, &ctx, on_message);
-    emscripten_websocket_set_onerror_callback(ctx.ws, &ctx, on_error);
-    emscripten_websocket_set_onclose_callback(ctx.ws, &ctx, on_close);
+    emscripten_websocket_set_onopen_callback(ctx.ws, &ctx, onWsOpen);
+    emscripten_websocket_set_onmessage_callback(ctx.ws, &ctx, onWsMessage);
+    emscripten_websocket_set_onerror_callback(ctx.ws, &ctx, onWsError);
+    emscripten_websocket_set_onclose_callback(ctx.ws, &ctx, onWsClosed);
 }
 #endif // PLATFORM_WEB
 
-void DrawGameplayScreen(Context& ctx)
+void drawGameplayScreen(Context& ctx)
 {
     const std::string title = "PREFERANS GAME";
     const float fontSize = static_cast<float>(ctx.font.baseSize) * 3.0f;
     const auto textSize = MeasureText(title.c_str(), static_cast<int>(fontSize));
     const auto x = static_cast<float>(screenWidth - textSize) / 2.0f;
-    RText::Draw(
-        title,
-        {x, 20},
-        static_cast<int>(fontSize),
-        RColor{static_cast<unsigned int>(GuiGetStyle(LABEL, TEXT_COLOR_NORMAL))});
+    RText::Draw(title, {x, 20}, static_cast<int>(fontSize), getGuiColor(LABEL, TEXT_COLOR_NORMAL));
 }
 
-void DrawEnterNameScreen(Context& ctx)
+void drawEnterNameScreen(Context& ctx)
 {
     static char nameBuffer[32] = "";
     static bool editMode = true;
@@ -460,8 +511,7 @@ void DrawEnterNameScreen(Context& ctx)
 
     // Label
     const RVector2 labelPos{boxPos.x, boxPos.y - 40.0f};
-    RText::Draw(
-        "Enter your name:", labelPos, 20.0f, RColor{static_cast<unsigned int>(GuiGetStyle(LABEL, TEXT_COLOR_NORMAL))});
+    RText::Draw("Enter your name:", labelPos, 20.0f, getGuiColor(LABEL, TEXT_COLOR_NORMAL));
 
     // Text box
     RRectangle inputBox = {boxPos, {boxWidth, boxHeight}};
@@ -472,7 +522,7 @@ void DrawEnterNameScreen(Context& ctx)
     bool clicked = GuiButton(buttonBox, "Start");
 
     // Accept with Enter or button click
-    if ((clicked || RKeyboard::IsKeyPressed(KEY_ENTER)) && nameBuffer[0] != '\0' && editMode) {
+    if ((clicked or RKeyboard::IsKeyPressed(KEY_ENTER)) and (nameBuffer[0] != '\0') and editMode) {
         ctx.myPlayerName = nameBuffer;
         ctx.hasEnteredName = true;
         editMode = false; // Disable further typing
@@ -483,7 +533,7 @@ void DrawEnterNameScreen(Context& ctx)
     }
 }
 
-auto DrawConnectedPlayersPanel(const Context& ctx) -> void
+auto drawConnectedPlayersPanel(const Context& ctx) -> void
 {
     // from the left edge
     const float x = 20.0f;
@@ -504,17 +554,15 @@ auto DrawConnectedPlayersPanel(const Context& ctx) -> void
     RVector2 textPos = {x + 10.0f, y + 10.0f};
 
     // Draw panel heading
-    RText::Draw(
-        "Connected Players", textPos, 20.0f, RColor{static_cast<unsigned int>(GuiGetStyle(LABEL, TEXT_COLOR_NORMAL))});
+    RText::Draw("Connected Players", textPos, 20.0f, getGuiColor(LABEL, TEXT_COLOR_NORMAL));
 
     // Move text position down for player list
     textPos.y += 30.0f;
 
     for (const auto& [id, name] : ctx.connectedPlayers) {
         // Highlight the current player's name in dark blue
-        Color color = (id == ctx.myPlayerId)
-            ? RColor{static_cast<unsigned int>(GuiGetStyle(DEFAULT, TEXT_COLOR_NORMAL))}
-            : RColor{static_cast<unsigned int>(GuiGetStyle(DEFAULT, TEXT_COLOR_DISABLED))};
+        Color color = (id == ctx.myPlayerId) ? getGuiColor(DEFAULT, TEXT_COLOR_NORMAL)
+                                             : getGuiColor(DEFAULT, TEXT_COLOR_DISABLED);
         // Draw the player's name
         RText::Draw(name, textPos, 18.0f, color);
         // ctx.font.DrawText(name, textPos, 18.0f, 1.0f, color);
@@ -524,18 +572,20 @@ auto DrawConnectedPlayersPanel(const Context& ctx) -> void
     }
 }
 
+#if defined(PLATFORM_WEB)
 auto playCard(Context& ctx, const std::string& cardName) -> void
 {
     auto playCard = PlayCard{};
     playCard.set_player_id(ctx.myPlayerId);
     playCard.set_card(cardName);
     auto msg = Message{};
-    msg.set_method("PlayCard");
+    static constexpr auto method = "PlayCard";
+    msg.set_method(method);
     msg.set_payload(playCard.SerializeAsString());
     auto data = msg.SerializeAsString();
     if (const auto error = emscripten_websocket_send_binary(ctx.ws, data.data(), data.size());
         error != EMSCRIPTEN_RESULT_SUCCESS) {
-        WARN("error: could not send PlayCard: {}", what(error));
+        WARN("error: could not send {}: {}", VAR(method), what(error));
     }
 }
 
@@ -545,23 +595,49 @@ auto sendBidding(Context& ctx, const std::string_view bid) -> void
     bidding.set_player_id(ctx.myPlayerId);
     bidding.set_bid(std::string{bid});
     auto msg = Message{};
-    msg.set_method("Bidding");
+    static constexpr auto method = "Bidding";
+    msg.set_method(method);
     msg.set_payload(bidding.SerializeAsString());
     auto data = msg.SerializeAsString();
     if (const auto error = emscripten_websocket_send_binary(ctx.ws, data.data(), data.size());
         error != EMSCRIPTEN_RESULT_SUCCESS) {
-        WARN("could not send Bidding: {}", what(error));
+        WARN("could not send {}: {}", VAR(method), what(error));
     }
 }
 
-auto DrawMyHand(Context& ctx) -> void
+auto discardTalon(Context& ctx, const std::string_view bid) -> void
 {
-    for (const auto& card : ctx.player.cards) {
+    auto discardTalon = DiscardTalon{};
+    discardTalon.set_player_id(ctx.myPlayerId);
+    discardTalon.set_bid(std::string{bid});
+    for (const auto& card : ctx.discardedTalon) {
+        discardTalon.add_cards(card);
+    }
+    auto msg = Message{};
+    static constexpr auto method = "DiscardTalon";
+    msg.set_method(method);
+    msg.set_payload(discardTalon.SerializeAsString());
+    auto data = msg.SerializeAsString();
+    if (const auto error = emscripten_websocket_send_binary(ctx.ws, data.data(), data.size());
+        error != EMSCRIPTEN_RESULT_SUCCESS) {
+        WARN("could not send {}: {}", VAR(method), what(error));
+    }
+}
+#endif // PLATFORM_WEB
+
+auto drawMyHand(Context& ctx) -> void
+{
+    const auto totalWidth = static_cast<float>(std::size(ctx.player.cards) - 1) * cardOverlapX + cardWidth;
+    const auto startX = (screenWidth - totalWidth) / 2.0f;
+    const auto y = screenHeight - cardHeight - 20.0f; // bottom padding
+    for (auto&& [i, card] : ctx.player.cards | rv::enumerate) {
+        const auto x = startX + static_cast<float>(i) * cardOverlapX;
+        card.position = RVector2{x, y};
         card.texture.Draw(card.position);
     }
 }
 
-auto DrawOpponentHand(Context& ctx, int count, const float x) -> void
+auto drawOpponentHand(Context& ctx, int count, const float x) -> void
 {
     // draw if I have cards
     if (std::empty(ctx.player.cards)) {
@@ -575,110 +651,179 @@ auto DrawOpponentHand(Context& ctx, int count, const float x) -> void
     }
 }
 
-void DrawPlayedCards(Context& ctx)
+void drawPlayedCards(Context& ctx)
 {
     if (std::empty(ctx.cardsOnTable)) {
         return;
     }
-    const float cardSpacing = cardWidth * 0.1f;
-
-    const RVector2 centerPos = {screenWidth / 2.0f, screenHeight / 2.0f - cardHeight / 2.0f};
-    const RVector2 leftPlayPos = {centerPos.x - cardWidth - cardSpacing, centerPos.y};
-    const RVector2 middlePlayPos = centerPos;
-    const RVector2 rightPlayPos = {centerPos.x + cardWidth + cardSpacing, centerPos.y};
-
-    auto [leftOpponentId, rightOpponentId] = getOpponentIds(ctx);
-    if (auto it = ctx.cardsOnTable.find(leftOpponentId); it != ctx.cardsOnTable.end()) {
+    const auto cardSpacing = cardWidth * 0.1f;
+    const auto yOffset = cardHeight / 4.0f;
+    const auto centerPos = RVector2{screenWidth / 2.0f, screenHeight / 2.0f - cardHeight / 2.0f};
+    const auto leftPlayPos = RVector2{centerPos.x - cardWidth - cardSpacing, centerPos.y - yOffset};
+    const auto middlePlayPos = RVector2{centerPos.x, centerPos.y + yOffset};
+    const auto rightPlayPos = RVector2{centerPos.x + cardWidth + cardSpacing, centerPos.y - yOffset};
+    const auto [leftOpponentId, rightOpponentId] = getOpponentIds(ctx);
+    if (const auto it = ctx.cardsOnTable.find(leftOpponentId); it != ctx.cardsOnTable.cend()) {
         it->second.texture.Draw(leftPlayPos);
     }
-
-    if (auto it = ctx.cardsOnTable.find(rightOpponentId); it != ctx.cardsOnTable.end()) {
+    if (const auto it = ctx.cardsOnTable.find(rightOpponentId); it != ctx.cardsOnTable.cend()) {
         it->second.texture.Draw(rightPlayPos);
     }
-
-    if (auto it = ctx.cardsOnTable.find(ctx.myPlayerId); it != ctx.cardsOnTable.end()) {
+    if (const auto it = ctx.cardsOnTable.find(ctx.myPlayerId); it != ctx.cardsOnTable.cend()) {
         it->second.texture.Draw(middlePlayPos);
     }
 }
 
-auto DrawBiddingMenu(Context& ctx) -> void
+auto drawBiddingMenu(Context& ctx) -> void
 {
     if (!ctx.bidding.isVisible) {
         return;
     }
-
-    constexpr float gap = 8.0f;
-    constexpr float cellW = 120.0f;
-    constexpr float cellH = 60.0f;
-    constexpr int rows = bidLabels.size();
-    constexpr int cols = bidLabels[0].size();
-
-    const float menuW = cols * cellW + (cols - 1) * gap;
-    const float menuH = rows * cellH + (rows - 1) * gap;
-    const float originX = (screenWidth - menuW) / 2.0f;
-    const float originY = (screenHeight - menuH) / 2.0f;
-
+    static constexpr auto gap = 8.0f;
+    static constexpr auto cellW = 120.0f;
+    static constexpr auto cellH = 60.0f;
+    static constexpr auto rows = static_cast<int>(bidTable.size());
+    static constexpr auto cols = static_cast<int>(bidTable[0].size());
+    static constexpr auto menuW = cols * cellW + (cols - 1) * gap;
+    static constexpr auto menuH = rows * cellH + (rows - 1) * gap;
+    static constexpr auto originX = (screenWidth - menuW) / 2.0f;
+    static constexpr auto originY = (screenHeight - menuH) / 2.0f;
     for (int r = 0; r < rows; ++r) {
         for (int c = 0; c < cols; ++c) {
-            const auto& label = bidLabels[static_cast<std::size_t>(r)][static_cast<std::size_t>(c)];
-            if (label.empty())
+            const auto& myBid = bidTable[static_cast<std::size_t>(r)][static_cast<std::size_t>(c)];
+            if (std::empty(myBid)) {
                 continue;
-
-            Rectangle rect{originX + c * (cellW + gap), originY + r * (cellH + gap), cellW, cellH};
-
-            if (GuiButton(rect, label.data())) {
-                ctx.bidding.selection = std::string(label);
+            }
+            const auto myRank = rankOf(myBid);
+            const auto isPass = (myBid == "PASS");
+            const auto disabled = (not isPass) and (ctx.bidding.rank != allRanks) and (myRank <= ctx.bidding.rank);
+            const auto pos = RVector2{
+                originX + static_cast<float>(c) * (cellW + gap), //
+                originY + static_cast<float>(r) * (cellH + gap)};
+            const auto rect = RRectangle{pos, {cellW, cellH}};
+            if (disabled) {
+                GuiDisable();
+            }
+            const auto pressed = GuiButton(rect, std::string{myBid}.c_str());
+            if (disabled) {
+                GuiEnable();
+            }
+            if (pressed) {
+                ctx.bidding.bid = myBid;
+                if (not isPass) {
+                    ctx.bidding.rank = myRank;
+                }
                 ctx.bidding.isVisible = false;
-                sendBidding(ctx, label);
+                if (std::size(ctx.discardedTalon) == 2) {
+                    discardTalon(ctx, myBid); // final bid
+                } else {
+                    sendBidding(ctx, myBid);
+                }
+                return;
             }
         }
     }
 }
 
-auto UpdateDrawFrame(void* userData) -> void
+[[nodiscard]] auto isCardPlayable(const Context& ctx, const Card& clickedCard) -> bool
+{ // clang-format off
+    const auto clickedSuit = suitOf(clickedCard.name);
+    const auto trump = getTrump(ctx.bidding.bid);
+    const auto hasSuit = [&](const std::string_view suit) {
+        return rng::any_of(ctx.player.cards, [&](const std::string& name) { return suitOf(name) == suit; }, &Card::name);
+    };
+    INFO_VAR(clickedCard.name, clickedSuit, trump);
+    if (std::empty(ctx.cardsOnTable)) { return true; } // first card in the trick: any card is allowed
+    if (clickedSuit == ctx.leadSuit) { return true; } // follows lead suit
+    if (hasSuit(ctx.leadSuit)) { return false; } // must follow lead suit
+    if (clickedSuit == trump) { return true; } //  no lead suit cards, playing trump
+    if (hasSuit(trump)) { return false;  } // // must play trump if you have it
+    return true; // no lead or trump suit cards, free to play
+} // clang-format on
+
+template<typename Action>
+auto handleCardClick1(Context& ctx, Action act) -> void
+{
+    if (!IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        return;
+    }
+    const auto mousePos = RMouse::GetPosition();
+    const auto hit = [&](Card& c) { return RRectangle{c.position, c.texture.GetSize()}.CheckCollision(mousePos); };
+    const auto reversed = ctx.player.cards | rv::reverse;
+    if (const auto rit = rng::find_if(reversed, hit); rit != rng::cend(reversed)) {
+        const auto it = std::next(rit).base();
+        const auto _ = gsl::finally([&] { ctx.player.cards.erase(it); });
+        act(std::move(*it));
+    }
+}
+
+template<typename Action>
+auto handleCardClick(Context& ctx, Action act) -> void
+{
+    if (!IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        return;
+    }
+    const auto mousePos = RMouse::GetPosition();
+    const auto hit = [&](Card& c) { return RRectangle{c.position, c.texture.GetSize()}.CheckCollision(mousePos); };
+    const auto reversed = ctx.player.cards | rv::reverse;
+    if (const auto rit = rng::find_if(reversed, hit); rit != rng::cend(reversed)) {
+        const auto it = std::next(rit).base();
+        if (not isCardPlayable(ctx, *it)) {
+            WARN("Can't play this card: {}", it->name);
+            return;
+        }
+        const auto _ = gsl::finally([&] { ctx.player.cards.erase(it); });
+        act(std::move(*it));
+    }
+}
+
+auto updateDrawFrame(void* userData) -> void
 {
     assert(userData);
     auto& ctx = toContext(userData);
     if (std::empty(ctx.myPlayerId)) {
         ctx.myPlayerId = loadPlayerIdFromLocalStorage();
     }
-
-    if ((ctx.myPlayerId == ctx.turnPlayerId) //
-        and (ctx.stage == "Playing") //
-        and IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-        const auto mousePosition = RMouse::GetPosition();
-        const auto isClicked = [&](auto& card) {
-            return RRectangle{card.position, card.texture.GetSize()}.CheckCollision(mousePosition);
-        };
-        for (auto&& card : ctx.player.cards //
-                 | ranges::views::reverse //
-                 | ranges::views::filter(isClicked) //
-                 | ranges::views::take(1)) { // only first match
-            const auto name = card.name;
-            ctx.cardsOnTable.insert_or_assign(ctx.myPlayerId, std::move(card));
-            ctx.player.cards.remove_if([&](const Card& card) { return (card.name == name); });
-            playCard(ctx, name);
+    if ((ctx.myPlayerId == ctx.turnPlayerId) and RMouse::IsButtonPressed(MOUSE_LEFT_BUTTON)) {
+        if (ctx.stage == "Playing") {
+            handleCardClick(ctx, [&](Card&& card) {
+                const auto name = card.name; // copy before move `card`
+                if (std::empty(ctx.cardsOnTable)) {
+                    ctx.leadSuit = suitOf(name);
+                }
+                ctx.cardsOnTable.insert_or_assign(ctx.myPlayerId, std::move(card));
+                playCard(ctx, name);
+            });
+        } else if ((ctx.stage == "TalonPicking") and (std::size(ctx.discardedTalon) < 2)) {
+            handleCardClick(ctx, [&](Card&& card) { ctx.discardedTalon.push_back(card.name); });
+            if (std::size(ctx.discardedTalon) == 2) {
+                INFO_VAR(ctx.discardedTalon, ctx.bidding.rank);
+                if (ctx.bidding.rank != 0) {
+                    --ctx.bidding.rank; // allow the final bid as before
+                } else {
+                    ctx.bidding.rank = allRanks;
+                }
+                ctx.bidding.isVisible = true;
+            }
         }
     }
-
     ctx.window.BeginDrawing();
-    ctx.window.ClearBackground(RColor{static_cast<unsigned int>(GuiGetStyle(DEFAULT, BACKGROUND_COLOR))});
-    DrawGameplayScreen(ctx);
-    DrawBiddingMenu(ctx);
+    ctx.window.ClearBackground(getGuiColor(DEFAULT, BACKGROUND_COLOR));
+    drawGameplayScreen(ctx);
+    drawBiddingMenu(ctx);
 
     if (not ctx.hasEnteredName) {
-        DrawEnterNameScreen(ctx);
+        drawEnterNameScreen(ctx);
         ctx.window.EndDrawing();
         return;
     }
-    DrawConnectedPlayersPanel(ctx);
-
-    DrawMyHand(ctx);
+    drawConnectedPlayersPanel(ctx);
+    drawMyHand(ctx);
     auto leftX = 40.0f;
     auto rightX = screenWidth - cardWidth - 40.0f;
-    DrawOpponentHand(ctx, ctx.leftCardCount, leftX); // Left
-    DrawOpponentHand(ctx, ctx.rightCardCount, rightX); // Right
-    DrawPlayedCards(ctx);
+    drawOpponentHand(ctx, ctx.leftCardCount, leftX);
+    drawOpponentHand(ctx, ctx.rightCardCount, rightX);
+    drawPlayedCards(ctx);
     ctx.window.DrawFPS(screenWidth - 80, 0);
     ctx.window.EndDrawing();
 }
@@ -693,14 +838,13 @@ auto main() -> int
     GuiLoadStyleDefault();
     GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
     GuiSetStyle(DEFAULT, TEXT_SPACING, 2);
-
     // GuiLoadStyle("resources/styles/style_amber.rgs");
 
 #if defined(PLATFORM_WEB)
-    emscripten_set_main_loop_arg(pref::UpdateDrawFrame, pref::toUserData(ctx), 0, true);
+    emscripten_set_main_loop_arg(pref::updateDrawFrame, pref::toUserData(ctx), 0, true);
 #else // PLATFORM_WEB
     while (!WindowShouldClose()) {
-        pref::UpdateDrawFrame(pref::toUserData(ctx));
+        pref::updateDrawFrame(pref::toUserData(ctx));
     }
 #endif // PLATFORM_WEB
     return 0;

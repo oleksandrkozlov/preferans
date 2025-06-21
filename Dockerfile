@@ -34,6 +34,7 @@ RUN apt update && apt install -y \
     python3-dev \
     python3-pip \
     sudo \
+    valgrind \
     vim-gtk3\
     xsel
 #   ccache \
