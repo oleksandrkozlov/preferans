@@ -1,3 +1,5 @@
+// IWYU pragma: no_include <Vector2.hpp>
+
 #include "common/common.hpp"
 #include "common/logger.hpp"
 
@@ -12,6 +14,11 @@
 #include <thread>
 
 #define RAYGUI_IMPLEMENTATION
+#include "proto/pref.pb.h"
+
+#include <emscripten/emscripten.h>
+#include <emscripten/val.h>
+#include <emscripten/websocket.h>
 #include <raygui.h>
 
 #include <array>
@@ -21,14 +28,6 @@
 #include <list>
 #include <string_view>
 #include <vector>
-
-#if defined(PLATFORM_WEB)
-#include "proto/pref.pb.h"
-
-#include <emscripten/emscripten.h>
-#include <emscripten/val.h>
-#include <emscripten/websocket.h>
-#endif // PLATFORM_WEB
 
 namespace pref {
 namespace {
@@ -57,6 +56,10 @@ using namespace std::literals;
 namespace rng = ranges;
 namespace rv = rng::views;
 
+using PlayerId = std::string;
+using PlayerName = std::string;
+using CardName = std::string;
+
 [[nodiscard]] constexpr auto getCloseReason(const std::uint16_t code) noexcept -> std::string_view
 {
     switch (code) { // clang-format off
@@ -79,7 +82,6 @@ namespace rv = rng::views;
     return "Unknown";
 }
 
-#if defined(PLATFORM_WEB)
 [[nodiscard]] constexpr auto what(const EMSCRIPTEN_RESULT result) noexcept -> std::string_view
 {
     switch (result) { // clang-format off
@@ -96,10 +98,9 @@ namespace rv = rng::views;
     } // clang-format on
     return "Unknown";
 }
-#endif // PLATFORM_WEB
 
 struct Card {
-    Card(std::string n, RVector2 pos)
+    Card(CardName n, RVector2 pos)
         : name{std::move(n)}
         , position{pos}
         , image{RImage{fmt::format("resources/cards/{}.png", name)}}
@@ -108,7 +109,7 @@ struct Card {
         texture = image.LoadTexture();
     }
 
-    std::string name;
+    CardName name;
     RVector2 position;
     RImage image;
     RTexture texture{};
@@ -160,32 +161,30 @@ constexpr auto rankOf(const std::string_view bid) noexcept -> std::size_t
 }
 
 struct Context {
-    RFont font{"resources/mecha.png"};
+    RFont font;
     RVector2 screen{screenWidth, screenHeight};
     RWindow window{static_cast<int>(screen.x), static_cast<int>(screen.y), "Preferans"};
     Player player;
-    std::string myPlayerId;
-    std::string myPlayerName;
+    PlayerId myPlayerId;
+    PlayerName myPlayerName;
     bool hasEnteredName{};
-    std::map<std::string, std::string> connectedPlayers;
+    std::map<PlayerId, PlayerName> connectedPlayers;
     Card backCard{"cardBackRed", {}};
-#if defined(PLATFORM_WEB)
     EMSCRIPTEN_WEBSOCKET_T ws{};
-#endif // PLATFORM_WEB
     int leftCardCount = 10;
     int rightCardCount = 10;
-    std::map<std::string, Card> cardsOnTable;
-    std::string turnPlayerId;
+    std::map<PlayerId, Card> cardsOnTable;
+    PlayerId turnPlayerId;
     BiddingMenu bidding;
     std::string stage;
-    std::vector<std::string> discardedTalon;
+    std::vector<CardName> discardedTalon;
     std::string leadSuit;
 };
 
-[[nodiscard]] auto getOpponentIds(Context& ctx) -> std::pair<std::string, std::string>
+[[nodiscard]] auto getOpponentIds(Context& ctx) -> std::pair<PlayerId, PlayerId>
 {
     assert(std::size(ctx.connectedPlayers) == 3U);
-    auto order = std::vector<std::string>{};
+    auto order = std::vector<PlayerId>{};
     for (const auto& [id, _] : ctx.connectedPlayers) {
         order.push_back(id);
     }
@@ -259,8 +258,7 @@ auto handlePlayCard(Context& ctx, PlayCard playCard) -> void
     return static_cast<void*>(&ctx);
 }
 
-#if defined(PLATFORM_WEB)
-std::string loadPlayerIdFromLocalStorage()
+auto loadPlayerIdFromLocalStorage() -> PlayerId
 {
     char buffer[128] = {};
 
@@ -275,12 +273,12 @@ std::string loadPlayerIdFromLocalStorage()
         sizeof(buffer));
 #pragma GCC diagnostic pop
 
-    return std::string(buffer);
+    return {buffer};
 }
 
-void savePlayerIdToLocalStorage(const std::string& playerId)
+void savePlayerIdToLocalStorage(const PlayerId& playerId)
 {
-    std::string js = "localStorage.setItem('preferans_player_id', '" + playerId + "');";
+    const auto js = std::string{"localStorage.setItem('preferans_player_id', '"} + playerId + "');";
     emscripten_run_script(js.c_str());
 }
 
@@ -372,11 +370,9 @@ auto onWsMessage(const int eventType, const EmscriptenWebSocketMessageEvent* e, 
         }
 
         const auto& id = playerLeft.player_id();
-        auto it = ctx.connectedPlayers.find(id);
-
-        if (it != ctx.connectedPlayers.end()) {
-            INFO("Player left: {} ({})", it->second, id);
-            ctx.connectedPlayers.erase(it);
+        if (ctx.connectedPlayers.contains(id)) {
+            INFO("Player left: {} ({})", ctx.connectedPlayers[id], id);
+            ctx.connectedPlayers.erase(id);
             INFO("Updated player list:");
             for (const auto& [i, name] : ctx.connectedPlayers) {
                 INFO("  - {} ({})", name, i);
@@ -487,20 +483,37 @@ void setup_websocket(Context& ctx)
     emscripten_websocket_set_onerror_callback(ctx.ws, &ctx, onWsError);
     emscripten_websocket_set_onclose_callback(ctx.ws, &ctx, onWsClosed);
 }
-#endif // PLATFORM_WEB
+
+void drawGuiLabelCentered(const Context& ctx, const std::string& text, const RVector2& anchor)
+{
+    const auto fontSize = static_cast<float>(GuiGetStyle(DEFAULT, TEXT_SIZE));
+    const auto fontSpacing = static_cast<float>(GuiGetStyle(DEFAULT, TEXT_SPACING));
+    const auto size = ctx.font.MeasureText(text, fontSize, fontSpacing);
+
+    // 8-px padding all around keeps the background away from the glyphs
+    auto bounds = Rectangle{
+        anchor.x - size.x * 0.5f - 4.0f,
+        anchor.y - size.y - 4.0f, // one line above the anchor
+        size.x + 8.0f,
+        size.y + 8.0f};
+
+    GuiLabel(bounds, text.c_str());
+}
 
 void drawGameplayScreen(Context& ctx)
 {
-    const std::string title = "PREFERANS GAME";
-    const float fontSize = static_cast<float>(ctx.font.baseSize) * 3.0f;
-    const auto textSize = MeasureText(title.c_str(), static_cast<int>(fontSize));
-    const auto x = static_cast<float>(screenWidth - textSize) / 2.0f;
+    const auto title = std::string{"PREFERANS GAME"};
+
+    const auto fontSize = static_cast<float>(GuiGetStyle(DEFAULT, TEXT_SIZE)) * 3.0f;
+    const auto fontSpacing = static_cast<float>(GuiGetStyle(DEFAULT, TEXT_SPACING));
+    const auto textSize = ctx.font.MeasureText(title, fontSize, fontSpacing);
+    const auto x = static_cast<float>(screenWidth - textSize.x) / 2.0f;
     RText::Draw(title, {x, 20}, static_cast<int>(fontSize), getGuiColor(LABEL, TEXT_COLOR_NORMAL));
 }
 
 void drawEnterNameScreen(Context& ctx)
 {
-    static char nameBuffer[32] = "";
+    static char nameBuffer[16] = "";
     static bool editMode = true;
 
     const RVector2 screenCenter = ctx.screen / 2.0f;
@@ -527,9 +540,7 @@ void drawEnterNameScreen(Context& ctx)
         ctx.hasEnteredName = true;
         editMode = false; // Disable further typing
 
-#if defined(PLATFORM_WEB)
         setup_websocket(ctx);
-#endif
     }
 }
 
@@ -538,7 +549,7 @@ auto drawConnectedPlayersPanel(const Context& ctx) -> void
     // from the left edge
     const float x = 20.0f;
     // from the top edge
-    const float y = 50.0f;
+    const float y = 20.0f;
 
     // Set panel dimensions
     const float width = 240.0f;
@@ -572,8 +583,7 @@ auto drawConnectedPlayersPanel(const Context& ctx) -> void
     }
 }
 
-#if defined(PLATFORM_WEB)
-auto playCard(Context& ctx, const std::string& cardName) -> void
+auto playCard(Context& ctx, const CardName& cardName) -> void
 {
     auto playCard = PlayCard{};
     playCard.set_player_id(ctx.myPlayerId);
@@ -623,35 +633,59 @@ auto discardTalon(Context& ctx, const std::string_view bid) -> void
         WARN("could not send {}: {}", VAR(method), what(error));
     }
 }
-#endif // PLATFORM_WEB
 
-auto drawMyHand(Context& ctx) -> void
+void drawMyHand(Context& ctx)
 {
-    const auto totalWidth = static_cast<float>(std::size(ctx.player.cards) - 1) * cardOverlapX + cardWidth;
+    auto& hand = ctx.player.cards;
+    const auto totalWidth = static_cast<float>(std::size(hand) - 1) * cardOverlapX + cardWidth;
     const auto startX = (screenWidth - totalWidth) / 2.0f;
     const auto y = screenHeight - cardHeight - 20.0f; // bottom padding
-    for (auto&& [i, card] : ctx.player.cards | rv::enumerate) {
-        const auto x = startX + static_cast<float>(i) * cardOverlapX;
+
+    const auto fontSize = static_cast<float>(GuiGetStyle(DEFAULT, TEXT_SIZE));
+    const auto fontSpacing = static_cast<float>(GuiGetStyle(DEFAULT, TEXT_SPACING));
+    const auto size = ctx.font.MeasureText(ctx.myPlayerName, fontSize, fontSpacing);
+
+    auto label = Rectangle{
+        startX - size.x - 20.0f, // to the left of the first card
+        y + cardHeight * 0.5f - size.y * 0.5f - 4, // vertically centred on the card
+        size.x + 8.0f,
+        size.y + 8.0f};
+    // TODO: still draw name if no cards left
+    GuiLabel(label, ctx.myPlayerName.c_str());
+
+    // cards themselves
+    for (auto&& [i, card] : hand | rv::enumerate) {
+        const float x = startX + static_cast<float>(i) * cardOverlapX;
         card.position = RVector2{x, y};
         card.texture.Draw(card.position);
     }
 }
 
-auto drawOpponentHand(Context& ctx, int count, const float x) -> void
+auto drawOpponentHand(Context& ctx, const int cardCount, const float x, const PlayerId& playerId) -> void
 {
     // draw if I have cards
     if (std::empty(ctx.player.cards)) {
         return;
     }
-    const auto countF = static_cast<float>(count);
-    const auto startY = (screenHeight - cardHeight - (countF - 1.0f) * cardOverlapY) / 2.0f;
-    for (auto i = 0.0f; i < countF; ++i) {
+    if (cardCount == 0) {
+        return;
+    }
+    const auto countF = static_cast<float>(cardCount);
+    const float startY = (screenHeight - cardHeight - (countF - 1.0f) * cardOverlapY) * 0.5f;
+
+    // draw back-faces
+    for (float i = 0.0f; i < countF; ++i) {
         const auto posY = startY + i * cardOverlapY;
         ctx.backCard.texture.Draw(RVector2{x, posY});
     }
+
+    // centred name plate above the topmost card
+    // TODO: still draw name if no cards left
+    const auto& name = ctx.connectedPlayers.at(playerId);
+    drawGuiLabelCentered(ctx, name, {x + cardWidth * 0.5f, startY - 6.0f});
 }
 
-void drawPlayedCards(Context& ctx)
+auto drawPlayedCards(Context& ctx) -> void
 {
     if (std::empty(ctx.cardsOnTable)) {
         return;
@@ -663,14 +697,14 @@ void drawPlayedCards(Context& ctx)
     const auto middlePlayPos = RVector2{centerPos.x, centerPos.y + yOffset};
     const auto rightPlayPos = RVector2{centerPos.x + cardWidth + cardSpacing, centerPos.y - yOffset};
     const auto [leftOpponentId, rightOpponentId] = getOpponentIds(ctx);
-    if (const auto it = ctx.cardsOnTable.find(leftOpponentId); it != ctx.cardsOnTable.cend()) {
-        it->second.texture.Draw(leftPlayPos);
+    if (ctx.cardsOnTable.contains(leftOpponentId)) {
+        ctx.cardsOnTable.at(leftOpponentId).texture.Draw(leftPlayPos);
     }
-    if (const auto it = ctx.cardsOnTable.find(rightOpponentId); it != ctx.cardsOnTable.cend()) {
-        it->second.texture.Draw(rightPlayPos);
+    if (ctx.cardsOnTable.contains(rightOpponentId)) {
+        ctx.cardsOnTable.at(rightOpponentId).texture.Draw(rightPlayPos);
     }
-    if (const auto it = ctx.cardsOnTable.find(ctx.myPlayerId); it != ctx.cardsOnTable.cend()) {
-        it->second.texture.Draw(middlePlayPos);
+    if (ctx.cardsOnTable.contains(ctx.myPlayerId)) {
+        ctx.cardsOnTable.at(ctx.myPlayerId).texture.Draw(middlePlayPos);
     }
 }
 
@@ -730,7 +764,7 @@ auto drawBiddingMenu(Context& ctx) -> void
     const auto clickedSuit = suitOf(clickedCard.name);
     const auto trump = getTrump(ctx.bidding.bid);
     const auto hasSuit = [&](const std::string_view suit) {
-        return rng::any_of(ctx.player.cards, [&](const std::string& name) { return suitOf(name) == suit; }, &Card::name);
+        return rng::any_of(ctx.player.cards, [&](const CardName& name) { return suitOf(name) == suit; }, &Card::name);
     };
     INFO_VAR(clickedCard.name, clickedSuit, trump);
     if (std::empty(ctx.cardsOnTable)) { return true; } // first card in the trick: any card is allowed
@@ -742,25 +776,9 @@ auto drawBiddingMenu(Context& ctx) -> void
 } // clang-format on
 
 template<typename Action>
-auto handleCardClick1(Context& ctx, Action act) -> void
-{
-    if (!IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-        return;
-    }
-    const auto mousePos = RMouse::GetPosition();
-    const auto hit = [&](Card& c) { return RRectangle{c.position, c.texture.GetSize()}.CheckCollision(mousePos); };
-    const auto reversed = ctx.player.cards | rv::reverse;
-    if (const auto rit = rng::find_if(reversed, hit); rit != rng::cend(reversed)) {
-        const auto it = std::next(rit).base();
-        const auto _ = gsl::finally([&] { ctx.player.cards.erase(it); });
-        act(std::move(*it));
-    }
-}
-
-template<typename Action>
 auto handleCardClick(Context& ctx, Action act) -> void
 {
-    if (!IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+    if (not RMouse::IsButtonPressed(MOUSE_LEFT_BUTTON)) {
         return;
     }
     const auto mousePos = RMouse::GetPosition();
@@ -818,12 +836,15 @@ auto updateDrawFrame(void* userData) -> void
         return;
     }
     drawConnectedPlayersPanel(ctx);
-    drawMyHand(ctx);
-    auto leftX = 40.0f;
-    auto rightX = screenWidth - cardWidth - 40.0f;
-    drawOpponentHand(ctx, ctx.leftCardCount, leftX);
-    drawOpponentHand(ctx, ctx.rightCardCount, rightX);
-    drawPlayedCards(ctx);
+    if (std::size(ctx.connectedPlayers) == 3U) {
+        drawMyHand(ctx);
+        auto leftX = 40.0f;
+        auto rightX = screenWidth - cardWidth - 40.0f;
+        const auto [leftId, rightId] = getOpponentIds(ctx);
+        drawOpponentHand(ctx, ctx.leftCardCount, leftX, leftId);
+        drawOpponentHand(ctx, ctx.rightCardCount, rightX, rightId);
+        drawPlayedCards(ctx);
+    }
     ctx.window.DrawFPS(screenWidth - 80, 0);
     ctx.window.EndDrawing();
 }
@@ -838,14 +859,9 @@ auto main() -> int
     GuiLoadStyleDefault();
     GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
     GuiSetStyle(DEFAULT, TEXT_SPACING, 2);
+    ctx.font = GuiGetFont();
     // GuiLoadStyle("resources/styles/style_amber.rgs");
 
-#if defined(PLATFORM_WEB)
     emscripten_set_main_loop_arg(pref::updateDrawFrame, pref::toUserData(ctx), 0, true);
-#else // PLATFORM_WEB
-    while (!WindowShouldClose()) {
-        pref::updateDrawFrame(pref::toUserData(ctx));
-    }
-#endif // PLATFORM_WEB
     return 0;
 }

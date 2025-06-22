@@ -6,6 +6,9 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
+unset(CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES)
+include_directories(SYSTEM ${CMAKE_INSTALL_PREFIX}/include/c++/v1)
+
 include(flags)
 add_subdirectory(deps/fmt)
 add_subdirectory(deps/range-v3)
@@ -19,17 +22,10 @@ add_executable(client src/client.cpp ../proto/pref.pb.cc)
 
 set_property(TARGET client PROPERTY VS_DEBUGGER_WORKING_DIRECTORY $<TARGET_FILE_DIR:client>)
 
-if("${PLATFORM}" STREQUAL "Web")
-    add_custom_command(
-        TARGET client PRE_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/resources
-                                        $<TARGET_FILE_DIR:client>/../resources
-    )
-else()
-    add_custom_command(
-        TARGET client POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/resources
-                                         $<TARGET_FILE_DIR:client>/resources
-    )
-endif()
+add_custom_command(
+    TARGET client PRE_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/resources
+                                    $<TARGET_FILE_DIR:client>/../resources
+)
 
 target_link_libraries(
     client raylib fmt ${CMAKE_BINARY_DIR}/lib/libprotobuf-lited.a ${CMAKE_BINARY_DIR}/lib/libprotobufd.a
@@ -47,22 +43,19 @@ target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/gsl/inc
 target_include_directories(client PRIVATE ${PROJECT_SOURCE_DIR}/..)
 target_include_directories(client PRIVATE ${PROJECT_SOURCE_DIR}/../include)
 
-if("${PLATFORM}" STREQUAL "Web")
-    set_target_properties(client PROPERTIES SUFFIX ".html")
-    set_target_properties(client PROPERTIES OUTPUT_NAME "index")
-    target_link_options(
-        client
-        PUBLIC
-        -sUSE_GLFW=3
-        -sASYNCIFY
-        -sNO_DISABLE_EXCEPTION_CATCHING
-        #-sTOTAL_MEMORY=67108864
-        -sALLOW_MEMORY_GROWTH
-        -sFORCE_FILESYSTEM=1
-        --shell-file
-        resources/shell.html
-        --preload-file
-        resources
-        -lwebsocket.js
-    )
-endif()
+set_target_properties(client PROPERTIES SUFFIX ".html")
+set_target_properties(client PROPERTIES OUTPUT_NAME "index")
+target_link_options(
+    client
+    PUBLIC
+    -sUSE_GLFW=3
+    -sASYNCIFY
+    -sNO_DISABLE_EXCEPTION_CATCHING
+    -sALLOW_MEMORY_GROWTH
+    -sFORCE_FILESYSTEM=1
+    --shell-file
+    resources/shell.html
+    --preload-file
+    resources
+    -lwebsocket.js
+)

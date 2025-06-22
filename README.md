@@ -12,7 +12,7 @@ DOCKER_BUILDKIT=0 docker build --tag preferans .
 docker run --privileged -ti -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix -v /home/olkozlo/:/home/olkozlo/ -w /home/olkozlo/Work/workspace/preferans --network host --name preferans preferans
 ```
 
-### Build Server (Web)
+### Build Server
 
 ```
 cmake -S server -B build-server -GNinja -DCMAKE_BUILD_TYPE=Debug
@@ -20,21 +20,12 @@ cmake --build build-server
 ./build-server/bin/server  0.0.0.0 8080
 ```
 
-### Build Client (Web)
+### Build Client
 
 ```
-emcmake cmake -S client -B build-client-web -GNinja -DCMAKE_BUILD_TYPE=Debug -Dprotobuf_BUILD_TESTS=OFF -DPLATFORM=Web
-cmake --build build-client-web
-python3 -m http.server -d build-client-web/bin 8000
-```
-
-### Build Client (Native)
-
-```
-cmake -S client -B build-client-native -GNinja -DCMAKE_BUILD_TYPE=Debug -Dprotobuf_BUILD_TESTS=OFF
-cmake --build build-client-native
-cd build-client-native/bin
-./client
+emcmake cmake -S client -B build-client -GNinja -DCMAKE_BUILD_TYPE=Debug -Dprotobuf_BUILD_TESTS=OFF -DPLATFORM=Web
+cmake --build build-client
+python3 -m http.server -d build-client/bin 8000
 ```
 
 ### Dependencies
