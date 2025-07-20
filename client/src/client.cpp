@@ -143,6 +143,13 @@ struct BiddingMenu {
     bool isVisible{};
     std::string bid; // text button
     std::size_t rank = allRanks;
+
+    auto clear() -> void
+    {
+        isVisible = false;
+        bid.clear();
+        rank = allRanks;
+    }
 };
 
 constexpr auto rankOf(const std::string_view bid) noexcept -> std::size_t
@@ -179,6 +186,18 @@ struct Context {
     std::string stage;
     std::vector<CardName> discardedTalon;
     std::string leadSuit;
+
+    auto reset() -> void
+    {
+        leftCardCount = 10;
+        rightCardCount = 10;
+        cardsOnTable.clear();
+        turnPlayerId.clear();
+        bidding.clear();
+        stage.clear();
+        discardedTalon.clear();
+        leadSuit.clear();
+    }
 };
 
 [[nodiscard]] auto getOpponentIds(Context& ctx) -> std::pair<PlayerId, PlayerId>
@@ -387,7 +406,7 @@ auto onWsMessage(const int eventType, const EmscriptenWebSocketMessageEvent* e, 
             WARN("Failed to parse DealCards");
             return EM_TRUE;
         }
-
+        ctx.reset();
         assert(std::size(dealCards.cards()) == 10);
         for (auto&& cardName : *dealCards.mutable_cards()) {
             ctx.player.cards.emplace_back(std::move(cardName), RVector2{});
@@ -857,6 +876,7 @@ auto main() -> int
     spdlog::set_pattern("[%^%l%$][%!] %v");
     auto ctx = pref::Context{};
     GuiLoadStyleDefault();
+    ctx.window.SetTargetFPS(60);
     GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
     GuiSetStyle(DEFAULT, TEXT_SPACING, 2);
     ctx.font = GuiGetFont();

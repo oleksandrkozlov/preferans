@@ -17,7 +17,7 @@ docker run --privileged -ti -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix
 ```
 cmake -S server -B build-server -GNinja -DCMAKE_BUILD_TYPE=Debug
 cmake --build build-server
-./build-server/bin/server  0.0.0.0 8080
+./build-server/bin/server 0.0.0.0 8080
 ```
 
 ### Build Client

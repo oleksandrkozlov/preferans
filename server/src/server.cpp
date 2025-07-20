@@ -194,6 +194,20 @@ auto advanceWhoseTurn(Context& ctx, const std::string_view stage) -> void
     }
 }
 
+// TODO: combine with advanceWhoseTurn?
+auto setNextRoundTurn(Context& ctx) -> void
+{
+    assert((std::size(ctx.players) == NumberOfPlayers) and "all players joined");
+    assert(ctx.players.contains(ctx.forehandId) and "forehand player exists");
+    auto it = ctx.players.find(ctx.forehandId);
+    ++it;
+    if (it == std::end(ctx.players)) {
+        it = std::begin(ctx.players);
+    }
+    ctx.whoseTurnIt = it;
+    ctx.forehandId = ctx.whoseTurnId();
+}
+
 [[nodiscard]] auto rankOf(const std::string_view card) -> std::string
 {
     return std::string{card.substr(0, card.find("_of_"))};
@@ -409,6 +423,41 @@ auto playerTurn(Context& ctx, const std::string_view stage) -> Awaitable<>
     co_await sendToAll(msg, ctx.players);
 }
 
+auto dealCards(Context& ctx) -> Awaitable<>
+{
+    const auto suits = std::array{"spades", "diamonds", "clubs", "hearts"};
+    const auto ranks = std::array{"7", "8", "9", "10", "jack", "queen", "king", "ace"};
+    const auto toCard = [](const auto& card) {
+        const auto& [rank, suit] = card;
+        return fmt::format("{}_of_{}", rank, suit);
+    };
+    const auto deck = rv::cartesian_product(ranks, suits) //
+        | rv::transform(toCard) //
+        | rng::to_vector //
+        | rng::actions::shuffle(std::mt19937{std::invoke(std::random_device{})});
+    const auto chunks = deck | rv::chunk(10);
+    const auto hands = chunks | rv::take(NumberOfPlayers) | rng::to_vector;
+    ctx.talon = chunks | rv::drop(NumberOfPlayers) | rv::join | rng::to_vector;
+    assert((std::size(ctx.talon) == 2) and "talon is two cards");
+    assert((std::size(ctx.players) == NumberOfPlayers) and (std::size(hands) == NumberOfPlayers));
+    for (const auto& [playerId, hand] : rv::zip(ctx.players | rv::keys, hands)) {
+        ctx.player(playerId).hand = hand | rng::to<Hand>;
+    }
+    INFO_VAR(ctx.talon, hands);
+    const auto wss = ctx.players | rv::values | rv::transform(&Player::ws) | rng::to_vector;
+    assert((std::size(wss) == NumberOfPlayers) and (std::size(hands) == NumberOfPlayers));
+    for (const auto& [ws, hand] : rv::zip(wss, hands)) {
+        auto dealCards = DealCards{};
+        for (const auto& card : hand) {
+            *dealCards.add_cards() = card;
+        }
+        auto msg = Message{};
+        msg.set_method("DealCards");
+        msg.set_payload(dealCards.SerializeAsString());
+        co_await sendToOne(msg, ws);
+    }
+}
+
 auto cardPlayed(Context& ctx, const Message& msg) -> Awaitable<>
 {
     auto playCard = PlayCard{};
@@ -431,8 +480,9 @@ auto cardPlayed(Context& ctx, const Message& msg) -> Awaitable<>
         ctx.whoseTurnIt = ctx.players.find(winnerId);
         if (rng::all_of(ctx.players | rv::values, &Hand::empty, &Player::hand)) {
             INFO("End of the deal");
-            // TODO: Start the new deal instead of playTurn()
-            co_await playerTurn(ctx, "Playing");
+            co_await dealCards(ctx);
+            setNextRoundTurn(ctx);
+            co_await playerTurn(ctx, "Bidding");
         }
     } else {
         advanceWhoseTurn(ctx);
@@ -482,41 +532,6 @@ auto disconnected(Context& ctx, const Player::Id playerId) -> Awaitable<>
     msg.set_method("PlayerLeft");
     msg.set_payload(playerLeft.SerializeAsString());
     co_await sendToAll(msg, ctx.players);
-}
-
-auto dealCards(Context& ctx) -> Awaitable<>
-{
-    const auto suits = std::array{"spades", "diamonds", "clubs", "hearts"};
-    const auto ranks = std::array{"7", "8", "9", "10", "jack", "queen", "king", "ace"};
-    const auto toCard = [](const auto& card) {
-        const auto& [rank, suit] = card;
-        return fmt::format("{}_of_{}", rank, suit);
-    };
-    const auto deck = rv::cartesian_product(ranks, suits) //
-        | rv::transform(toCard) //
-        | rng::to_vector //
-        | rng::actions::shuffle(std::mt19937{std::invoke(std::random_device{})});
-    const auto chunks = deck | rv::chunk(10);
-    const auto hands = chunks | rv::take(NumberOfPlayers) | rng::to_vector;
-    ctx.talon = chunks | rv::drop(NumberOfPlayers) | rv::join | rng::to_vector;
-    assert((std::size(ctx.talon) == 2) and "talon is two cards");
-    assert((std::size(ctx.players) == NumberOfPlayers) and (std::size(hands) == NumberOfPlayers));
-    for (const auto& [playerId, hand] : rv::zip(ctx.players | rv::keys, hands)) {
-        ctx.player(playerId).hand = hand | rng::to<Hand>;
-    }
-    INFO_VAR(ctx.talon, hands);
-    const auto wss = ctx.players | rv::values | rv::transform(&Player::ws) | rng::to_vector;
-    assert((std::size(wss) == NumberOfPlayers) and (std::size(hands) == NumberOfPlayers));
-    for (const auto& [ws, hand] : rv::zip(wss, hands)) {
-        auto dealCards = DealCards{};
-        for (const auto& card : hand) {
-            *dealCards.add_cards() = card;
-        }
-        auto msg = Message{};
-        msg.set_method("DealCards");
-        msg.set_payload(dealCards.SerializeAsString());
-        co_await sendToOne(msg, ws);
-    }
 }
 
 auto bid(Context& ctx, const Message& msg) -> Awaitable<>
