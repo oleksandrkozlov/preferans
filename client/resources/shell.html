@@ -87,7 +87,8 @@
         monitorRunDependencies(left) {
           this.totalDependencies = Math.max(this.totalDependencies, left);
           Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
-        }
+        },
+        arguments: ["--language=ua", "--style=lavanda"]
       };
       Module.setStatus('Downloading...');
       window.onerror = (event) => {

@@ -22,3 +22,6 @@
 [submodule "client/deps/gsl"]
 	path = client/deps/gsl
 	url = git@github.com:microsoft/GSL.git
+[submodule "client/deps/docopt.cpp"]
+	path = client/deps/docopt.cpp
+	url = https://github.com/docopt/docopt.cpp.git

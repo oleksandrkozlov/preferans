@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package pref;
 
-message Player {
+message PPlayer {
   string player_id = 1;
   string player_name = 2;
 }
@@ -14,7 +14,7 @@ message JoinRequest {
 
 message JoinResponse {
   string player_id = 1;
-  repeated Player players = 2;
+  repeated PPlayer players = 2;
 }
 
 message PlayerJoined {
@@ -43,7 +43,12 @@ message PlayerTurn {
 
 message Bidding {
     string player_id = 1;
-    string bid = 2; // e.g., "8H", "PASS", "MISER", etc.
+    string bid = 2; // e.g., "8♠", "PASS", "MISER", etc.
+}
+
+message Whisting {
+    string player_id = 1;
+    string choice = 2; // e.g., "Whist", "Half-Whist", "Pass", etc.
 }
 
 message DiscardTalon {

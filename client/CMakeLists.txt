@@ -10,6 +10,11 @@ unset(CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES)
 include_directories(SYSTEM ${CMAKE_INSTALL_PREFIX}/include/c++/v1)
 
 include(flags)
+
+set(CMAKE_CXX_STANDARD 20)
+add_subdirectory(deps/docopt.cpp)
+set(CMAKE_CXX_STANDARD 26)
+
 add_subdirectory(deps/fmt)
 add_subdirectory(deps/range-v3)
 add_subdirectory(deps/raylib)
@@ -28,7 +33,7 @@ add_custom_command(
 )
 
 target_link_libraries(
-    client raylib fmt ${CMAKE_BINARY_DIR}/lib/libprotobuf-lited.a ${CMAKE_BINARY_DIR}/lib/libprotobufd.a
+    client raylib fmt docopt ${CMAKE_BINARY_DIR}/lib/libprotobuf-lited.a ${CMAKE_BINARY_DIR}/lib/libprotobufd.a
 )
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_BINARY_DIR}/_deps/raylib-build/raylib/include)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_BINARY_DIR}/_deps/absl-src)
@@ -40,6 +45,7 @@ target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/protobu
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/raygui/src)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/spdlog/include)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/gsl/include)
+target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/docopt.cpp)
 target_include_directories(client PRIVATE ${PROJECT_SOURCE_DIR}/..)
 target_include_directories(client PRIVATE ${PROJECT_SOURCE_DIR}/../include)
 
@@ -58,4 +64,10 @@ target_link_options(
     --preload-file
     resources
     -lwebsocket.js
+)
+
+add_custom_command(
+    OUTPUT ${CMAKE_SOURCE_DIR}/src/client.cpp
+    COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_SOURCE_DIR}/src/client.cpp
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/resources/shell.html
 )

@@ -1,19 +1,69 @@
 #pragma once
 
+#include <map>
 #include <string>
 #include <string_view>
 
-[[nodiscard]] auto suitOf(const std::string_view card) -> std::string
+namespace pref {
+
+// NOLINTBEGIN(cppcoreguidelines-macro-usage)
+
+#define SPADES "spades"
+#define CLUBS "clubs"
+#define HEARTS "hearts"
+#define DIAMONDS "diamonds"
+
+#define SPADE "♠"
+#define CLUB "♣"
+#define HEART "♥"
+#define DIAMOND "♦"
+
+#define SIX "6"
+#define SEVEN "7"
+#define EIGHT "8"
+#define NINE "9"
+#define TEN "10"
+#define JACK "jack"
+#define QUEEN "queen"
+#define KING "king"
+#define ACE "ace"
+
+#define WT "WT" // without talon
+#define NINE_WT NINE " " WT
+#define TEN_WT TEN " " WT
+#define MISER "MISER"
+#define MISER_WT "MIS." WT
+#define PASS "PASS"
+
+#define _OF_ "_of_"
+
+// NOLINTEND(cppcoreguidelines-macro-usage)
+
+[[nodiscard]] inline auto cardSuit(const std::string_view card) -> std::string
 {
-    return std::string{card.substr(card.find("_of_") + 4)};
+    return std::string{card.substr(card.find(_OF_) + 4)};
+}
+
+[[nodiscard]] inline auto cardRank(const std::string_view card) -> std::string
+{
+    return std::string{card.substr(0, card.find(_OF_))};
+}
+
+[[nodiscard]] inline auto rankValue(const std::string_view rank) -> int
+{
+    static const auto rankMap = std::map<std::string_view, int>{
+        {ACE, 8}, {KING, 7}, {QUEEN, 6}, {JACK, 5}, {TEN, 4}, {NINE, 3}, {EIGHT, 2}, {SEVEN, 1}};
+    return rankMap.at(rank);
 }
 
 [[nodiscard]] constexpr auto getTrump(const std::string_view bid) noexcept -> std::string_view
 { // clang-format off
-    if (bid.contains("WT") or bid.contains("WP") or bid.contains("MISER") or bid.contains("PASS")) { return {}; }
-    if (bid.contains('S')) { return "spades"; }
-    if (bid.contains('C')) { return "clubs"; }
-    if (bid.contains('H')) { return "hearts"; }
-    if (bid.contains('D')) { return "diamonds"; }
+    if (bid.contains(WT) or bid.contains(MISER) or bid.contains(PASS)) { return {}; }
+    if (bid.contains(SPADE)) { return SPADES; }
+    if (bid.contains(CLUB)) { return CLUBS; }
+    if (bid.contains(HEART)) { return HEARTS; }
+    if (bid.contains(DIAMOND)) { return DIAMONDS; }
     return {}; // clang-format on
 }
+
+} // namespace pref

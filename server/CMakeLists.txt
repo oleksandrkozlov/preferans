@@ -11,6 +11,7 @@ find_package(boost_headers REQUIRED)
 find_package(Protobuf REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(docopt REQUIRED)
+find_package(Catch2 REQUIRED)
 
 file(GLOB_RECURSE PREF_PROTO_FILES ${PROJECT_SOURCE_DIR}/../proto/*.proto)
 protobuf_generate_cpp(
@@ -23,7 +24,16 @@ if(CMAKE_BUILD_TYPE STREQUAL Debug)
     include(ccache)
 endif()
 
-add_executable(server src/server.cpp ${PREF_PROTO_SOURCES})
-target_link_libraries(server Boost::headers protobuf::libprotobuf spdlog::spdlog docopt)
-target_include_directories(server PRIVATE ${PROJECT_SOURCE_DIR}/..)
-target_include_directories(server PRIVATE ${PROJECT_SOURCE_DIR}/../include)
+add_library(serverlib STATIC src/server.cpp ${PREF_PROTO_SOURCES})
+target_link_libraries(serverlib PUBLIC Boost::headers protobuf::libprotobuf spdlog::spdlog docopt)
+target_include_directories(serverlib PUBLIC ${PROJECT_SOURCE_DIR}/..)
+target_include_directories(serverlib PUBLIC ${PROJECT_SOURCE_DIR}/src)
+target_include_directories(serverlib PUBLIC ${PROJECT_SOURCE_DIR}/../include)
+
+add_executable(server src/main.cpp)
+target_link_libraries(server serverlib)
+
+if(CMAKE_BUILD_TYPE STREQUAL Debug)
+    add_executable(server_test tests/server_test.cpp)
+    target_link_libraries(server_test PRIVATE Catch2::Catch2WithMain serverlib)
+endif()

@@ -5,13 +5,14 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt update && apt install -y \
     build-essential \
     clang-format \
+    clangd \
     cmake \
     cmake-format \
     emscripten \
     git \
     libasound2-dev \
-    clangd \
     libboost1.88-dev \
+    libcatch2-dev \
     libdocopt-dev \
     libfmt-dev \
     libgl1-mesa-dev \

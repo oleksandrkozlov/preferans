@@ -1,44 +1,21 @@
+#include "server.hpp"
+
 #include "common/common.hpp"
-#include "common/logger.hpp"
 #include "proto/pref.pb.h"
 
-#include <boost/asio.hpp>
-#include <boost/asio/experimental/awaitable_operators.hpp>
-#include <boost/beast.hpp>
 #include <boost/uuid/random_generator.hpp>
 #include <boost/uuid/uuid_io.hpp>
-#include <docopt/docopt.h>
 #include <fmt/ranges.h>
-#include <fmt/std.h>
 #include <range/v3/all.hpp>
 
 #include <array>
-#include <cstdlib>
-#include <exception>
 #include <gsl/gsl>
 #include <iterator>
-#include <memory>
-#include <set>
 
-namespace sys = boost::system;
-namespace net = boost::asio;
-namespace beast = boost::beast;
-namespace web = beast::websocket;
 namespace rng = ranges;
 namespace rv = rng::views;
 
 using namespace std::literals;
-
-namespace boost::system {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunneeded-internal-declaration"
-// NOLINTNEXTLINE(readability-identifier-naming, misc-use-anonymous-namespace)
-[[nodiscard]] static auto format_as(const error_code& error) -> std::string
-{
-    return error.message();
-}
-#pragma GCC diagnostic pop
-} // namespace boost::system
 
 namespace pref {
 namespace {
@@ -47,37 +24,13 @@ namespace {
 
 constexpr auto NumberOfPlayers = 3UZ;
 
-using SteadyTimer = net::steady_timer;
 using TcpAcceptor = net::ip::tcp::acceptor;
-using Stream = web::stream<beast::tcp_stream>;
-
-template<typename T = void>
-using Awaitable = net::awaitable<T>;
 
 template<typename Callable>
 [[maybe_unused]] [[nodiscard]] auto unpack(Callable callable)
 {
     return [cb = std::move(callable)](const auto& pair) { return cb(pair.first, pair.second); };
 }
-
-constexpr auto Detached = [](const std::string_view func) { // NOLINT(fuchsia-statically-constructed-objects)
-    return [func](const std::exception_ptr& eptr) {
-        if (not eptr) {
-            return;
-        }
-        try {
-            std::rethrow_exception(eptr);
-        } catch (const sys::system_error& error) {
-            if (error.code() != net::error::operation_aborted) {
-                WARN("[{}][Detached] error: {}", func, error);
-            }
-        } catch (const std::exception& error) {
-            WARN("[{}][Detached] error: {}", func, error);
-        } catch (...) {
-            WARN("[{}][Detached] error: unknown", func);
-        }
-    };
-};
 
 [[nodiscard]] auto makeMessage(const beast::flat_buffer& buffer) -> std::optional<Message>
 {
@@ -89,77 +42,10 @@ constexpr auto Detached = [](const std::string_view func) { // NOLINT(fuchsia-st
     return result;
 }
 
-using CardName = std::string;
-using Hand = std::set<CardName>;
-
-struct PlayerSession {
-    using Id = std::uint64_t;
-
-    Id id{};
-    std::string playerId;
-    std::string playerName;
-};
-
-struct Player {
-    using Id = std::string;
-    using Name = std::string;
-
-    Player() = default;
-
-    Player(Id aId, Name aName, PlayerSession::Id aSessionId, const std::shared_ptr<Stream>& aWs)
-        : id{std::move(aId)}
-        , name{std::move(aName)}
-        , sessionId{aSessionId}
-        , ws{aWs}
-    {
-    }
-
-    Id id;
-    Name name;
-    PlayerSession::Id sessionId{};
-    std::shared_ptr<Stream> ws;
-    std::optional<SteadyTimer> reconnectTimer;
-    Hand hand;
-    std::string bid;
-    int tricksTaken{};
-};
-
-struct PlayedCard {
-    Player::Id byPlayerId;
-    CardName name;
-};
-
 [[maybe_unused]] auto generateUuid() -> Player::Id
 {
     return boost::uuids::to_string(std::invoke(boost::uuids::random_generator{}));
 }
-
-struct Context {
-    using Players = std::map<Player::Id, Player>;
-
-    [[nodiscard]] auto whoseTurnId() const -> const Player::Id&
-    {
-        return whoseTurnIt->first;
-    }
-
-    [[nodiscard]] auto player(const Player::Id& playerId) const -> Player&
-    {
-        assert(players.contains(playerId) and "player exists");
-        return players[playerId];
-    }
-
-    [[nodiscard]] auto playerName(const Player::Id& playerId) const -> const std::string&
-    {
-        return player(playerId).name;
-    }
-
-    mutable Players players;
-    Players::const_iterator whoseTurnIt;
-    std::vector<CardName> talon;
-    std::vector<PlayedCard> trick;
-    std::string trump;
-    Player::Id forehandId;
-};
 
 auto resetWhoseTurn(Context& ctx) -> void
 {
@@ -169,7 +55,6 @@ auto resetWhoseTurn(Context& ctx) -> void
 
 auto advanceWhoseTurn(Context& ctx) -> void
 {
-    INFO();
     assert((std::size(ctx.players) == NumberOfPlayers) and "all players joined");
     if (++ctx.whoseTurnIt == std::cend(ctx.players)) {
         resetWhoseTurn(ctx);
@@ -189,7 +74,7 @@ auto advanceWhoseTurn(Context& ctx, const std::string_view stage) -> void
     if (stage != "Bidding") {
         return;
     }
-    while (ctx.player(ctx.whoseTurnId()).bid == "PASS") {
+    while (ctx.player(ctx.whoseTurnId()).bid == PASS) {
         advanceWhoseTurn(ctx);
     }
 }
@@ -208,54 +93,12 @@ auto setNextRoundTurn(Context& ctx) -> void
     ctx.forehandId = ctx.whoseTurnId();
 }
 
-[[nodiscard]] auto rankOf(const std::string_view card) -> std::string
-{
-    return std::string{card.substr(0, card.find("_of_"))};
-}
-
-[[nodiscard]] auto rankValue(const std::string_view rank) -> int
-{
-    static const auto rankMap = std::map<std::string_view, int>{
-        {"ace", 8}, {"king", 7}, {"queen", 6}, {"jack", 5}, {"10", 4}, {"9", 3}, {"8", 2}, {"7", 1}};
-    return rankMap.at(rank);
-}
-
-[[nodiscard]] auto beats(
-    const std::string_view candidate,
-    const std::string_view best,
-    const std::string_view leadSuit,
-    const std::string_view trump) -> bool
-{
-    const auto candidateSuit = suitOf(candidate);
-    const auto bestSuit = suitOf(best);
-    if (candidateSuit == bestSuit) {
-        return rankValue(rankOf(candidate)) > rankValue(rankOf(best));
-    }
-    if (not std::empty(trump) and (candidateSuit == trump) and (bestSuit != trump)) {
-        return true;
-    }
-    if (not std::empty(trump) and (candidateSuit != trump) and (bestSuit == trump)) {
-        return false;
-    }
-    return candidateSuit == leadSuit;
-}
-
 [[nodiscard]] auto finishTrick(Context& ctx) -> Player::Id
 {
-    assert(std::size(ctx.trick) == NumberOfPlayers and "all players played cards");
-    const auto& firstPlayedCard = ctx.trick.front();
-    const auto leadSuit = suitOf(firstPlayedCard.name);
-    auto winnerId = firstPlayedCard.byPlayerId;
-    auto winnerCard = firstPlayedCard.name;
-    for (const auto& playedCard : ctx.trick) {
-        if (beats(playedCard.name, winnerCard, leadSuit, ctx.trump)) {
-            winnerId = playedCard.byPlayerId;
-            winnerCard = playedCard.name;
-        }
-    }
+    const auto winnerId = finishTrick(ctx.trick, ctx.trump);
     const auto& winnerName = ctx.playerName(winnerId);
     const auto tricksTaken = ++ctx.player(winnerId).tricksTaken;
-    INFO_VAR(winnerId, winnerName, leadSuit, winnerCard, tricksTaken);
+    INFO_VAR(winnerId, winnerName, tricksTaken);
     ctx.trick.clear();
     return winnerId;
 }
@@ -425,11 +268,11 @@ auto playerTurn(Context& ctx, const std::string_view stage) -> Awaitable<>
 
 auto dealCards(Context& ctx) -> Awaitable<>
 {
-    const auto suits = std::array{"spades", "diamonds", "clubs", "hearts"};
-    const auto ranks = std::array{"7", "8", "9", "10", "jack", "queen", "king", "ace"};
+    const auto suits = std::array{SPADES, DIAMONDS, CLUBS, HEARTS};
+    const auto ranks = std::array{SEVEN, EIGHT, NINE, TEN, JACK, QUEEN, KING, ACE};
     const auto toCard = [](const auto& card) {
         const auto& [rank, suit] = card;
-        return fmt::format("{}_of_{}", rank, suit);
+        return fmt::format("{}" _OF_ "{}", rank, suit);
     };
     const auto deck = rv::cartesian_product(ranks, suits) //
         | rv::transform(toCard) //
@@ -549,6 +392,21 @@ auto bid(Context& ctx, const Message& msg) -> Awaitable<>
     co_await sendToAllExcept(msg, ctx.players, playerId);
 }
 
+auto whistChoice(Context& ctx, const Message& msg) -> Awaitable<>
+{
+    auto whisting = Whisting{};
+    if (not whisting.ParseFromString(msg.payload())) {
+        WARN("error: failed to parse Whisting");
+        co_return;
+    }
+    const auto& playerId = whisting.player_id();
+    const auto& choice = whisting.choice();
+    const auto& playerName = ctx.playerName(playerId);
+    INFO_VAR(playerName, playerId, choice);
+    ctx.player(playerId).whistingChoice = choice;
+    co_await sendToAllExcept(msg, ctx.players, playerId);
+}
+
 auto finalBid(Context& ctx, const Player::Id& playerId, const std::string& bid) -> Awaitable<>
 {
     auto bidding = Bidding{};
@@ -567,13 +425,12 @@ auto finalBid(Context& ctx, const Player::Id& playerId, const std::string& bid) 
 {
     const auto bids = ctx.players | rv::values | rv::transform(&Player::bid);
     if (std::size(bids) == NumberOfPlayers) {
-        if (rng::count(bids, "PASS") == NumberOfPlayers) {
+        if (rng::count(bids, PASS) == NumberOfPlayers) {
             // TODO: implement Pass Game
             ERROR("The Pass Game is not implemented");
             return "Playing";
         }
-        if ((rng::count_if(bids, std::bind_front(std::not_equal_to{}, "PASS")) == 1)
-            and (rng::count(bids, "PASS") == 2)) {
+        if ((rng::count_if(bids, std::bind_front(std::not_equal_to{}, PASS)) == 1) and (rng::count(bids, PASS) == 2)) {
             return "TalonPicking";
         }
     }
@@ -626,13 +483,23 @@ auto launchSession(Context& ctx, const std::shared_ptr<Stream> ws) -> Awaitable<
             const auto stage = stageGame(ctx);
             advanceWhoseTurn(ctx, stage);
             co_await playerTurn(ctx, stage);
+        } else if (msg.method() == "Whisting") {
+            co_await whistChoice(ctx, msg);
+            if (ctx.isWhistingDone()) {
+                forehandsTurn(ctx);
+                co_await playerTurn(ctx, "Playing");
+            } else {
+                advanceWhoseTurn(ctx);
+                co_await playerTurn(ctx, "Whisting");
+            }
         } else if (msg.method() == "PlayCard") {
             co_await cardPlayed(ctx, msg);
         } else if (msg.method() == "DiscardTalon") {
             const auto [playerId, bid] = talonDiscarded(ctx, msg);
             co_await finalBid(ctx, playerId, bid);
-            forehandsTurn(ctx);
-            co_await playerTurn(ctx, "Playing");
+            // TODO: is the player turn advance correctly?
+            advanceWhoseTurn(ctx);
+            co_await playerTurn(ctx, "Whisting");
         } else {
             WARN("error: unknown method: {}", msg.method());
             continue;
@@ -653,6 +520,66 @@ auto launchSession(Context& ctx, const std::shared_ptr<Stream> ws) -> Awaitable<
     net::co_spawn(co_await net::this_coro::executor, disconnected(ctx, session.playerId), Detached("disconnected"));
 }
 
+// NOLINTEND(performance-unnecessary-value-param, cppcoreguidelines-avoid-reference-coroutine-parameters)
+} // namespace
+
+Player::Player(Id aId, Name aName, PlayerSession::Id aSessionId, const std::shared_ptr<Stream>& aWs)
+    : id{std::move(aId)}
+    , name{std::move(aName)}
+    , sessionId{aSessionId}
+    , ws{aWs}
+{
+}
+
+auto Context::whoseTurnId() const -> const Player::Id&
+{
+    return whoseTurnIt->first;
+}
+
+auto Context::player(const Player::Id& playerId) const -> Player&
+{
+    assert(players.contains(playerId) and "player exists");
+    return players[playerId];
+}
+
+auto Context::playerName(const Player::Id& playerId) const -> const std::string&
+{
+    return player(playerId).name;
+}
+
+auto Context::isWhistingDone() const -> bool
+{
+    return 2 == rng::count_if(players | rv::values, rng::not_fn(&std::string::empty), &Player::whistingChoice);
+}
+
+auto beats(const Beat beat) -> bool
+{
+    const auto [candidate, best, leadSuit, trump] = beat;
+    const auto candidateSuit = cardSuit(candidate);
+    const auto bestSuit = cardSuit(best);
+    if (candidateSuit == bestSuit) {
+        return rankValue(cardRank(candidate)) > rankValue(cardRank(best));
+    }
+    if (not std::empty(trump) and (candidateSuit == trump) and (bestSuit != trump)) {
+        return true;
+    }
+    if (not std::empty(trump) and (candidateSuit != trump) and (bestSuit == trump)) {
+        return false;
+    }
+    return candidateSuit == leadSuit;
+}
+
+// return winnderId
+auto finishTrick(const std::vector<PlayedCard>& trick, const std::string_view trump) -> Player::Id
+{
+    assert(std::size(trick) == NumberOfPlayers and "all players played cards");
+    const auto& firstCard = trick.front();
+    const auto leadSuit = cardSuit(firstCard.name); // clang-format off
+    return rng::accumulate(trick, firstCard, [&](const PlayedCard& best, const PlayedCard& candidate) {
+        return beats({candidate.name, best.name, leadSuit, trump}) ? candidate : best; // NOLINT
+    }).playerId; // clang-format on
+}
+
 auto acceptConnectionAndLaunchSession(Context& ctx, const net::ip::tcp::endpoint endpoint) -> Awaitable<>
 {
     INFO();
@@ -666,45 +593,4 @@ auto acceptConnectionAndLaunchSession(Context& ctx, const net::ip::tcp::endpoint
     }
 }
 
-auto handleSignals() -> Awaitable<>
-{
-    const auto ex = co_await net::this_coro::executor;
-    auto signals = net::signal_set{ex, SIGINT, SIGTERM};
-    const auto signal = co_await signals.async_wait();
-    INFO_VAR(signal);
-    static_cast<net::io_context&>(ex.context()).stop(); // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
-}
-
-constexpr auto usage = R"(
-Usage:
-    preferans-server <address> <port>
-
-Options:
-    -h --help     Show this screen.
-)";
-
-// NOLINTEND(performance-unnecessary-value-param, cppcoreguidelines-avoid-reference-coroutine-parameters)
-} // namespace
 } // namespace pref
-
-int main(const int argc, const char* const argv[])
-{
-    try {
-        const auto args = docopt::docopt(pref::usage, {std::next(argv), std::next(argv, argc)});
-        spdlog::set_pattern("[%^%l%$][%!] %v");
-        auto const address = net::ip::make_address(args.at("<address>").asString());
-        auto const port = gsl::narrow<std::uint16_t>(args.at("<port>").asLong());
-        auto loop = net::io_context{};
-        auto ctx = pref::Context{};
-        net::co_spawn(loop, pref::handleSignals(), pref::Detached("handleStop"));
-        net::co_spawn(
-            loop,
-            pref::acceptConnectionAndLaunchSession(ctx, {address, port}),
-            pref::Detached("acceptConnectionAndLaunchSession"));
-        loop.run();
-        return EXIT_SUCCESS;
-    } catch (const std::exception& error) {
-        ERROR("{}", VAR(error));
-        return EXIT_FAILURE;
-    }
-}
