@@ -31,12 +31,17 @@ RUN apt update && apt install -y \
     libxrandr-dev \
     ninja-build \
     protobuf-compiler \
+    pytest-asyncio \
     python3 \
     python3-dev \
     python3-pip \
+    python3-protobuf \
+    python3-pytest \
+    python3-pytest-timeout \
+    python3-websockets \
     sudo \
     valgrind \
-    vim-gtk3\
+    vim-gtk3 \
     xsel
 #   ccache \
 #   clang \

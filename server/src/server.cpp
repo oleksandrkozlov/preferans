@@ -26,6 +26,9 @@ constexpr auto NumberOfPlayers = 3UZ;
 
 using TcpAcceptor = net::ip::tcp::acceptor;
 
+auto trickFinished(Context& ctx) -> Awaitable<>;
+auto roundFinished(Context& ctx) -> Awaitable<>;
+
 template<typename Callable>
 [[maybe_unused]] [[nodiscard]] auto unpack(Callable callable)
 {
@@ -319,12 +322,14 @@ auto cardPlayed(Context& ctx, const Message& msg) -> Awaitable<>
         const auto winnerId = finishTrick(ctx);
         const auto& winnerName = ctx.playerName(winnerId);
         INFO_VAR(winnerId, winnerName);
-        // TODO: Notify all players
+        co_await trickFinished(ctx);
         ctx.whoseTurnIt = ctx.players.find(winnerId);
         if (rng::all_of(ctx.players | rv::values, &Hand::empty, &Player::hand)) {
             INFO("End of the deal");
+            co_await roundFinished(ctx);
             co_await dealCards(ctx);
             setNextRoundTurn(ctx);
+            // FIXME: the second round, for some reason, only two player are bidding
             co_await playerTurn(ctx, "Bidding");
         }
     } else {
@@ -419,6 +424,33 @@ auto finalBid(Context& ctx, const Player::Id& playerId, const std::string& bid) 
     msg.set_method("Bidding");
     msg.set_payload(bidding.SerializeAsString());
     co_await sendToAllExcept(msg, ctx.players, playerId);
+}
+
+auto resetTakenTricks(Context& ctx) -> void
+{
+    for (auto&& [_, p] : ctx.players) {
+        p.tricksTaken = 0;
+    }
+}
+
+auto roundFinished(Context& ctx) -> Awaitable<>
+{
+    resetTakenTricks(ctx);
+    co_await trickFinished(ctx);
+}
+
+auto trickFinished(Context& ctx) -> Awaitable<>
+{
+    auto trickFinished = TrickFinished{};
+    for (const auto& [playerId, player] : ctx.players) {
+        auto tricks = trickFinished.add_tricks();
+        tricks->set_player_id(playerId);
+        tricks->set_taken(player.tricksTaken);
+    }
+    auto msg = Message{};
+    msg.set_method("TrickFinished");
+    msg.set_payload(trickFinished.SerializeAsString());
+    co_await sendToAll(msg, ctx.players);
 }
 
 [[nodiscard]] auto stageGame(Context& ctx) -> std::string_view

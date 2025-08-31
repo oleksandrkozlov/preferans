@@ -60,14 +60,13 @@ target_link_options(
     -sALLOW_MEMORY_GROWTH
     -sFORCE_FILESYSTEM=1
     --shell-file
-    resources/shell.html
+    resources/shells/shell.html
     --preload-file
     resources
     -lwebsocket.js
 )
 
 add_custom_command(
-    OUTPUT ${CMAKE_SOURCE_DIR}/src/client.cpp
-    COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_SOURCE_DIR}/src/client.cpp
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/resources/shell.html
+    OUTPUT ${CMAKE_SOURCE_DIR}/src/client.cpp COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_SOURCE_DIR}/src/client.cpp
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/resources/shells/shell.html
 )

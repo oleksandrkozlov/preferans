@@ -17,6 +17,8 @@ namespace pref {
 #define CLUB "♣"
 #define HEART "♥"
 #define DIAMOND "♦"
+#define ARROW_LEFT "←"
+#define ARROW_RIGHT "→"
 
 #define SIX "6"
 #define SEVEN "7"
@@ -31,9 +33,9 @@ namespace pref {
 #define WT "WT" // without talon
 #define NINE_WT NINE " " WT
 #define TEN_WT TEN " " WT
-#define MISER "MISER"
-#define MISER_WT "MIS." WT
-#define PASS "PASS"
+#define MISER "Miser"
+#define MISER_WT "Mis." WT
+#define PASS "Pass"
 
 #define _OF_ "_of_"
 
