@@ -3,34 +3,30 @@
 
 #include "common/common.hpp"
 #include "common/logger.hpp"
+#include "proto/pref.pb.h"
 
 #include <docopt.h>
+#include <emscripten/emscripten.h>
+#include <emscripten/val.h>
+#include <emscripten/websocket.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <fmt/std.h>
 #include <range/v3/all.hpp>
+#define RAYGUI_IMPLEMENTATION
+#include <raygui.h>
 #include <raylib-cpp.hpp>
 #include <spdlog/spdlog.h>
 
-#include <cassert>
-#include <chrono>
-#include <thread>
-#include <utility>
-
-#define RAYGUI_IMPLEMENTATION
-#include "proto/pref.pb.h"
-
-#include <emscripten/emscripten.h>
-#include <emscripten/val.h>
-#include <emscripten/websocket.h>
-#include <raygui.h>
-
 #include <array>
 #include <cassert>
+#include <chrono>
 #include <gsl/gsl>
 #include <initializer_list>
 #include <list>
 #include <string_view>
+#include <thread>
+#include <utility>
 #include <vector>
 
 namespace pref {
@@ -55,16 +51,7 @@ constexpr auto cardHeight = screenHeight / 5.0f; // 5th part of screen's height
 constexpr auto cardWidth = cardHeight * cardAspectRatio;
 constexpr auto cardOverlapX = cardWidth * 0.6f; // 60% overlap
 constexpr auto cardOverlapY = cardHeight * 0.2f;
-
-constexpr const auto FontSpacing = 1.0f;
-
-using namespace std::literals;
-namespace rng = ranges;
-namespace rv = rng::views;
-
-using PlayerId = std::string;
-using PlayerName = std::string;
-using CardName = std::string;
+constexpr auto fontSpacing = 1.0f;
 
 [[nodiscard]] constexpr auto getCloseReason(const std::uint16_t code) noexcept -> std::string_view
 {
@@ -141,6 +128,7 @@ enum class GameText : std::size_t {
     Cherry,
     Genesis,
     Ashes,
+    ScoreSheet,
     Count
 };
 
@@ -150,10 +138,10 @@ constexpr auto localization = std::
             // English
             "PREFERANS",
             "Current players:",
-            "Enter your name:",
+            "Enter your name:", //
             "Enter",
-            "Whist",
-            "Half-Whist",
+            WHIST,
+            HALF_WHIST,
             "Pass",
             "Your turn",
             "Settings",
@@ -176,6 +164,7 @@ constexpr auto localization = std::
             "cherry",
             "genesis",
             "ashes",
+            "Score",
         },
         {
             // Ukrainian
@@ -207,13 +196,39 @@ constexpr auto localization = std::
             "вишня",
             "генезис",
             "попіл",
+            "Пулька",
         },
         {
             // Russian
-            "ПРЕФЕРАНС", "Текущие игроки:", "Введите своё имя:", "Войти",   "Вист",       "Полвиста",   "Пас",
-            "Ваш ход",   "Настройки",       "Цветовая схема",    "Язык",    "Английский", "Украинский", "Русский",
-            "светлый",   "тёмный",          "энефете",           "лаванда", "терминал",   "конфета",    "джунгли",
-            "кибер",     "рлтех",           "голубой",           "янтарь",  "вишня",      "генезис",    "пепел",
+            "ПРЕФЕРАНС",
+            "Текущие игроки:",
+            "Введите своё имя:", //
+            "Войти",
+            "Вист",
+            "Полвиста",
+            "Пас",
+            "Ваш ход",
+            "Настройки",
+            "Цветовая схема",
+            "Язык",
+            "Английский",
+            "Украинский",
+            "Русский",
+            "светлый",
+            "тёмный",
+            "энефете",
+            "лаванда",
+            "терминал",
+            "конфета",
+            "джунгли",
+            "кибер",
+            "рлтех",
+            "голубой",
+            "янтарь",
+            "вишня",
+            "генезис",
+            "пепел",
+            "Пулька",
         },
     }};
 
@@ -233,7 +248,7 @@ struct Card {
     RTexture texture{};
 };
 
-[[nodiscard]] inline auto suitValue(const std::string_view suit) -> int
+[[nodiscard]] auto suitValue(const std::string_view suit) -> int
 {
     static const auto map = std::map<std::string_view, int>{{SPADES, 1}, {DIAMONDS, 2}, {CLUBS, 3}, {HEARTS, 4}};
     return map.at(suit);
@@ -285,7 +300,6 @@ constexpr auto bidTable = std::array<std::array<std::string_view, 6>, 6>{
 // clang-format on
 
 constexpr auto allRanks = std::size(bidsFlat);
-
 constexpr auto whistingFlat = std::array{GameText::Whist, GameText::HalfWhist, GameText::Pass};
 
 struct BiddingMenu {
@@ -331,9 +345,9 @@ struct WhistingMenu {
     return {gsl::narrow_cast<unsigned int>(GuiGetStyle(control, property))};
 }
 
-[[nodiscard]] auto localizeText(const GameText text, const GameLang lang) -> std::string
+[[nodiscard]] auto localizeText(const GameText text, const GameLang lang) -> std::string_view
 {
-    return std::string{localization[std::to_underlying(lang)][std::to_underlying(text)]};
+    return localization[std::to_underlying(lang)][std::to_underlying(text)];
 }
 
 [[nodiscard]] constexpr auto whistingChoiceToGameText(const std::string_view whistingChoice) noexcept -> GameText
@@ -347,6 +361,11 @@ struct WhistingMenu {
     return GameText::Pass;
 }
 
+[[nodiscard]] auto fontSize(const RFont& font) noexcept -> float
+{
+    return static_cast<float>(font.baseSize);
+}
+
 struct SettingsMenu {
     int colorSchemeIdScroll = -1;
     int colorSchemeIdSelect = -1;
@@ -357,6 +376,10 @@ struct SettingsMenu {
     std::string loadedLang;
 };
 
+struct ScoreSheet {
+    bool isVisible{};
+};
+
 struct Context {
     // TODO: Figure out how to use one font with different sizes
     //       Should we use `fontL` and scale it down?
@@ -365,7 +388,13 @@ struct Context {
     RFont fontL;
     RFont initialFont;
     RVector2 screen{screenWidth, screenHeight};
-    RWindow window{static_cast<int>(screen.x), static_cast<int>(screen.y), "Preferans"};
+    RWindow window{
+        static_cast<int>(screen.x),
+        static_cast<int>(screen.y),
+        "Preferans",
+        FLAG_MSAA_4X_HINT // smooth edges for circles, rings, etc.
+            | FLAG_WINDOW_ALWAYS_RUN // don't throttle when tab is not focused
+    };
     Player player;
     PlayerId myPlayerId;
     PlayerName myPlayerName;
@@ -385,6 +414,7 @@ struct Context {
     std::string leadSuit;
     GameLang lang{};
     SettingsMenu settingsMenu;
+    ScoreSheet scoreSheet;
 
     auto reset() -> void
     {
@@ -401,7 +431,7 @@ struct Context {
 
     [[nodiscard]] auto localizeText(const GameText text) const -> std::string
     {
-        return ::pref::localizeText(text, lang);
+        return std::string{::pref::localizeText(text, lang)};
     }
 
     [[nodiscard]] constexpr auto localizeBid(const std::string_view bid) const noexcept -> std::string_view
@@ -421,11 +451,31 @@ struct Context {
         } // clang-format on
         return bid;
     }
+
+    [[nodiscard]] auto areAllPlayersJoined() const noexcept -> bool
+    {
+        return std::size(players) == NumberOfPlayers;
+    }
+
+    [[nodiscard]] auto fontSizeS() const noexcept -> float
+    {
+        return fontSize(fontS);
+    }
+
+    [[nodiscard]] auto fontSizeM() const noexcept -> float
+    {
+        return fontSize(fontM);
+    }
+
+    [[nodiscard]] auto fontSizeL() const noexcept -> float
+    {
+        return fontSize(fontL);
+    }
 };
 
 [[nodiscard]] auto getOpponentIds(Context& ctx) -> std::pair<PlayerId, PlayerId>
 {
-    assert(std::size(ctx.players) == 3U);
+    assert(ctx.areAllPlayersJoined());
     auto order = std::vector<PlayerId>{};
     for (const auto& [id, _] : ctx.players) {
         order.push_back(id);
@@ -443,13 +493,13 @@ auto handlePlayerTurn(Context& ctx, PlayerTurn playerTurn) -> void
 {
     if (std::size(ctx.cardsOnTable) >= 3) {
         // TODO: remove sleep
-        std::this_thread::sleep_for(1s);
+        // std::this_thread::sleep_for(1s);
         ctx.cardsOnTable.clear();
     }
     ctx.turnPlayerId = playerTurn.player_id();
     ctx.stage = playerTurn.stage();
     if (ctx.turnPlayerId == ctx.myPlayerId) {
-        INFO("Your turn");
+        PREF_INFO("Your turn");
         if (ctx.stage == "Bidding") {
             ctx.bidding.isVisible = true;
             return;
@@ -495,7 +545,29 @@ auto handlePlayCard(Context& ctx, PlayCard playCard) -> void
     ctx.cardsOnTable.insert_or_assign(std::move(playerId), Card{std::move(cardName), RVector2{}});
 }
 
-auto handleTrickFinished(Context& ctx, const TrickFinished trickFinished) -> void
+auto handleRoundFinished([[maybe_unused]] Context& ctx, const RoundFinished roundFinished) -> void
+{
+    // TODO: draw data in the score sheet
+    for (const auto& [playerId, score] : roundFinished.score_sheet()) {
+        PREF_INFO("{}, dump:", VAR(playerId));
+        for (auto value : score.dump().values()) {
+            INFO_VAR(value);
+        }
+        PREF_INFO("pool:");
+        for (auto value : score.pool().values()) {
+            INFO_VAR(value);
+        }
+        PREF_INFO("whists:");
+        for (const auto& [whistPlayerId, whists] : score.whists()) {
+            INFO_VAR(whistPlayerId);
+            for (auto value : whists.values()) {
+                INFO_VAR(value);
+            }
+        }
+    }
+}
+
+auto handleTrickFinished(Context& ctx, const TrickFinished& trickFinished) -> void
 {
     for (auto&& tricks : trickFinished.tricks()) {
         auto&& playerId = tricks.player_id();
@@ -548,7 +620,7 @@ auto savePlayerIdToLocalStorage(const PlayerId& playerId) -> void
 
 auto onWsOpen(const int eventType, const EmscriptenWebSocketOpenEvent* e, void* userData) -> EM_BOOL
 {
-    INFO("{}, socket: {}", VAR(eventType), e->socket);
+    PREF_INFO("{}, socket: {}", VAR(eventType), e->socket);
     assert(userData);
     auto& ctx = toContext(userData);
 
@@ -564,24 +636,24 @@ auto onWsOpen(const int eventType, const EmscriptenWebSocketOpenEvent* e, void* 
     auto data = msg.SerializeAsString();
     if (const auto error = emscripten_websocket_send_binary(e->socket, data.data(), std::size(data));
         error != EMSCRIPTEN_RESULT_SUCCESS) {
-        WARN("error: could not send {}: {}", VAR(method), what(error));
+        PREF_WARN("error: could not send {}: {}", VAR(method), what(error));
     }
     return EM_TRUE;
 }
 
 auto onWsMessage(const int eventType, const EmscriptenWebSocketMessageEvent* e, void* userData) -> EM_BOOL
 {
-    INFO("{}, socket: {}, numBytes: {}, isText: {}", VAR(eventType), e->socket, e->numBytes, e->isText);
+    PREF_INFO("{}, socket: {}, numBytes: {}, isText: {}", VAR(eventType), e->socket, e->numBytes, e->isText);
     assert(userData);
     auto& ctx = toContext(userData);
 
     if (e->isText) {
-        WARN("error: expect binary data");
+        PREF_WARN("error: expect binary data");
         return EM_TRUE;
     }
     auto msg = Message{};
     if (not msg.ParseFromArray(e->data, static_cast<int>(e->numBytes))) {
-        WARN("Failed to parse Message");
+        PREF_WARN("Failed to parse Message");
         return EM_TRUE;
     }
 
@@ -592,12 +664,12 @@ auto onWsMessage(const int eventType, const EmscriptenWebSocketMessageEvent* e, 
     if (method == "JoinResponse") {
         auto joinResponse = JoinResponse{};
         if (not joinResponse.ParseFromString(payload)) {
-            WARN("Failed to parse JoinResponse");
+            PREF_WARN("Failed to parse JoinResponse");
             return EM_TRUE;
         }
         if (ctx.myPlayerId != joinResponse.player_id()) {
             ctx.myPlayerId = joinResponse.player_id();
-            INFO("save myPlayerId: {}", ctx.myPlayerId);
+            PREF_INFO("save myPlayerId: {}", ctx.myPlayerId);
             savePlayerIdToLocalStorage(ctx.myPlayerId);
         }
 
@@ -619,31 +691,31 @@ auto onWsMessage(const int eventType, const EmscriptenWebSocketMessageEvent* e, 
         auto& playerJoinedId = *playerJoined.mutable_player_id();
         auto& playerJoinedName = *playerJoined.mutable_player_name();
 
-        INFO("New player playerJoined: {} ({})", playerJoinedName, playerJoinedId);
+        PREF_INFO("New player playerJoined: {} ({})", playerJoinedName, playerJoinedId);
         ctx.players.insert_or_assign(std::move(playerJoinedId), Player{std::move(playerJoinedName), {}, {}, {}});
     } else if (msg.method() == "PlayerLeft") {
         auto playerLeft = PlayerLeft{};
         if (not playerLeft.ParseFromString(msg.payload())) {
-            WARN("Failed to parse PlayerLeft");
+            PREF_WARN("Failed to parse PlayerLeft");
             return EM_TRUE;
         }
 
         const auto& id = playerLeft.player_id();
         if (ctx.players.contains(id)) {
-            INFO("Player left: {} ({})", ctx.players[id].name, id);
+            PREF_INFO("Player left: {} ({})", ctx.players[id].name, id);
             ctx.players.erase(id);
-            INFO("Updated player list:");
+            PREF_INFO("Updated player list:");
             for (const auto& [i, player] : ctx.players) {
-                INFO("  - {} ({})", player.name, i);
+                PREF_INFO("  - {} ({})", player.name, i);
             }
         } else {
-            WARN("Player with ID {} left (name unknown)", id);
+            PREF_WARN("Player with ID {} left (name unknown)", id);
         }
         return EM_TRUE;
     } else if (msg.method() == "DealCards") {
         auto dealCards = DealCards{};
         if (not dealCards.ParseFromString(payload)) {
-            WARN("Failed to parse DealCards");
+            PREF_WARN("Failed to parse DealCards");
             return EM_TRUE;
         }
         ctx.reset();
@@ -655,14 +727,14 @@ auto onWsMessage(const int eventType, const EmscriptenWebSocketMessageEvent* e, 
     } else if (msg.method() == "PlayerTurn") {
         auto playerTurn = PlayerTurn{};
         if (not playerTurn.ParseFromString(msg.payload())) {
-            WARN("error: failed to parse PlayerTurn");
+            PREF_WARN("error: failed to parse PlayerTurn");
             return EM_TRUE;
         }
         handlePlayerTurn(ctx, std::move(playerTurn));
     } else if (msg.method() == "Bidding") {
         auto bidding = Bidding{};
         if (not bidding.ParseFromString(msg.payload())) {
-            WARN("error: failed to parse Bidding");
+            PREF_WARN("error: failed to parse Bidding");
             return EM_TRUE;
         }
         const auto& playerId = bidding.player_id();
@@ -673,7 +745,7 @@ auto onWsMessage(const int eventType, const EmscriptenWebSocketMessageEvent* e, 
         }
         ctx.bidding.bid = bid;
         if (not ctx.players.contains(playerId)) {
-            WARN("error: unknown {}", VAR(playerId));
+            PREF_WARN("error: unknown {}", VAR(playerId));
             return EM_TRUE;
         }
         ctx.players[playerId].bid = bid;
@@ -681,12 +753,12 @@ auto onWsMessage(const int eventType, const EmscriptenWebSocketMessageEvent* e, 
     } else if (msg.method() == "Whisting") {
         auto whisting = Whisting{};
         if (not whisting.ParseFromString(msg.payload())) {
-            WARN("error: failed to parse Whisting");
+            PREF_WARN("error: failed to parse Whisting");
             return EM_TRUE;
         }
         const auto& playerId = whisting.player_id();
         if (not ctx.players.contains(playerId)) {
-            WARN("error: unknown {}", VAR(playerId));
+            PREF_WARN("error: unknown {}", VAR(playerId));
             return EM_TRUE;
         }
         const auto& choice = whisting.choice();
@@ -695,26 +767,33 @@ auto onWsMessage(const int eventType, const EmscriptenWebSocketMessageEvent* e, 
     } else if (msg.method() == "PlayCard") {
         auto playCard = PlayCard{};
         if (not playCard.ParseFromString(msg.payload())) {
-            WARN("error: failed to parse PlayCard");
+            PREF_WARN("error: failed to parse PlayCard");
             return EM_TRUE;
         }
         handlePlayCard(ctx, std::move(playCard));
     } else if (msg.method() == "TrickFinished") {
         auto trickFinished = TrickFinished{};
         if (not trickFinished.ParseFromString(msg.payload())) {
-            WARN("error: failed to parse TrickFinished");
+            PREF_WARN("error: failed to parse TrickFinished");
             return EM_TRUE;
         }
         handleTrickFinished(ctx, std::move(trickFinished));
+    } else if (msg.method() == "RoundFinished") {
+        auto roundFinished = RoundFinished{};
+        if (not roundFinished.ParseFromString(msg.payload())) {
+            PREF_WARN("error: failed to parse RoundFinished");
+            return EM_TRUE;
+        }
+        handleRoundFinished(ctx, std::move(roundFinished));
     } else {
-        WARN("error: unknown method: {}", msg.method());
+        PREF_WARN("error: unknown method: {}", msg.method());
     }
     return EM_TRUE;
 }
 
 auto onWsError(const int eventType, const EmscriptenWebSocketErrorEvent* e, void* userData) -> EM_BOOL
 {
-    INFO("{}, socket: {}", VAR(eventType), e->socket);
+    PREF_INFO("{}, socket: {}", VAR(eventType), e->socket);
     assert(userData);
     [[maybe_unused]] auto& ctx = toContext(userData);
 
@@ -723,7 +802,7 @@ auto onWsError(const int eventType, const EmscriptenWebSocketErrorEvent* e, void
 
 auto onWsClosed(const int eventType, const EmscriptenWebSocketCloseEvent* e, void* userData) -> EM_BOOL
 {
-    INFO(
+    PREF_INFO(
         "{}, socket: {}, wasClean: {}, code: {}, reason: {}",
         VAR(eventType),
         e->socket,
@@ -748,7 +827,7 @@ auto onWsClosed(const int eventType, const EmscriptenWebSocketCloseEvent* e, voi
 auto setup_websocket(Context& ctx) -> void
 {
     if (not emscripten_websocket_is_supported()) {
-        WARN("WebSocket is not supported");
+        PREF_WARN("WebSocket is not supported");
         return;
     }
 
@@ -759,7 +838,7 @@ auto setup_websocket(Context& ctx) -> void
 
     ctx.ws = emscripten_websocket_new(&attr);
     if (ctx.ws <= 0) {
-        WARN("Failed to create WebSocket");
+        PREF_WARN("Failed to create WebSocket");
         return;
     }
 
@@ -772,7 +851,7 @@ auto setup_websocket(Context& ctx) -> void
 auto drawGuiLabelCentered(const std::string& text, const RVector2& anchor) -> void
 {
     const auto size
-        = MeasureTextEx(GuiGetFont(), text.c_str(), static_cast<float>(GuiGetStyle(DEFAULT, TEXT_SIZE)), FontSpacing);
+        = MeasureTextEx(GuiGetFont(), text.c_str(), static_cast<float>(GuiGetStyle(DEFAULT, TEXT_SIZE)), fontSpacing);
     auto bounds = RRectangle{
         anchor.x - size.x * 0.5f - 4.0f, // shift left to center and add left padding
         anchor.y - size.y * 0.5f - 4.0f, // shift up to center and add top padding
@@ -785,93 +864,74 @@ auto drawGuiLabelCentered(const std::string& text, const RVector2& anchor) -> vo
 auto drawGameplayScreen(Context& ctx) -> void
 {
     const auto title = ctx.localizeText(GameText::Preferans);
-    const auto fontSize = static_cast<float>(ctx.fontL.baseSize);
-    const auto textSize = ctx.fontL.MeasureText(title, fontSize, FontSpacing);
+    const auto textSize = ctx.fontL.MeasureText(title, ctx.fontSizeL(), fontSpacing);
     const auto x = static_cast<float>(screenWidth - textSize.x) / 2.0f;
-    ctx.fontL.DrawText(title, {x, 20}, fontSize, FontSpacing, getGuiColor(LABEL, TEXT_COLOR_NORMAL));
+    ctx.fontL.DrawText(title, {x, 20.f}, ctx.fontSizeL(), fontSpacing, getGuiColor(LABEL, TEXT_COLOR_NORMAL));
 }
 
 auto drawEnterNameScreen(Context& ctx) -> void
 {
-    constexpr const auto MaxLenghtName = 11;
-    static char nameBuffer[MaxLenghtName] = "";
-    static bool editMode = true;
-    const RVector2 screenCenter = ctx.screen / 2.0f;
-    const float boxWidth = 400.0f;
-    const float boxHeight = 60.0f;
-
-    const RVector2 boxPos{screenCenter.x - boxWidth / 2.0f, screenCenter.y};
-
-    // Label
-    const RVector2 labelPos{boxPos.x, boxPos.y - 40.0f};
-    const auto fontSize = static_cast<float>(ctx.fontM.baseSize);
+    static constexpr auto boxWidth = 400.0f;
+    static constexpr auto boxHeight = 60.0f;
+    const auto screenCenter = ctx.screen / 2.0f;
+    const auto boxPos = RVector2{screenCenter.x - boxWidth / 2.0f, screenCenter.y};
+    const auto labelPos = RVector2{boxPos.x, boxPos.y - 40.0f};
     ctx.fontM.DrawText(
         ctx.localizeText(GameText::EnterYourName),
         labelPos,
-        fontSize,
-        FontSpacing,
+        ctx.fontSizeM(),
+        fontSpacing,
         getGuiColor(LABEL, TEXT_COLOR_NORMAL));
 
-    // Text box
-    RRectangle inputBox = {boxPos, {boxWidth, boxHeight}};
+    const auto inputBox = RRectangle{boxPos, {boxWidth, boxHeight}};
+    static constexpr auto maxLenghtName = 11;
+    static char nameBuffer[maxLenghtName] = "";
+    static auto editMode = true;
     GuiTextBox(inputBox, nameBuffer, sizeof(nameBuffer), editMode);
 
-    // Button
-    RRectangle buttonBox = {boxPos.x, boxPos.y + boxHeight + 20.0f, boxWidth, 40.0f};
-    bool clicked = GuiButton(buttonBox, ctx.localizeText(GameText::Enter).c_str());
-
+    const auto buttonBox = RRectangle{boxPos.x, boxPos.y + boxHeight + 20.0f, boxWidth, 40.0f};
+    const auto clicked = GuiButton(buttonBox, ctx.localizeText(GameText::Enter).c_str());
     // Accept with Enter or button click
     if ((clicked or RKeyboard::IsKeyPressed(KEY_ENTER)) and (nameBuffer[0] != '\0') and editMode) {
         ctx.myPlayerName = nameBuffer;
         ctx.hasEnteredName = true;
         editMode = false; // Disable further typing
-
         setup_websocket(ctx);
     }
 }
 
 auto drawConnectedPlayersPanel(const Context& ctx) -> void
 {
-    // from the left edge
-    const float x = 20.0f;
-    // from the top edge
-    const float y = 20.0f;
-
-    // Set panel dimensions
-    const float width = 240.0f;
-    const float height = 160.0f; // Reduced height to fit 4 names comfortably
-
-    // Define the panel rectangle
-    Rectangle panelRect = {x, y, width, height};
-
-    // Draw the panel (no title bar)
-    GuiPanel(panelRect, nullptr);
-
-    // Start drawing text 10px inside the panel
-    RVector2 textPos = {x + 10.0f, y + 10.0f};
-
-    const auto fontSize = static_cast<float>(ctx.fontS.baseSize);
-    // Draw panel heading
-    ctx.fontS.DrawText(
-        ctx.localizeText(GameText::CurrentPlayers),
-        textPos,
-        fontSize,
-        FontSpacing,
-        getGuiColor(LABEL, TEXT_COLOR_NORMAL));
-
-    // Move text position down for player list
-    textPos.y += 30.0f;
-
+    static constexpr auto margin = 20.0f;
+    static constexpr auto pad = 10.0f;
+    static constexpr auto minWidth = 200.0f;
+    static constexpr auto minHeight = 80.0f;
+    const auto fontSize = ctx.fontSizeS();
+    const auto lineGap = fontSize * 1.2f;
+    const auto headerGap = fontSize * .5f;
+    const auto headerText = ctx.localizeText(GameText::CurrentPlayers);
+    const auto headerSize = ctx.fontS.MeasureText(headerText, fontSize, fontSpacing);
+    auto maxWidth = headerSize.x;
+    for (const auto& [_, player] : ctx.players) {
+        const auto sz = ctx.fontS.MeasureText(player.name, fontSize, fontSpacing);
+        if (sz.x > maxWidth)
+            maxWidth = sz.x;
+    }
+    const auto rows = std::size(ctx.players);
+    const auto contentW = pad * 2.0f + maxWidth;
+    const auto contentH = pad * 2.0f + headerSize.y + headerGap + static_cast<float>(rows) * lineGap;
+    const auto panelW = std::max(minWidth, contentW);
+    const auto panelH = std::max(minHeight, contentH);
+    const auto r = RRectangle{{margin, margin}, {panelW, panelH}};
+    GuiPanel(r, nullptr);
+    auto textPos = RVector2{r.x + pad, r.y + pad};
+    ctx.fontS.DrawText(headerText, textPos, fontSize, fontSpacing, getGuiColor(LABEL, TEXT_COLOR_NORMAL));
+    textPos.y += headerSize.y + headerGap;
     for (const auto& [id, player] : ctx.players) {
-        const auto& name = player.name;
-        // Highlight the current player's name
-        Color color = (id == ctx.myPlayerId) ? getGuiColor(DEFAULT, TEXT_COLOR_NORMAL)
-                                             : getGuiColor(DEFAULT, TEXT_COLOR_DISABLED);
-        // Draw the player's name
-        ctx.fontS.DrawText(name, textPos, fontSize, FontSpacing, color);
-
-        // Move down for the next name
-        textPos.y += 24.0f;
+        const auto color = (id == ctx.myPlayerId) ? getGuiColor(DEFAULT, TEXT_COLOR_NORMAL)
+                                                  : getGuiColor(DEFAULT, TEXT_COLOR_DISABLED);
+        ctx.fontS.DrawText(player.name, textPos, fontSize, fontSpacing, color);
+        textPos.y += lineGap;
     }
 }
 
@@ -887,7 +947,7 @@ auto playCard(Context& ctx, const CardName& cardName) -> void
     auto data = msg.SerializeAsString();
     if (const auto error = emscripten_websocket_send_binary(ctx.ws, data.data(), std::size(data));
         error != EMSCRIPTEN_RESULT_SUCCESS) {
-        WARN("error: could not send {}: {}", VAR(method), what(error));
+        PREF_WARN("error: could not send {}: {}", VAR(method), what(error));
     }
 }
 
@@ -903,7 +963,7 @@ auto sendBidding(Context& ctx, const std::string_view bid) -> void
     auto data = msg.SerializeAsString();
     if (const auto error = emscripten_websocket_send_binary(ctx.ws, data.data(), std::size(data));
         error != EMSCRIPTEN_RESULT_SUCCESS) {
-        WARN("could not send {}: {}", VAR(method), what(error));
+        PREF_WARN("could not send {}: {}", VAR(method), what(error));
     }
 }
 
@@ -919,7 +979,7 @@ auto sendWhisting(Context& ctx, const std::string_view choice) -> void
     auto data = msg.SerializeAsString();
     if (const auto error = emscripten_websocket_send_binary(ctx.ws, data.data(), std::size(data));
         error != EMSCRIPTEN_RESULT_SUCCESS) {
-        WARN("could not send {}: {}", VAR(method), what(error));
+        PREF_WARN("could not send {}: {}", VAR(method), what(error));
     }
 }
 
@@ -938,7 +998,7 @@ auto discardTalon(Context& ctx, const std::string_view bid) -> void
     auto data = msg.SerializeAsString();
     if (const auto error = emscripten_websocket_send_binary(ctx.ws, data.data(), std::size(data));
         error != EMSCRIPTEN_RESULT_SUCCESS) {
-        WARN("could not send {}: {}", VAR(method), what(error));
+        PREF_WARN("could not send {}: {}", VAR(method), what(error));
     }
 }
 
@@ -966,19 +1026,18 @@ auto discardTalon(Context& ctx, const std::string_view bid) -> void
 auto drawMyHand(Context& ctx) -> void
 {
     auto& hand = ctx.player.cards;
-    const auto totalWidth = static_cast<float>(std::size(hand) - 1) * cardOverlapX + cardWidth;
+    const auto totalWidth = static_cast<float>(std::ssize(hand) - 1) * cardOverlapX + cardWidth;
     const auto startX = (screenWidth - totalWidth) / 2.0f;
     const auto y = screenHeight - cardHeight - 20.0f; // bottom padding
-    const auto fontSize = static_cast<float>(ctx.fontM.baseSize);
     const auto tricksTaken = ctx.players.at(ctx.myPlayerId).tricksTaken;
     const auto name = fmt::format(
         "{}{}{}",
         ctx.turnPlayerId == ctx.myPlayerId ? fmt::format("{} ", ARROW_RIGHT) : "",
         ctx.myPlayerName,
         tricksTaken != 0 ? fmt::format(" ({})", tricksTaken) : "");
-    const auto size = ctx.fontM.MeasureText(name, fontSize, FontSpacing);
+    const auto size = ctx.fontM.MeasureText(name, ctx.fontSizeM(), fontSpacing);
 
-    auto label = Rectangle{
+    auto label = RRectangle{
         startX - size.x - 20.0f, // to the left of the first card
         y + cardHeight * 0.5f - size.y * 0.5f - 4, // vertically centred on the card
         size.x + 8.0f,
@@ -987,8 +1046,8 @@ auto drawMyHand(Context& ctx) -> void
 
     if (ctx.turnPlayerId == ctx.myPlayerId) {
         const auto text = ctx.localizeText(GameText::YourTurn);
-        const auto textSize = ctx.fontM.MeasureText(text, fontSize, FontSpacing);
-        const auto rect = Rectangle{
+        const auto textSize = ctx.fontM.MeasureText(text, ctx.fontSizeM(), fontSpacing);
+        const auto rect = RRectangle{
             startX + (totalWidth - textSize.x) * 0.5f - 4.0f, // horizontally centered
             y - textSize.y - 12.0f, // above the cards
             textSize.x + 8.0f,
@@ -1006,13 +1065,13 @@ auto drawMyHand(Context& ctx) -> void
     }
     // cards themselves
     for (auto&& [i, card] : hand | rv::enumerate) {
-        const float x = startX + static_cast<float>(i) * cardOverlapX;
+        const auto x = startX + static_cast<float>(i) * cardOverlapX;
         card.position = RVector2{x, y};
         card.texture.Draw(card.position, tintForCard(ctx, card));
     }
     if (not std::empty(ctx.player.whistingChoice)) {
         const auto text = ctx.localizeText(whistingChoiceToGameText(ctx.player.whistingChoice));
-        const auto textSize = ctx.fontM.MeasureText(text, fontSize, FontSpacing);
+        const auto textSize = ctx.fontM.MeasureText(text, ctx.fontSizeM(), fontSpacing);
         auto anchor = RVector2{
             startX + totalWidth + 20.0f + textSize.x * 0.5f, // right of last card
             y + cardHeight * 0.5f - textSize.y * 0.5f // vertically centered
@@ -1022,7 +1081,7 @@ auto drawMyHand(Context& ctx) -> void
     }
     if (not std::empty(ctx.player.bid)) {
         auto text = std::string{ctx.localizeBid(ctx.player.bid)};
-        const auto textSize = ctx.fontM.MeasureText(text, fontSize, FontSpacing);
+        const auto textSize = ctx.fontM.MeasureText(text, ctx.fontSizeM(), fontSpacing);
         auto anchor = RVector2{
             startX + totalWidth + 20.0f + textSize.x * 0.5f, // right of last card
             y + cardHeight * 0.5f - textSize.y * 0.5f // vertically centered
@@ -1044,16 +1103,16 @@ auto drawOpponentHand(Context& ctx, const int cardCount, const float x, const Pl
         return;
     }
     const auto countF = static_cast<float>(cardCount);
-    const float startY = (screenHeight - cardHeight - (countF - 1.0f) * cardOverlapY) * 0.5f;
+    const auto startY = (screenHeight - cardHeight - (countF - 1.0f) * cardOverlapY) * 0.5f;
 
     // draw back-faces
-    for (float i = 0.0f; i < countF; ++i) {
+    for (auto i = 0.0f; i < countF; ++i) {
         const auto posY = startY + i * cardOverlapY;
         ctx.backCard.texture.Draw(RVector2{x, posY});
     }
     // centred name plate above the topmost card
     const auto fontSize = static_cast<float>(GuiGetStyle(DEFAULT, TEXT_SIZE));
-    const float centerX = x + (cardWidth * 0.5f);
+    const auto centerX = x + (cardWidth * 0.5f);
     auto anchor = RVector2{centerX, startY - fontSize};
     {
         if (ctx.turnPlayerId == playerId) {
@@ -1078,14 +1137,14 @@ auto drawOpponentHand(Context& ctx, const int cardCount, const float x, const Pl
         }
     }
     if (const auto& choice = ctx.players.at(playerId).whistingChoice; not std::empty(choice)) {
-        const float endY = startY + (countF - 1.0f) * cardOverlapY + cardHeight;
+        const auto endY = startY + (countF - 1.0f) * cardOverlapY + cardHeight;
         anchor = RVector2{centerX, endY + fontSize};
         const auto text = ctx.localizeText(whistingChoiceToGameText(choice));
         drawGuiLabelCentered(text, anchor);
         return;
     }
     if (const auto& bid = ctx.players.at(playerId).bid; not std::empty(bid)) {
-        const float endY = startY + (countF - 1.0f) * cardOverlapY + cardHeight;
+        const auto endY = startY + (countF - 1.0f) * cardOverlapY + cardHeight;
         anchor = RVector2{centerX, endY + fontSize};
         auto text = std::string{ctx.localizeBid(bid)};
         drawGuiLabelCentered(text, anchor);
@@ -1179,9 +1238,8 @@ auto drawBiddingMenu(Context& ctx) -> void
             const auto textColor = getGuiColor(BUTTON, GUI_PROPERTY(TEXT, state));
             rect.Draw(bgColor);
             rect.DrawLines(borderColor, static_cast<float>(GuiGetStyle(BUTTON, BORDER_WIDTH)));
-            const auto fontSize = static_cast<float>(ctx.fontM.baseSize);
             auto text = std::string{ctx.localizeBid(bid)};
-            auto textSize = ctx.fontM.MeasureText(text, fontSize, FontSpacing);
+            auto textSize = ctx.fontM.MeasureText(text, ctx.fontSizeM(), fontSpacing);
             const auto textX = rect.x + (rect.width - textSize.x) / 2.0f;
             const auto textY = rect.y + (rect.height - textSize.y) / 2.0f;
             if (isRedSuit(text)) {
@@ -1197,12 +1255,13 @@ auto drawBiddingMenu(Context& ctx) -> void
                 auto size = 0;
                 auto str = CodepointToUTF8(codepoints[count - 1], &size);
                 auto suitText = std::string(str, gsl::narrow_cast<std::size_t>(size));
-                ctx.fontM.DrawText(rankText, {textX, textY}, fontSize, FontSpacing, textColor);
-                const auto rankSize = ctx.fontM.MeasureText(rankText, fontSize, FontSpacing);
+                ctx.fontM.DrawText(rankText, {textX, textY}, ctx.fontSizeM(), fontSpacing, textColor);
+                const auto rankSize = ctx.fontM.MeasureText(rankText, ctx.fontSizeM(), fontSpacing);
                 const auto suitColor = state == STATE_DISABLED ? RColor::Red().Alpha(0.4f) : RColor::Red();
-                ctx.fontM.DrawText(suitText.c_str(), {textX + rankSize.x, textY}, fontSize, FontSpacing, suitColor);
+                ctx.fontM.DrawText(
+                    suitText.c_str(), {textX + rankSize.x, textY}, ctx.fontSizeM(), fontSpacing, suitColor);
             } else {
-                ctx.fontM.DrawText(text, {textX, textY}, fontSize, FontSpacing, textColor);
+                ctx.fontM.DrawText(text, {textX, textY}, ctx.fontSizeM(), fontSpacing, textColor);
             }
             if (clicked and (state != STATE_DISABLED)) {
                 ctx.bidding.bid = bid;
@@ -1250,12 +1309,11 @@ auto drawWhistingMenu(Context& ctx) -> void
         const auto textColor = getGuiColor(BUTTON, GUI_PROPERTY(TEXT, state));
         rect.Draw(bgColor);
         rect.DrawLines(borderColor, static_cast<float>(GuiGetStyle(BUTTON, BORDER_WIDTH)));
-        const auto fontSize = static_cast<float>(ctx.fontM.baseSize);
         const auto text = ctx.localizeText(whistingFlat[i]);
-        const auto textSize = ctx.fontM.MeasureText(text, fontSize, FontSpacing);
+        const auto textSize = ctx.fontM.MeasureText(text, ctx.fontSizeM(), fontSpacing);
         const auto textX = rect.x + (rect.width - textSize.x) / 2.0f;
         const auto textY = rect.y + (rect.height - textSize.y) / 2.0f;
-        ctx.fontM.DrawText(text, {textX, textY}, fontSize, FontSpacing, textColor);
+        ctx.fontM.DrawText(text, {textX, textY}, ctx.fontSizeM(), fontSpacing, textColor);
         if (clicked) {
             ctx.whisting.isVisible = false;
             ctx.whisting.choice = localizeText(whistingFlat[i], GameLang::English);
@@ -1278,7 +1336,7 @@ auto handleCardClick(Context& ctx, Action act) -> void
     if (const auto rit = rng::find_if(reversed, hit); rit != rng::cend(reversed)) {
         const auto it = std::next(rit).base();
         if (not isCardPlayable(ctx, *it)) {
-            WARN("Can't play this card: {}", it->name);
+            PREF_WARN("Can't play this card: {}", it->name);
             return;
         }
         const auto _ = gsl::finally([&] { ctx.player.cards.erase(it); });
@@ -1326,9 +1384,9 @@ auto setDefaultFont(Context& ctx) -> void
 
 auto loadFonts(Context& ctx) -> void
 {
-    static constexpr const auto FontSizeS = 20;
-    static constexpr const auto FontSizeM = 36;
-    static constexpr const auto FontSizeL = 96;
+    static constexpr auto FontSizeS = 20;
+    static constexpr auto FontSizeM = 36;
+    static constexpr auto FontSizeL = 96;
     const auto fontPath = "resources/fonts/DejaVuSans.ttf";
     auto codepoints = makeCodepoints();
     ctx.fontS = LoadFontEx(fontPath, FontSizeS, std::data(codepoints), std::ssize(codepoints));
@@ -1411,22 +1469,22 @@ auto drawSettingsMenu(Context& ctx) -> void
     const auto colorSchemesH = (std::ssize(colorSchemes) + 1) * rowH;
     const auto langsH = (std::ssize(langs) + 1) * rowH;
     const auto totalH = headerH + footerH + labelH + labelGap + langsH + spacing + labelH + labelGap + colorSchemesH;
-    const auto panelBounds = Rectangle{60, 60, 420, static_cast<float>(totalH)};
+    const auto panelBounds = RRectangle{60, 60, 420, static_cast<float>(totalH)};
     setFont(ctx.fontS);
     GuiPanel(panelBounds, ctx.localizeText(GameText::Settings).c_str());
-    const auto inner = Rectangle{
+    const auto inner = RRectangle{
         panelBounds.x + margin,
         panelBounds.y + headerH,
         panelBounds.width - margin * 2,
         panelBounds.height - headerH - footerH};
 
-    const auto langsLabelBounds = Rectangle{inner.x, inner.y, inner.width, static_cast<float>(labelH)};
+    const auto langsLabelBounds = RRectangle{inner.x, inner.y, inner.width, static_cast<float>(labelH)};
     auto prev = GuiGetStyle(LABEL, TEXT_COLOR_NORMAL);
     GuiSetStyle(LABEL, TEXT_COLOR_NORMAL, GuiGetStyle(LABEL, TEXT_COLOR_PRESSED));
     GuiLabel(langsLabelBounds, ctx.localizeText(GameText::Language).c_str());
     GuiSetStyle(LABEL, TEXT_COLOR_NORMAL, prev);
     const auto joinedLangs = langs | ranges::views::intersperse(";") | ranges::views::join | ranges::to<std::string>;
-    const auto langsBounds = Rectangle{
+    const auto langsBounds = RRectangle{
         inner.x, langsLabelBounds.y + langsLabelBounds.height + labelGap, inner.width, static_cast<float>(langsH)};
     GuiListView(langsBounds, joinedLangs.c_str(), &ctx.settingsMenu.langIdScroll, &ctx.settingsMenu.langIdSelect);
     if (ctx.settingsMenu.langIdSelect >= 0 //
@@ -1439,14 +1497,14 @@ auto drawSettingsMenu(Context& ctx) -> void
     }
 
     const auto colorSchemeLabelBounds
-        = Rectangle{inner.x, langsBounds.y + langsBounds.height + spacing, inner.width, static_cast<float>(labelH)};
+        = RRectangle{inner.x, langsBounds.y + langsBounds.height + spacing, inner.width, static_cast<float>(labelH)};
     prev = GuiGetStyle(LABEL, TEXT_COLOR_NORMAL);
     GuiSetStyle(LABEL, TEXT_COLOR_NORMAL, GuiGetStyle(LABEL, TEXT_COLOR_PRESSED));
     GuiLabel(colorSchemeLabelBounds, ctx.localizeText(GameText::ColorScheme).c_str());
     GuiSetStyle(LABEL, TEXT_COLOR_NORMAL, prev);
     const auto joinedColorSchemes
         = colorSchemes | ranges::views::intersperse(";") | ranges::views::join | ranges::to<std::string>;
-    const auto colorSchemesBounds = Rectangle{
+    const auto colorSchemesBounds = RRectangle{
         inner.x,
         colorSchemeLabelBounds.y + colorSchemeLabelBounds.height + labelGap,
         inner.width,
@@ -1466,12 +1524,76 @@ auto drawSettingsMenu(Context& ctx) -> void
         }
     }
 
-    const auto okBounds = Rectangle{
+    const auto okBounds = RRectangle{
         inner.x + inner.width - 90, panelBounds.y + panelBounds.height - footerH + (footerH - 28) * 0.5f, 90, 28};
     if (GuiButton(okBounds, "OK")) {
         ctx.settingsMenu.isVisible = false;
     }
     setDefaultFont(ctx);
+}
+
+auto drawScoreSheetButton(Context& ctx) -> void
+{
+    static constexpr auto buttonW = screenWidth / 13.f;
+    static constexpr auto buttonH = buttonW / 2.f;
+    static constexpr auto gap = buttonH / 2.f;
+    const auto bounds = RRectangle{screenWidth - buttonW - gap, screenHeight - buttonH - gap, buttonW, buttonH};
+    if (GuiButton(bounds, ctx.localizeText(GameText::ScoreSheet).c_str())) {
+        // TODO: disable interaction with all other elements while the score sheet is open
+        ctx.scoreSheet.isVisible = ctx.scoreSheet.isVisible ? false : true;
+    }
+}
+
+auto drawScoreSheet(Context& ctx) -> void
+{
+    drawScoreSheetButton(ctx);
+    if (not ctx.scoreSheet.isVisible) {
+        return;
+    }
+    static constexpr auto fSpace = fontSpacing;
+    static constexpr auto rotateL = 90.f;
+    static constexpr auto rotateR = 270.f;
+    const auto center = RVector2{screenWidth / 2.f, screenHeight / 2.f};
+    const auto sheetS = center.y * 1.5f;
+    const auto sheet = RVector2{center.x - sheetS / 2.f, center.y - sheetS / 2.f};
+    const auto radius = sheetS / 20.f;
+    const auto thick = static_cast<float>(GuiGetStyle(BUTTON, BORDER_WIDTH));
+    const auto r = RRectangle{sheet.x, sheet.y, sheetS, sheetS};
+    const auto rr = RRectangle{r.x + sheetS / 6.f, r.y, sheetS - sheetS / 3.f, sheetS - sheetS / 6.f};
+    const auto rrr = RRectangle{r.x + sheetS / 3.f, r.y, sheetS - sheetS / 1.5f, sheetS - sheetS / 3.f};
+    const auto borderColor = getGuiColor(DEFAULT, BORDER_COLOR_NORMAL);
+    const auto sheetColor = getGuiColor(DEFAULT, BASE_COLOR_NORMAL);
+    const auto fSize = ctx.fontSizeM();
+    const auto c = getGuiColor(LABEL, TEXT_COLOR_NORMAL);
+    const auto gap = fSize / 4.f;
+    const auto& font = ctx.fontM;
+    r.Draw(sheetColor);
+    r.DrawLines(borderColor, thick);
+    rr.DrawLines(borderColor, thick);
+    rrr.DrawLines(borderColor, thick);
+    center.DrawLine({r.x + thick, r.y + r.height - thick}, thick, borderColor);
+    center.DrawLine({r.x + r.width - thick, r.y + r.height - thick}, thick, borderColor);
+    center.DrawLine({r.x + r.width / 2.f, r.y}, thick, borderColor);
+    center.DrawLine({r.x + r.width / 2.f, r.y}, thick, borderColor);
+    center.DrawCircle(radius, borderColor);
+    center.DrawCircle(radius - thick, sheetColor);
+    RVector2{r.x, center.y}.DrawLine({rr.x, center.y}, thick, borderColor);
+    RVector2{r.x + r.width, center.y}.DrawLine({rr.x + rr.width, center.y}, thick, borderColor);
+    RVector2{center.x, r.y + r.height}.DrawLine({center.x, rr.y + rr.height}, thick, borderColor);
+    font.DrawText("L. W. On R.", {rr.x, rr.y + gap}, {}, rotateL, fSize, fSpace, c);
+    font.DrawText("L. W. On M.", {rr.x, center.y + gap}, {}, rotateL, fSize, fSpace, c);
+    font.DrawText("L. P.", {rrr.x, rrr.y + gap}, {}, rotateL, fSize, fSpace, c);
+    font.DrawText("L. D.", {center.x, r.y + gap}, {}, rotateL, fSize, fSpace, c);
+    font.DrawText("R. W. on L.", {rr.x + rr.width, center.y - gap}, {}, rotateR, fSize, fSpace, c);
+    font.DrawText("R. W. on M.", {rr.x + rr.width, rr.y + rr.height - gap}, {}, rotateR, fSize, fSpace, c);
+    font.DrawText("R. P.", {rrr.x + rrr.width, rrr.y + rrr.height - gap}, {}, rotateR, fSize, fSpace, c);
+    font.DrawText("R. D.", {center.x, center.y - radius - gap}, {}, rotateR, fSize, fSpace, c);
+    font.DrawText("M. W on L.", {rr.x + gap, rr.y + rr.height}, fSize, fSpace, c);
+    font.DrawText("M. W on R.", {center.x + gap, rr.y + rr.height}, fSize, fSpace, c);
+    font.DrawText("M. P.", {rrr.x + gap, rrr.y + rrr.height}, fSize, fSpace, c);
+    font.DrawText("M. D.", {rrr.x + radius, rrr.y + rrr.height - fSize}, fSize, fSpace, c);
+    font.DrawText("10", {center.x - radius / 2.f, center.y - radius / 2.f}, fSize, fSpace, c);
+    // TODO: don't hardcode the above value
 }
 
 auto updateDrawFrame(void* userData) -> void
@@ -1505,6 +1627,7 @@ auto updateDrawFrame(void* userData) -> void
         }
     }
     ctx.window.BeginDrawing();
+
     ctx.window.ClearBackground(getGuiColor(DEFAULT, BACKGROUND_COLOR));
     drawSettingsMenu(ctx);
     drawBiddingMenu(ctx);
@@ -1515,7 +1638,7 @@ auto updateDrawFrame(void* userData) -> void
         ctx.window.EndDrawing();
         return;
     }
-    if (std::size(ctx.players) == 3U) {
+    if (ctx.areAllPlayersJoined()) {
         drawMyHand(ctx);
         auto leftX = 80.0f;
         auto rightX = screenWidth - cardWidth - leftX;
@@ -1523,6 +1646,7 @@ auto updateDrawFrame(void* userData) -> void
         drawOpponentHand(ctx, ctx.leftCardCount, leftX, leftId, false);
         drawOpponentHand(ctx, ctx.rightCardCount, rightX, rightId, true);
         drawPlayedCards(ctx);
+        drawScoreSheet(ctx);
     } else {
         drawConnectedPlayersPanel(ctx);
     }

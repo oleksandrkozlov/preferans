@@ -1,9 +1,12 @@
 #pragma once
 
+#include "common/common.hpp"
 #include "common/logger.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
+#include <fmt/core.h>
+#include <fmt/format.h>
 #include <fmt/std.h>
 
 #include <cstdint>
@@ -22,7 +25,10 @@ namespace web = beast::websocket;
 namespace sys = boost::system;
 
 namespace boost::system {
-[[nodiscard]] inline auto format_as(const error_code& error) -> std::string // NOLINT(readability-identifier-naming)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunneeded-internal-declaration"
+// NOLINTNEXTLINE(readability-identifier-naming, misc-use-anonymous-namespace)
+[[maybe_unused]] inline auto format_as(const error_code& error) -> std::string
 {
     return error.message();
 }
@@ -33,7 +39,6 @@ namespace pref {
 
 using SteadyTimer = net::steady_timer;
 using Stream = web::stream<beast::tcp_stream>;
-using CardName = std::string;
 using Hand = std::set<CardName>;
 
 template<typename T = void>
@@ -48,8 +53,8 @@ struct PlayerSession {
 };
 
 struct Player {
-    using Id = std::string;
-    using Name = std::string;
+    using Id = PlayerId;
+    using Name = PlayerName;
 
     Player() = default;
     Player(Id aId, Name aName, PlayerSession::Id aSessionId, const std::shared_ptr<Stream>& aWs);
@@ -61,7 +66,7 @@ struct Player {
     std::optional<SteadyTimer> reconnectTimer;
     Hand hand;
     std::string bid;
-    std::string whistingChoice;
+    std::string whistChoice;
     int tricksTaken{};
 };
 
@@ -69,6 +74,48 @@ struct PlayedCard {
     Player::Id playerId;
     CardName name;
 };
+
+enum class WhistChoise {
+    Pass,
+    Whist,
+    HalfWhist, // 6-7 contracts
+};
+
+struct Whister {
+    Player::Id id;
+    WhistChoise choise = WhistChoise::Pass;
+    int tricksTaken{};
+};
+
+enum class ContractLevel {
+    Six,
+    Seven,
+    Eight,
+    Nine,
+    Ten,
+    Miser,
+};
+
+struct Declarer {
+    Player::Id id;
+    ContractLevel contractLevel = ContractLevel::Six;
+};
+
+struct ScoreEntry {
+    auto operator<=>(const ScoreEntry&) const = default;
+
+    int dump{};
+    int pool{};
+    int whist{};
+};
+
+struct Score {
+    std::vector<std::int32_t> dump;
+    std::vector<std::int32_t> pool;
+    std::map<Player::Id, std::vector<std::int32_t>> whists;
+};
+
+using ScoreSheet = std::map<Player::Id, Score>;
 
 struct Context {
     using Players = std::map<Player::Id, Player>;
@@ -84,6 +131,7 @@ struct Context {
     std::vector<PlayedCard> trick;
     std::string trump;
     Player::Id forehandId;
+    ScoreSheet scoreSheet;
 };
 
 constexpr auto Detached = [](const std::string_view func) { // NOLINT(fuchsia-statically-constructed-objects)
@@ -95,12 +143,12 @@ constexpr auto Detached = [](const std::string_view func) { // NOLINT(fuchsia-st
             std::rethrow_exception(eptr);
         } catch (const sys::system_error& error) {
             if (error.code() != net::error::operation_aborted) {
-                WARN("[{}][Detached] error: {}", func, error);
+                PREF_WARN("[{}][Detached] error: {}", func, error);
             }
         } catch (const std::exception& error) {
-            WARN("[{}][Detached] error: {}", func, error);
+            PREF_WARN("[{}][Detached] error: {}", func, error);
         } catch (...) {
-            WARN("[{}][Detached] error: unknown", func);
+            PREF_WARN("[{}][Detached] error: unknown", func);
         }
     };
 };
@@ -115,7 +163,22 @@ struct Beat {
 [[nodiscard]] auto beats(Beat beat) -> bool;
 
 [[nodiscard]] auto finishTrick(const std::vector<PlayedCard>& trick, std::string_view trump) -> Player::Id;
+[[nodiscard]] auto calculateScoreEntry(const Declarer& declarer, const std::vector<Whister>& whisters)
+    -> std::map<Player::Id, ScoreEntry>;
 
 auto acceptConnectionAndLaunchSession(Context& ctx, net::ip::tcp::endpoint endpoint) -> Awaitable<>;
+
+// NOLINTNEXTLINE
+[[maybe_unused]] auto inline format_as(const ScoreEntry& entry) -> std::string
+{
+    return fmt::format("dump: {}, pool: {}, whist: {}", entry.dump, entry.pool, entry.whist);
+}
+
+// NOLINTNEXTLINE
+[[maybe_unused]] auto inline format_as(const std::map<Player::Id, ScoreEntry>& scoreEntry) -> std::string
+{ // clang-format off
+    return fmt::format("{}", fmt::join(scoreEntry
+        | rv::transform(unpack([](const auto& k, const auto& v) { return fmt::format("{}: {}", k, v); })), "\n"));
+} // clang-format on
 
 }; // namespace pref

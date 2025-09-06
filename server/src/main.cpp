@@ -51,7 +51,7 @@ int main(const int argc, const char* const argv[])
         loop.run();
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
-        ERROR("{}", VAR(error));
+        PREF_ERROR("{}", VAR(error));
         return EXIT_FAILURE;
     }
 }

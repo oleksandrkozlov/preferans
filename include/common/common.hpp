@@ -1,5 +1,7 @@
 #pragma once
 
+#include <range/v3/all.hpp>
+
 #include <map>
 #include <string>
 #include <string_view>
@@ -37,9 +39,23 @@ namespace pref {
 #define MISER_WT "Mis." WT
 #define PASS "Pass"
 
+#define WHIST "Whist"
+#define HALF_WHIST "Half-Whist"
+
 #define _OF_ "_of_"
 
 // NOLINTEND(cppcoreguidelines-macro-usage)
+
+using namespace std::literals;
+namespace rng = ranges;
+namespace rv = rng::views;
+
+using CardName = std::string;
+using PlayerId = std::string;
+using PlayerName = std::string;
+
+// TODO: Support 4 players
+constexpr auto NumberOfPlayers = 3uz;
 
 [[nodiscard]] inline auto cardSuit(const std::string_view card) -> std::string
 {
@@ -66,6 +82,12 @@ namespace pref {
     if (bid.contains(HEART)) { return HEARTS; }
     if (bid.contains(DIAMOND)) { return DIAMONDS; }
     return {}; // clang-format on
+}
+
+template<typename Callable>
+[[maybe_unused]] [[nodiscard]] auto unpack(Callable callable)
+{
+    return [cb = std::move(callable)](const auto& pair) { return cb(pair.first, pair.second); };
 }
 
 } // namespace pref

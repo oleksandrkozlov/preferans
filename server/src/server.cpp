@@ -1,6 +1,5 @@
 #include "server.hpp"
 
-#include "common/common.hpp"
 #include "proto/pref.pb.h"
 
 #include <boost/uuid/random_generator.hpp>
@@ -9,37 +8,26 @@
 #include <range/v3/all.hpp>
 
 #include <array>
+#include <gsl/assert>
 #include <gsl/gsl>
 #include <iterator>
-
-namespace rng = ranges;
-namespace rv = rng::views;
-
-using namespace std::literals;
+#include <utility>
 
 namespace pref {
 namespace {
 
 // NOLINTBEGIN(performance-unnecessary-value-param, cppcoreguidelines-avoid-reference-coroutine-parameters)
 
-constexpr auto NumberOfPlayers = 3UZ;
-
 using TcpAcceptor = net::ip::tcp::acceptor;
 
 auto trickFinished(Context& ctx) -> Awaitable<>;
 auto roundFinished(Context& ctx) -> Awaitable<>;
 
-template<typename Callable>
-[[maybe_unused]] [[nodiscard]] auto unpack(Callable callable)
-{
-    return [cb = std::move(callable)](const auto& pair) { return cb(pair.first, pair.second); };
-}
-
 [[nodiscard]] auto makeMessage(const beast::flat_buffer& buffer) -> std::optional<Message>
 {
     auto result = Message{};
     if (not result.ParseFromArray(buffer.data().data(), gsl::narrow<int>(buffer.size()))) {
-        WARN("error: failed to make Message");
+        PREF_WARN("error: failed to make Message");
         return {};
     }
     return result;
@@ -106,6 +94,26 @@ auto setNextRoundTurn(Context& ctx) -> void
     return winnerId;
 }
 
+[[nodiscard]] auto makeRoundFinished(const Context& ctx) -> RoundFinished
+{
+    auto result = pref::RoundFinished{};
+    for (const auto& [playerId, score] : ctx.scoreSheet) {
+        auto& data = (*result.mutable_score_sheet())[playerId];
+        for (const auto value : score.dump) {
+            data.mutable_dump()->add_values(value);
+        }
+        for (const auto value : score.pool) {
+            data.mutable_pool()->add_values(value);
+        }
+        for (const auto& [whistPlayerId, values] : score.whists) {
+            for (const auto value : values) {
+                (*data.mutable_whists())[whistPlayerId].add_values(value);
+            }
+        }
+    }
+    return result;
+}
+
 [[nodiscard]] auto isNewPlayer(const Player::Id& playerId, Context::Players& players) -> bool
 {
     return std::empty(playerId) or not players.contains(playerId);
@@ -125,7 +133,7 @@ auto sendToMany(const Message& msg, const std::vector<std::shared_ptr<Stream>>& 
 {
     for (const auto& ws : wss) {
         if (const auto error = co_await sendToOne(msg, ws)) {
-            WARN("{}: failed to send message", VAR(error));
+            PREF_WARN("{}: failed to send message", VAR(error));
         }
     }
 }
@@ -171,7 +179,7 @@ auto prepareNewSession(const Player::Id& playerId, Context::Players& players, Pl
     if (const auto [error] = co_await player.ws->async_close(
             web::close_reason(web::close_code::policy_error, "Another tab connected"), net::as_tuple);
         error) {
-        WARN("{}: failed to close ws", VAR(error));
+        PREF_WARN("{}: failed to close ws", VAR(error));
     }
 }
 
@@ -195,7 +203,7 @@ auto joined(Context& ctx, Message msg, const std::shared_ptr<Stream> ws) -> Awai
 {
     auto joinRequest = JoinRequest{};
     if (not joinRequest.ParseFromString(msg.payload())) {
-        WARN("error: failed to parse JoinRequest");
+        PREF_WARN("error: failed to parse JoinRequest");
         co_return PlayerSession{};
     }
     auto session = PlayerSession{};
@@ -219,7 +227,7 @@ auto joined(Context& ctx, Message msg, const std::shared_ptr<Stream> ws) -> Awai
     msg.set_method("JoinResponse");
     msg.set_payload(joinResponse.SerializeAsString());
     if (const auto error = co_await sendToOne(msg, ws)) {
-        WARN("{}: failed to send JoinResponse", VAR(error));
+        PREF_WARN("{}: failed to send JoinResponse", VAR(error));
     }
     if (playerId == session.playerId) {
         co_return session;
@@ -308,7 +316,7 @@ auto cardPlayed(Context& ctx, const Message& msg) -> Awaitable<>
 {
     auto playCard = PlayCard{};
     if (not playCard.ParseFromString(msg.payload())) {
-        WARN("error: failed to parse PlayCard");
+        PREF_WARN("error: failed to parse PlayCard");
         co_return;
     }
     const auto& playerId = playCard.player_id();
@@ -325,7 +333,7 @@ auto cardPlayed(Context& ctx, const Message& msg) -> Awaitable<>
         co_await trickFinished(ctx);
         ctx.whoseTurnIt = ctx.players.find(winnerId);
         if (rng::all_of(ctx.players | rv::values, &Hand::empty, &Player::hand)) {
-            INFO("End of the deal");
+            PREF_INFO("End of the deal");
             co_await roundFinished(ctx);
             co_await dealCards(ctx);
             setNextRoundTurn(ctx);
@@ -342,7 +350,7 @@ auto cardPlayed(Context& ctx, const Message& msg) -> Awaitable<>
 {
     auto discardTalon = DiscardTalon{};
     if (not discardTalon.ParseFromString(msg.payload())) {
-        WARN("error: failed to parse DiscardTalon");
+        PREF_WARN("error: failed to parse DiscardTalon");
         // TODO: throw?
         return {};
     }
@@ -372,7 +380,7 @@ auto disconnected(Context& ctx, const Player::Id playerId) -> Awaitable<>
         co_return;
     }
     assert(ctx.players.contains(playerId) and "player exists");
-    INFO("removed {} after timeout", VAR(playerId));
+    PREF_INFO("removed {} after timeout", VAR(playerId));
     ctx.players.erase(playerId);
     auto playerLeft = PlayerLeft{};
     playerLeft.set_player_id(playerId);
@@ -386,7 +394,7 @@ auto bid(Context& ctx, const Message& msg) -> Awaitable<>
 {
     auto bidding = Bidding{};
     if (not bidding.ParseFromString(msg.payload())) {
-        WARN("error: failed to parse Bidding");
+        PREF_WARN("error: failed to parse Bidding");
         co_return;
     }
     const auto& playerId = bidding.player_id();
@@ -401,14 +409,14 @@ auto whistChoice(Context& ctx, const Message& msg) -> Awaitable<>
 {
     auto whisting = Whisting{};
     if (not whisting.ParseFromString(msg.payload())) {
-        WARN("error: failed to parse Whisting");
+        PREF_WARN("error: failed to parse Whisting");
         co_return;
     }
     const auto& playerId = whisting.player_id();
     const auto& choice = whisting.choice();
     const auto& playerName = ctx.playerName(playerId);
     INFO_VAR(playerName, playerId, choice);
-    ctx.player(playerId).whistingChoice = choice;
+    ctx.player(playerId).whistChoice = choice;
     co_await sendToAllExcept(msg, ctx.players, playerId);
 }
 
@@ -433,8 +441,216 @@ auto resetTakenTricks(Context& ctx) -> void
     }
 }
 
+[[nodiscard]] constexpr auto makeContractLevel(const std::string_view contract) noexcept -> ContractLevel
+{ // clang-format off
+    using enum ContractLevel;
+    if (contract.starts_with("6"))  { return Six;   }
+    if (contract.starts_with("7"))  { return Seven; }
+    if (contract.starts_with("8"))  { return Eight; }
+    if (contract.starts_with("9"))  { return Nine;  }
+    if (contract.starts_with("10")) { return Ten;   }
+    if (contract.starts_with("Mi")) { return Miser; } // clang-format on
+    std::unreachable();
+}
+
+// ┌────────┬─────┐
+// │Contract│Price│
+// ├────────┼─────┤
+// │    6   │  2  │
+// ├────────┼─────┤
+// │    7   │  4  │
+// ├────────┼─────┤
+// │    8   │  6  │
+// ├────────┼─────┤
+// │    9   │  8  │
+// ├────────┼─────┤
+// │   10   │ 10  │
+// ├────────┼─────┤
+// │  MISER │ 10  │
+// └────────┴─────┘
+[[nodiscard]] constexpr auto contractPrice(const ContractLevel level) noexcept -> int
+{ // clang-format off
+    using enum ContractLevel;
+    switch (level) { // clang-format off
+        case Six: return 2;
+        case Seven: return 4;
+        case Eight: return 6;
+        case Nine: return 8;
+        case Ten: return 10;
+        case Miser: return 10;
+    }; // clang-format on
+    std::unreachable();
+}
+
+[[nodiscard]] constexpr auto obligatoryTricksForDeclarer(const ContractLevel level) noexcept -> int
+{
+    using enum ContractLevel;
+    switch (level) { // clang-format off
+        case Six: return 6;
+        case Seven: return 7;
+        case Eight: return 8;
+        case Nine: return 9;
+        case Ten: return 10;
+        case Miser: return 10;
+    }; // clang-format on
+    std::unreachable();
+}
+
+// ┌────────┬──────┐
+// │Contract│Tricks│
+// ├────────┼──────┤
+// │    6   │   6  │
+// ├────────┼──────┤
+// │    7   │   7  │
+// ├────────┼──────┤
+// │    8   │   8  │
+// ├────────┼──────┤
+// │    9   │   9  │
+// ├────────┼──────┤
+// │   10   │  10  │
+// ├────────┼──────┤
+// │  MISER │   0  │
+// └────────┴──────┘
+[[nodiscard]] constexpr auto obligatoryTricksForDeclarer(const std::string_view contract) noexcept -> int
+{ // clang-format off
+    if (contract.starts_with("6"))  { return  6; }
+    if (contract.starts_with("7"))  { return  7; }
+    if (contract.starts_with("8"))  { return  8; }
+    if (contract.starts_with("9"))  { return  9; }
+    if (contract.starts_with("10")) { return 10; }
+    return 0; // clang-format on
+}
+
+// ┌────────┬──────┐
+// │Contract│Tricks│
+// ├────────┼──────┤
+// │    6   │   4  │
+// ├────────┼──────┤
+// │    7   │   2  │
+// ├────────┼──────┤
+// │    8   │   1  │
+// ├────────┼──────┤
+// │    9   │   1  │
+// ├────────┼──────┤
+// │   10   │   1  │
+// ├────────┼──────┤
+// │  MISER │   0  │
+// └────────┴──────┘
+[[nodiscard]] constexpr auto obligatoryTricksForBothWhisters(const std::string_view contract) noexcept -> int
+{ // clang-format off
+    if (contract.starts_with("6"))  { return 4; }
+    if (contract.starts_with("7"))  { return 2; }
+    if (contract.starts_with("8"))  { return 1; }
+    if (contract.starts_with("9"))  { return 1; }
+    if (contract.starts_with("10")) { return 1; }
+    return 0; // clang-format on
+}
+
+[[nodiscard]] constexpr auto obligatoryTricksForBothWhisters(const ContractLevel level) noexcept -> int
+{
+    using enum ContractLevel;
+    switch (level) { // clang-format off
+        case Six: return 4;
+        case Seven: return 2;
+        case Eight: return 1;
+        case Nine: return 1;
+        case Ten: return 1;
+        case Miser: return 0;
+    }; // clang-format on
+    std::unreachable();
+}
+
+[[nodiscard]] constexpr auto obligatoryTricksForOneWhisters(const std::string_view contract) noexcept -> int
+{ // clang-format off
+    if (contract.starts_with("6"))  { return 2; }
+    if (contract.starts_with("7"))  { return 1; }
+    if (contract.starts_with("8"))  { return 1; }
+    if (contract.starts_with("9"))  { return 1; }
+    if (contract.starts_with("10")) { return 1; }
+    return 0; // clang-format on
+}
+
+[[nodiscard]] constexpr auto obligatoryTricksForOneWhisters(const ContractLevel level) noexcept -> int
+{
+    using enum ContractLevel;
+    switch (level) { // clang-format off
+        case Six: return 2;
+        case Seven: return 1;
+        case Eight: return 1;
+        case Nine: return 1;
+        case Ten: return 1;
+        case Miser: return 0;
+    }; // clang-format on
+    std::unreachable();
+}
+
+[[nodiscard]] constexpr auto makeWhistChoise(const std::string_view contract) noexcept -> WhistChoise
+{ // clang-format off
+    if (contract == WHIST) { return WhistChoise::Whist; }
+    if (contract == PASS) { return WhistChoise::Pass; }
+    if (contract == HALF_WHIST) { return WhistChoise::HalfWhist; }
+    std::unreachable();
+}
+
+[[nodiscard]] auto findDeclarerId(const Context::Players& players) -> std::optional<Player::Id>
+{
+    for (const auto& [playerId, player] : players) {
+        if (player.bid != "Pass") {
+            return playerId;
+        }
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] auto findWhisterIds(const Context::Players& players) -> std::vector<Player::Id>
+{
+    auto result = std::vector<Player::Id>{};
+    for (const auto& [playerId, player] : players) {
+        if (not std::empty(player.whistChoice)) {
+            result.push_back(playerId);
+        }
+    }
+    return result; 
+}
+
+auto updateScoreSheetForRound(Context& ctx) -> void
+{
+    const auto maybeDeclarer = findDeclarerId(ctx.players);
+    if (not maybeDeclarer.has_value()) {
+        PREF_WARN("no declarer");
+        return;
+    }
+    const auto& declarerId = *maybeDeclarer;
+    const auto& declarerPlayer = ctx.players.at(declarerId);
+    const auto declarer = Declarer{.id = declarerId, .contractLevel = makeContractLevel(declarerPlayer.bid)};
+    auto whisters = std::vector<Whister>{};
+    for (const auto& id : findWhisterIds(ctx.players)) {
+        const auto& whisterPlayer = ctx.players.at(id);
+        whisters.emplace_back(id, makeWhistChoise(whisterPlayer.whistChoice), whisterPlayer.tricksTaken);
+    }
+    for (const auto& [id, entry] : calculateScoreEntry(declarer, whisters)) {
+        ctx.scoreSheet[id].dump.push_back(entry.dump);
+        ctx.scoreSheet[id].pool.push_back(entry.pool);
+        ctx.scoreSheet[id].whists[declarerId].push_back(entry.whist);
+    }
+}
+
 auto roundFinished(Context& ctx) -> Awaitable<>
 {
+    updateScoreSheetForRound(ctx);
+    for (const auto& [p, d] : ctx.scoreSheet) {
+        INFO_VAR(p);
+        INFO_VAR(d.dump);
+        INFO_VAR(d.pool);
+        for (const auto& [pp, w] : d.whists) {
+            INFO_VAR(pp, w);
+        }
+    }
+    const auto roundFinished = makeRoundFinished(ctx);
+    auto msg = Message{};
+    msg.set_method("RoundFinished");
+    msg.set_payload(roundFinished.SerializeAsString());
+    co_await sendToAll(msg, ctx.players);
     resetTakenTricks(ctx);
     co_await trickFinished(ctx);
 }
@@ -443,6 +659,7 @@ auto trickFinished(Context& ctx) -> Awaitable<>
 {
     auto trickFinished = TrickFinished{};
     for (const auto& [playerId, player] : ctx.players) {
+        //   INFO_VAR(playerId, player.tricksTaken, player.bid, player.whistChoice);
         auto tricks = trickFinished.add_tricks();
         tricks->set_player_id(playerId);
         tricks->set_taken(player.tricksTaken);
@@ -459,7 +676,7 @@ auto trickFinished(Context& ctx) -> Awaitable<>
     if (std::size(bids) == NumberOfPlayers) {
         if (rng::count(bids, PASS) == NumberOfPlayers) {
             // TODO: implement Pass Game
-            ERROR("The Pass Game is not implemented");
+            PREF_ERROR("The Pass Game is not implemented");
             return "Playing";
         }
         if ((rng::count_if(bids, std::bind_front(std::not_equal_to{}, PASS)) == 1) and (rng::count(bids, PASS) == 2)) {
@@ -471,7 +688,7 @@ auto trickFinished(Context& ctx) -> Awaitable<>
 
 auto launchSession(Context& ctx, const std::shared_ptr<Stream> ws) -> Awaitable<>
 {
-    INFO();
+    PREF_INFO();
     // TODO: What if we received a text?
     ws->binary(true);
     ws->set_option(web::stream_base::timeout::suggested(beast::role_type::server));
@@ -489,9 +706,9 @@ auto launchSession(Context& ctx, const std::shared_ptr<Stream> ws) -> Awaitable<
                 or error == net::error::not_connected //
                 or error == net::error::connection_reset //
                 or error == net::error::eof) {
-                INFO("{}: disconnected: {}, {}", VAR(error), VAR(session.playerName), VAR(session.playerId));
+                PREF_INFO("{}: disconnected: {}, {}", VAR(error), VAR(session.playerName), VAR(session.playerId));
             } else if (error == net::error::operation_aborted) {
-                WARN("{}: read: {}, {}", VAR(error), VAR(session.playerName), VAR(session.playerId));
+                PREF_WARN("{}: read: {}, {}", VAR(error), VAR(session.playerName), VAR(session.playerId));
             } else {
                 ERROR_VAR(session.playerName, session.playerId, error);
                 // TODO(olkozlo): maybe throw to not handle a disconnection?
@@ -533,22 +750,22 @@ auto launchSession(Context& ctx, const std::shared_ptr<Stream> ws) -> Awaitable<
             advanceWhoseTurn(ctx);
             co_await playerTurn(ctx, "Whisting");
         } else {
-            WARN("error: unknown method: {}", msg.method());
+            PREF_WARN("error: unknown method: {}", msg.method());
             continue;
         }
     }
     if (std::empty(session.playerId) or not ctx.players.contains(session.playerId)) {
         // TODO: Can `playerId` ever be set but not present in `players`? If not, replace with `assert()`.
-        WARN("error: empty or unknown {}", VAR(session.playerId));
+        PREF_WARN("error: empty or unknown {}", VAR(session.playerId));
         co_return;
     }
     auto& player = ctx.player(session.playerId);
     if (session.id != player.sessionId) {
-        INFO("{} reconnected with {} => {}", VAR(session.playerId), VAR(session.id), player.sessionId);
+        PREF_INFO("{} reconnected with {} => {}", VAR(session.playerId), VAR(session.id), player.sessionId);
         // TODO: send the game state to the reconnected player
         co_return;
     }
-    WARN("disconnected {}, waiting for reconnection", VAR(session.playerId));
+    PREF_WARN("disconnected {}, waiting for reconnection", VAR(session.playerId));
     net::co_spawn(co_await net::this_coro::executor, disconnected(ctx, session.playerId), Detached("disconnected"));
 }
 
@@ -581,7 +798,7 @@ auto Context::playerName(const Player::Id& playerId) const -> const std::string&
 
 auto Context::isWhistingDone() const -> bool
 {
-    return 2 == rng::count_if(players | rv::values, rng::not_fn(&std::string::empty), &Player::whistingChoice);
+    return 2 == rng::count_if(players | rv::values, rng::not_fn(&std::string::empty), &Player::whistChoice);
 }
 
 auto beats(const Beat beat) -> bool
@@ -612,9 +829,72 @@ auto finishTrick(const std::vector<PlayedCard>& trick, const std::string_view tr
     }).playerId; // clang-format on
 }
 
+[[nodiscard]] auto calculateScoreEntry(const Declarer& declarer, const std::vector<Whister>& whisters)
+    -> std::map<Player::Id, ScoreEntry>
+{
+    Expects(std::size(whisters) == 2uz);
+
+    const auto& w1 = whisters[0];
+    const auto& w2 = whisters[1];
+
+    Expects(not std::empty(declarer.id) and not std::empty(w1.id) and not std::empty(w2.id));
+    Expects(declarer.id != w1.id and declarer.id != w2.id and w1.id != w2.id);
+    Expects(0 <= w1.tricksTaken and w1.tricksTaken <= 10);
+    Expects(0 <= w2.tricksTaken and w2.tricksTaken <= 10);
+
+    static constexpr auto totalTricksPerDeal = 10;
+
+    const auto contractPrice = pref::contractPrice(declarer.contractLevel);
+    const auto declarerReqTricks = obligatoryTricksForDeclarer(declarer.contractLevel);
+    const auto whistersReqTricksTotal = obligatoryTricksForBothWhisters(declarer.contractLevel);
+
+    const auto whistersTakenTricks = w1.tricksTaken + w2.tricksTaken;
+    Expects(0 <= whistersTakenTricks and whistersTakenTricks <= totalTricksPerDeal);
+
+    const auto declarerTakenTricks = totalTricksPerDeal - whistersTakenTricks;
+    const auto declarerSucceeded = declarerTakenTricks >= declarerReqTricks;
+
+    const auto deficit = [](auto need, auto got) { return std::max(0, need - got); };
+
+    const auto declarerFailedTricks = deficit(declarerReqTricks, declarerTakenTricks);
+    const auto whistersFailedTricks = deficit(whistersReqTricksTotal, whistersTakenTricks);
+    const auto bothSaidWhist = rng::all_of(whisters, [](const auto& w) { return w.choise == WhistChoise::Whist; });
+    const auto singleWhisterReqTricks = obligatoryTricksForOneWhisters(declarer.contractLevel);
+
+    const auto makeDeclarerScore = [&] {
+        auto s = ScoreEntry{};
+        if (declarerSucceeded) {
+            s.pool = contractPrice;
+        } else {
+            s.dump = declarerFailedTricks * contractPrice;
+        }
+        return s;
+    };
+
+    const auto makeWhisterScore = [&](const Whister& w) {
+        auto s = ScoreEntry{};
+        if (w.choise == WhistChoise::Whist) {
+            s.whist += w.tricksTaken * contractPrice;
+            if (whistersFailedTricks > 0) {
+                const auto needForThisWhister = bothSaidWhist ? singleWhisterReqTricks : whistersReqTricksTotal;
+                const auto underForThisWhister = deficit(needForThisWhister, w.tricksTaken);
+                s.dump += underForThisWhister * contractPrice;
+            }
+        }
+        s.whist += declarerFailedTricks * contractPrice;
+        return s;
+    };
+
+    return {
+        {declarer.id, makeDeclarerScore()},
+        {w1.id, makeWhisterScore(w1)},
+        {w2.id, makeWhisterScore(w2)},
+    };
+}
+
 auto acceptConnectionAndLaunchSession(Context& ctx, const net::ip::tcp::endpoint endpoint) -> Awaitable<>
 {
-    INFO();
+    PREF_INFO();
     const auto ex = co_await net::this_coro::executor;
     auto acceptor = TcpAcceptor{ex, endpoint};
     while (true) {
