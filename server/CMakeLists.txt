@@ -18,7 +18,7 @@ protobuf_generate_cpp(
     PREF_PROTO_CPP_SOURCES PREF_PROTO_CPP_HEADERS EXPORT_MACRO PROTOBUF_EXPORT ${PREF_PROTO_FILES} PROTOC_OUT_DIR
                                                                                ${PROJECT_SOURCE_DIR}/../proto
 )
-protobuf_generate_python(PREF_PROTO_PY_FILES ${PREF_PROTO_FILES} PROTOC_OUT_DIR ${PROJECT_SOURCE_DIR}/../test)
+protobuf_generate_python(PREF_PROTO_PY_FILES ${PREF_PROTO_FILES} PROTOC_OUT_DIR ${PROJECT_SOURCE_DIR}/../tests)
 add_custom_target(pref_proto_py_files DEPENDS ${PREF_PROTO_PY_FILES})
 
 if(CMAKE_BUILD_TYPE STREQUAL Debug)
@@ -37,6 +37,6 @@ add_executable(server src/main.cpp)
 target_link_libraries(server serverlib)
 
 if(CMAKE_BUILD_TYPE STREQUAL Debug)
-    add_executable(server_test tests/server_test.cpp)
-    target_link_libraries(server_test PRIVATE Catch2::Catch2WithMain serverlib)
+    add_executable(test_server tests/test_server.cpp)
+    target_link_libraries(test_server PRIVATE Catch2::Catch2WithMain serverlib)
 endif()

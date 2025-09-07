@@ -2,6 +2,8 @@
 
 #include <range/v3/all.hpp>
 
+#include <cstdint>
+#include <filesystem>
 #include <map>
 #include <string>
 #include <string_view>
@@ -49,6 +51,7 @@ namespace pref {
 using namespace std::literals;
 namespace rng = ranges;
 namespace rv = rng::views;
+namespace fs = std::filesystem;
 
 using CardName = std::string;
 using PlayerId = std::string;
@@ -56,6 +59,22 @@ using PlayerName = std::string;
 
 // TODO: Support 4 players
 constexpr auto NumberOfPlayers = 3uz;
+
+struct ScoreEntry {
+    auto operator<=>(const ScoreEntry&) const = default;
+
+    std::int32_t dump{};
+    std::int32_t pool{};
+    std::int32_t whist{};
+};
+
+struct Score {
+    std::vector<std::int32_t> dump;
+    std::vector<std::int32_t> pool;
+    std::map<PlayerId, std::vector<std::int32_t>> whists;
+};
+
+using ScoreSheet = std::map<PlayerId, Score>;
 
 [[nodiscard]] inline auto cardSuit(const std::string_view card) -> std::string
 {

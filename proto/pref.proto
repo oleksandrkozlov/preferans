@@ -76,7 +76,7 @@ message ScoreData {
   map<string /*player_id*/, IntSeries> whists = 3;
 }
 
-message RoundFinished {
+message DealFinished {
   map<string /*player_id*/, ScoreData> score_sheet = 1;
 }
 

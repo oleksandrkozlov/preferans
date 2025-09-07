@@ -8,8 +8,10 @@
 #include <range/v3/all.hpp>
 
 #include <array>
+#include <expected>
 #include <gsl/assert>
 #include <gsl/gsl>
+#include <initializer_list>
 #include <iterator>
 #include <utility>
 
@@ -20,15 +22,55 @@ namespace {
 
 using TcpAcceptor = net::ip::tcp::acceptor;
 
-auto trickFinished(Context& ctx) -> Awaitable<>;
-auto roundFinished(Context& ctx) -> Awaitable<>;
+auto trickFinished(const Context::Players& players) -> Awaitable<>;
+auto dealFinished(Context& ctx) -> Awaitable<>;
 
-[[nodiscard]] auto makeMessage(const beast::flat_buffer& buffer) -> std::optional<Message>
+[[nodiscard]] auto makeMessage(const beast::flat_buffer& buffer) -> std::expected<Message, std::string>
 {
     auto result = Message{};
     if (not result.ParseFromArray(buffer.data().data(), gsl::narrow<int>(buffer.size()))) {
-        PREF_WARN("error: failed to make Message");
-        return {};
+        static constexpr auto error = "failed to make Message from array";
+        WARN_VAR(error);
+        return std::unexpected{error};
+    }
+    return result;
+}
+
+// TODO: use C++26 Reflection
+// clang-format off
+template<typename T>
+           [[nodiscard]] constexpr auto methodName               () noexcept -> std::string_view { return "Unknown";       }
+template<> [[nodiscard]] constexpr auto methodName<Bidding>      () noexcept -> std::string_view { return "Bidding";       }
+template<> [[nodiscard]] constexpr auto methodName<DealCards>    () noexcept -> std::string_view { return "DealCards";     }
+template<> [[nodiscard]] constexpr auto methodName<DiscardTalon> () noexcept -> std::string_view { return "DiscardTalon";  }
+template<> [[nodiscard]] constexpr auto methodName<JoinRequest>  () noexcept -> std::string_view { return "JoinRequest";   }
+template<> [[nodiscard]] constexpr auto methodName<JoinResponse> () noexcept -> std::string_view { return "JoinResponse";  }
+template<> [[nodiscard]] constexpr auto methodName<PlayCard>     () noexcept -> std::string_view { return "PlayCard";      }
+template<> [[nodiscard]] constexpr auto methodName<PlayerJoined> () noexcept -> std::string_view { return "PlayerJoined";  }
+template<> [[nodiscard]] constexpr auto methodName<PlayerLeft>   () noexcept -> std::string_view { return "PlayerLeft";    }
+template<> [[nodiscard]] constexpr auto methodName<PlayerTurn>   () noexcept -> std::string_view { return "PlayerTurn";    }
+template<> [[nodiscard]] constexpr auto methodName<DealFinished> () noexcept -> std::string_view { return "DealFinished"; }
+template<> [[nodiscard]] constexpr auto methodName<TrickFinished>() noexcept -> std::string_view { return "TrickFinished"; }
+template<> [[nodiscard]] constexpr auto methodName<Whisting>     () noexcept -> std::string_view { return "Whisting";      }
+// clang-format on
+
+template<typename Method>
+[[nodiscard]] auto makeMessage(const Method& method) -> Message
+{
+    auto result = Message{};
+    result.set_method(std::string{methodName<Method>()});
+    result.set_payload(method.SerializeAsString());
+    return result;
+}
+
+template<typename Method>
+[[nodiscard]] auto makeMethod(const Message& msg) -> std::expected<Method, std::string>
+{
+    auto result = Method{};
+    if (not result.ParseFromString(msg.payload())) {
+        const auto error = fmt::format("failed to make {} from string", methodName<Method>());
+        WARN_VAR(error);
+        return std::unexpected{error};
     }
     return result;
 }
@@ -38,31 +80,46 @@ auto roundFinished(Context& ctx) -> Awaitable<>;
     return boost::uuids::to_string(std::invoke(boost::uuids::random_generator{}));
 }
 
+auto setWhoseTurn(Context& ctx, const auto& it) -> void
+{
+    ctx.whoseTurnIt = it;
+    const auto& [playerId, player] = *ctx.whoseTurnIt;
+    INFO_VAR(playerId, player.name);
+}
+
+auto setForehandId(Context& ctx) -> void
+{
+    ctx.forehandId = ctx.whoseTurnId();
+    INFO_VAR(ctx.forehandId);
+}
+
 auto resetWhoseTurn(Context& ctx) -> void
 {
     assert((std::size(ctx.players) == NumberOfPlayers) and "all players joined");
-    ctx.whoseTurnIt = std::cbegin(ctx.players);
+    setWhoseTurn(ctx, std::cbegin(ctx.players));
 }
 
 auto advanceWhoseTurn(Context& ctx) -> void
 {
     assert((std::size(ctx.players) == NumberOfPlayers) and "all players joined");
-    if (++ctx.whoseTurnIt == std::cend(ctx.players)) {
-        resetWhoseTurn(ctx);
+    if (const auto nextTurnIt = std::next(ctx.whoseTurnIt); nextTurnIt != std::cend(ctx.players)) {
+        setWhoseTurn(ctx, nextTurnIt);
+        return;
     }
+    resetWhoseTurn(ctx);
 }
 
 auto forehandsTurn(Context& ctx) -> void
 {
     assert(ctx.players.contains(ctx.forehandId) and "forehand player exists");
-    ctx.whoseTurnIt = ctx.players.find(ctx.forehandId);
+    setWhoseTurn(ctx, ctx.players.find(ctx.forehandId));
 }
 
 auto advanceWhoseTurn(Context& ctx, const std::string_view stage) -> void
 {
     INFO_VAR(stage);
     advanceWhoseTurn(ctx);
-    if (stage != "Bidding") {
+    if (not rng::contains(std::initializer_list{"Bidding", "TalonPicking"}, stage)) {
         return;
     }
     while (ctx.player(ctx.whoseTurnId()).bid == PASS) {
@@ -71,17 +128,18 @@ auto advanceWhoseTurn(Context& ctx, const std::string_view stage) -> void
 }
 
 // TODO: combine with advanceWhoseTurn?
-auto setNextRoundTurn(Context& ctx) -> void
+auto setNextDealTurn(Context& ctx) -> void
 {
     assert((std::size(ctx.players) == NumberOfPlayers) and "all players joined");
     assert(ctx.players.contains(ctx.forehandId) and "forehand player exists");
-    auto it = ctx.players.find(ctx.forehandId);
-    ++it;
-    if (it == std::end(ctx.players)) {
-        it = std::begin(ctx.players);
-    }
-    ctx.whoseTurnIt = it;
-    ctx.forehandId = ctx.whoseTurnId();
+    auto nextForehandIt = std::invoke([&] {
+        if (auto nextIt = std::next(ctx.players.find(ctx.forehandId)); nextIt != std::end(ctx.players)) {
+            return nextIt;
+        }
+        return std::begin(ctx.players);
+    });
+    setWhoseTurn(ctx, nextForehandIt);
+    setForehandId(ctx);
 }
 
 [[nodiscard]] auto finishTrick(Context& ctx) -> Player::Id
@@ -94,10 +152,10 @@ auto setNextRoundTurn(Context& ctx) -> void
     return winnerId;
 }
 
-[[nodiscard]] auto makeRoundFinished(const Context& ctx) -> RoundFinished
+[[nodiscard]] auto makeDealFinished(const ScoreSheet& scoreSheet) -> DealFinished
 {
-    auto result = pref::RoundFinished{};
-    for (const auto& [playerId, score] : ctx.scoreSheet) {
+    auto result = DealFinished{};
+    for (const auto& [playerId, score] : scoreSheet) {
         auto& data = (*result.mutable_score_sheet())[playerId];
         for (const auto value : score.dump) {
             data.mutable_dump()->add_values(value);
@@ -199,16 +257,37 @@ auto reconnectPlayer(
     INFO_VAR(session.playerName, session.playerId, session.id);
 }
 
+[[nodiscard]] auto makePlayerJoined(const PlayerSession& session) -> PlayerJoined
+{
+    INFO_VAR(session.playerId, session.playerName);
+    auto result = PlayerJoined{};
+    result.set_player_id(session.playerId);
+    result.set_player_name(session.playerName);
+    return result;
+}
+
+[[nodiscard]] auto makeJoinResponse(const Context::Players& players, const PlayerSession& session) -> JoinResponse
+{
+    auto result = JoinResponse{};
+    result.set_player_id(session.playerId);
+    for (const auto& [id, player] : players) {
+        auto p = result.add_players();
+        p->set_player_id(id);
+        p->set_player_name(player.name);
+    }
+    return result;
+}
+
 auto joined(Context& ctx, Message msg, const std::shared_ptr<Stream> ws) -> Awaitable<PlayerSession>
 {
-    auto joinRequest = JoinRequest{};
-    if (not joinRequest.ParseFromString(msg.payload())) {
-        PREF_WARN("error: failed to parse JoinRequest");
+    const auto joinRequest = makeMethod<JoinRequest>(msg);
+    if (not joinRequest) {
+        PREF_WARN("makeMessage error: {}", joinRequest.error());
         co_return PlayerSession{};
     }
     auto session = PlayerSession{};
-    const auto& playerId = joinRequest.player_id();
-    session.playerName = joinRequest.player_name();
+    const auto& playerId = joinRequest->player_id();
+    session.playerName = joinRequest->player_name();
     const auto address = ws->next_layer().socket().remote_endpoint().address().to_string();
     INFO_VAR(playerId, session.playerName, address); // TODO: hide address
     if (isNewPlayer(playerId, ctx.players)) {
@@ -216,29 +295,13 @@ auto joined(Context& ctx, Message msg, const std::shared_ptr<Stream> ws) -> Awai
     } else {
         co_await reconnectPlayer(ws, playerId, ctx.players, session);
     }
-    auto joinResponse = JoinResponse{};
-    joinResponse.set_player_id(session.playerId);
-    for (const auto& [id, player] : ctx.players) {
-        auto p = joinResponse.add_players();
-        p->set_player_id(id);
-        p->set_player_name(player.name);
-    }
-    msg = Message{};
-    msg.set_method("JoinResponse");
-    msg.set_payload(joinResponse.SerializeAsString());
-    if (const auto error = co_await sendToOne(msg, ws)) {
+    if (const auto error = co_await sendToOne(makeMessage(makeJoinResponse(ctx.players, session)), ws)) {
         PREF_WARN("{}: failed to send JoinResponse", VAR(error));
     }
     if (playerId == session.playerId) {
         co_return session;
     }
-    auto playerJoined = PlayerJoined{};
-    playerJoined.set_player_id(session.playerId);
-    playerJoined.set_player_name(session.playerName);
-    msg = Message{};
-    msg.set_method("PlayerJoined");
-    msg.set_payload(playerJoined.SerializeAsString());
-    co_await sendToAllExcept(msg, ctx.players, session.playerId);
+    co_await sendToAllExcept(makeMessage(makePlayerJoined(session)), ctx.players, session.playerId);
     co_return session;
 }
 
@@ -256,25 +319,36 @@ auto removeCardFromHand(Context& ctx, const Player::Id& playerId, const std::str
     ctx.player(playerId).hand.erase(card);
 }
 
-auto playerTurn(Context& ctx, const std::string_view stage) -> Awaitable<>
+[[nodiscard]] auto makePlayerTurn(Context& ctx, const std::string_view stage) -> PlayerTurn
 {
-    auto playerTurn = PlayerTurn{};
+    auto result = PlayerTurn{};
     const auto& playerId = ctx.whoseTurnId();
-    playerTurn.set_player_id(playerId);
-    playerTurn.set_stage(std::string{stage});
+    result.set_player_id(playerId);
+    result.set_stage(std::string{stage});
     if (stage == "TalonPicking") {
         assert((std::size(ctx.talon) == 2) and "talon is two cards");
         for (const auto& card : ctx.talon) {
             addCardToHand(ctx, playerId, card);
-            playerTurn.add_talon(card);
+            result.add_talon(card);
         }
     }
     const auto& playerName = ctx.playerName(playerId);
     INFO_VAR(playerId, playerName, stage);
-    auto msg = Message{};
-    msg.set_method("PlayerTurn");
-    msg.set_payload(playerTurn.SerializeAsString());
-    co_await sendToAll(msg, ctx.players);
+    return result;
+}
+
+auto playerTurn(Context& ctx, const std::string_view stage) -> Awaitable<>
+{
+    co_await sendToAll(makeMessage(makePlayerTurn(ctx, stage)), ctx.players);
+}
+
+[[nodiscard]] auto makeDealCards(const auto& hand) -> DealCards
+{
+    auto result = DealCards{};
+    for (const auto& card : hand) {
+        *result.add_cards() = card;
+    }
+    return result;
 }
 
 auto dealCards(Context& ctx) -> Awaitable<>
@@ -301,44 +375,37 @@ auto dealCards(Context& ctx) -> Awaitable<>
     const auto wss = ctx.players | rv::values | rv::transform(&Player::ws) | rng::to_vector;
     assert((std::size(wss) == NumberOfPlayers) and (std::size(hands) == NumberOfPlayers));
     for (const auto& [ws, hand] : rv::zip(wss, hands)) {
-        auto dealCards = DealCards{};
-        for (const auto& card : hand) {
-            *dealCards.add_cards() = card;
-        }
-        auto msg = Message{};
-        msg.set_method("DealCards");
-        msg.set_payload(dealCards.SerializeAsString());
-        co_await sendToOne(msg, ws);
+        co_await sendToOne(makeMessage(makeDealCards(hand)), ws);
     }
 }
 
 auto cardPlayed(Context& ctx, const Message& msg) -> Awaitable<>
 {
-    auto playCard = PlayCard{};
-    if (not playCard.ParseFromString(msg.payload())) {
-        PREF_WARN("error: failed to parse PlayCard");
+    const auto playCard = makeMethod<PlayCard>(msg);
+    if (not playCard) {
         co_return;
     }
-    const auto& playerId = playCard.player_id();
-    const auto& card = playCard.card();
+    const auto& playerId = playCard->player_id();
+    const auto& card = playCard->card();
     const auto& playerName = ctx.playerName(playerId);
     removeCardFromHand(ctx, playerId, card);
     ctx.trick.emplace_back(playerId, card);
     INFO_VAR(playerName, playerId, card);
     co_await sendToAllExcept(msg, ctx.players, playerId);
-    if (std::size(ctx.trick) == NumberOfPlayers) {
+    if (const auto isTrickFinished = (std::size(ctx.trick) == 3); isTrickFinished) {
         const auto winnerId = finishTrick(ctx);
         const auto& winnerName = ctx.playerName(winnerId);
         INFO_VAR(winnerId, winnerName);
-        co_await trickFinished(ctx);
-        ctx.whoseTurnIt = ctx.players.find(winnerId);
-        if (rng::all_of(ctx.players | rv::values, &Hand::empty, &Player::hand)) {
-            PREF_INFO("End of the deal");
-            co_await roundFinished(ctx);
+        co_await trickFinished(ctx.players);
+        if (const auto isDealFinished = rng::all_of(ctx.players | rv::values, &Hand::empty, &Player::hand);
+            isDealFinished) {
+            co_await dealFinished(ctx);
             co_await dealCards(ctx);
-            setNextRoundTurn(ctx);
-            // FIXME: the second round, for some reason, only two player are bidding
+            setNextDealTurn(ctx);
             co_await playerTurn(ctx, "Bidding");
+            co_return;
+        } else {
+            setWhoseTurn(ctx, ctx.players.find(winnerId));
         }
     } else {
         advanceWhoseTurn(ctx);
@@ -348,21 +415,28 @@ auto cardPlayed(Context& ctx, const Message& msg) -> Awaitable<>
 
 [[nodiscard]] auto talonDiscarded(Context& ctx, const Message& msg) -> std::pair<Player::Id, std::string>
 {
-    auto discardTalon = DiscardTalon{};
-    if (not discardTalon.ParseFromString(msg.payload())) {
-        PREF_WARN("error: failed to parse DiscardTalon");
+    const auto discardTalon = makeMethod<DiscardTalon>(msg);
+    if (not discardTalon) {
         // TODO: throw?
         return {};
     }
-    const auto& playerId = discardTalon.player_id();
-    const auto& bid = discardTalon.bid();
-    const auto& discardedCards = discardTalon.cards();
+    const auto& playerId = discardTalon->player_id();
+    const auto& bid = discardTalon->bid();
+    const auto& discardedCards = discardTalon->cards();
     for (const auto& card : discardedCards) {
         removeCardFromHand(ctx, playerId, card);
     }
     const auto& playerName = ctx.playerName(playerId);
     INFO_VAR(playerName, playerId, discardedCards, bid);
     return {playerId, bid};
+}
+
+[[nodiscard]] auto makePlayerLeft(const Player::Id& playerId) -> PlayerLeft
+{
+    INFO_VAR(playerId);
+    auto result = PlayerLeft{};
+    result.set_player_id(playerId);
+    return result;
 }
 
 auto disconnected(Context& ctx, const Player::Id playerId) -> Awaitable<>
@@ -382,23 +456,17 @@ auto disconnected(Context& ctx, const Player::Id playerId) -> Awaitable<>
     assert(ctx.players.contains(playerId) and "player exists");
     PREF_INFO("removed {} after timeout", VAR(playerId));
     ctx.players.erase(playerId);
-    auto playerLeft = PlayerLeft{};
-    playerLeft.set_player_id(playerId);
-    auto msg = Message{};
-    msg.set_method("PlayerLeft");
-    msg.set_payload(playerLeft.SerializeAsString());
-    co_await sendToAll(msg, ctx.players);
+    co_await sendToAll(makeMessage(makePlayerLeft(playerId)), ctx.players);
 }
 
 auto bid(Context& ctx, const Message& msg) -> Awaitable<>
 {
-    auto bidding = Bidding{};
-    if (not bidding.ParseFromString(msg.payload())) {
-        PREF_WARN("error: failed to parse Bidding");
+    const auto bidding = makeMethod<Bidding>(msg);
+    if (not bidding) {
         co_return;
     }
-    const auto& playerId = bidding.player_id();
-    const auto& bid = bidding.bid();
+    const auto& playerId = bidding->player_id();
+    const auto& bid = bidding->bid();
     const auto& playerName = ctx.playerName(playerId);
     INFO_VAR(playerName, playerId, bid);
     ctx.player(playerId).bid = bid;
@@ -407,36 +475,43 @@ auto bid(Context& ctx, const Message& msg) -> Awaitable<>
 
 auto whistChoice(Context& ctx, const Message& msg) -> Awaitable<>
 {
-    auto whisting = Whisting{};
-    if (not whisting.ParseFromString(msg.payload())) {
-        PREF_WARN("error: failed to parse Whisting");
+    auto whisting = makeMethod<Whisting>(msg);
+    if (not whisting) {
         co_return;
     }
-    const auto& playerId = whisting.player_id();
-    const auto& choice = whisting.choice();
+    const auto& playerId = whisting->player_id();
+    const auto& choice = whisting->choice();
     const auto& playerName = ctx.playerName(playerId);
     INFO_VAR(playerName, playerId, choice);
     ctx.player(playerId).whistChoice = choice;
     co_await sendToAllExcept(msg, ctx.players, playerId);
 }
 
-auto finalBid(Context& ctx, const Player::Id& playerId, const std::string& bid) -> Awaitable<>
+[[nodiscard]] auto makeBidding(Context& ctx, const Player::Id& playerId, const std::string& bid) -> Bidding
 {
-    auto bidding = Bidding{};
-    bidding.set_player_id(playerId);
-    bidding.set_bid(bid);
+    auto result = Bidding{};
+    result.set_player_id(playerId);
+    result.set_bid(bid);
     ctx.trump = std::string{getTrump(bid)};
     const auto& playerName = ctx.playerName(playerId);
     INFO_VAR(playerName, playerId, bid, ctx.trump);
-    auto msg = Message{};
-    msg.set_method("Bidding");
-    msg.set_payload(bidding.SerializeAsString());
-    co_await sendToAllExcept(msg, ctx.players, playerId);
+    return result;
 }
 
-auto resetTakenTricks(Context& ctx) -> void
+auto finalBid(Context& ctx, const Player::Id& playerId, const std::string& bid) -> Awaitable<>
 {
+    co_await sendToAllExcept(makeMessage(makeBidding(ctx, playerId, bid)), ctx.players, playerId);
+}
+
+auto resetGameState(Context& ctx) -> void
+{
+    ctx.talon.clear();
+    ctx.trick.clear();
+    ctx.trump.clear();
     for (auto&& [_, p] : ctx.players) {
+        p.hand.clear();
+        p.bid.clear();
+        p.whistChoice.clear();
         p.tricksTaken = 0;
     }
 }
@@ -449,9 +524,9 @@ auto resetTakenTricks(Context& ctx) -> void
     if (contract.starts_with("8"))  { return Eight; }
     if (contract.starts_with("9"))  { return Nine;  }
     if (contract.starts_with("10")) { return Ten;   }
-    if (contract.starts_with("Mi")) { return Miser; } // clang-format on
+    if (contract.starts_with("Mi")) { return Miser; }
     std::unreachable();
-}
+} // clang-format on
 
 // ┌────────┬─────┐
 // │Contract│Price│
@@ -471,30 +546,16 @@ auto resetTakenTricks(Context& ctx) -> void
 [[nodiscard]] constexpr auto contractPrice(const ContractLevel level) noexcept -> int
 { // clang-format off
     using enum ContractLevel;
-    switch (level) { // clang-format off
-        case Six: return 2;
-        case Seven: return 4;
-        case Eight: return 6;
-        case Nine: return 8;
-        case Ten: return 10;
+    switch (level) {
+        case Six  : return  2;
+        case Seven: return  4;
+        case Eight: return  6;
+        case Nine : return  8;
+        case Ten  : return 10;
         case Miser: return 10;
-    }; // clang-format on
+    };
     std::unreachable();
-}
-
-[[nodiscard]] constexpr auto obligatoryTricksForDeclarer(const ContractLevel level) noexcept -> int
-{
-    using enum ContractLevel;
-    switch (level) { // clang-format off
-        case Six: return 6;
-        case Seven: return 7;
-        case Eight: return 8;
-        case Nine: return 9;
-        case Ten: return 10;
-        case Miser: return 10;
-    }; // clang-format on
-    std::unreachable();
-}
+} // clang-format on
 
 // ┌────────┬──────┐
 // │Contract│Tricks│
@@ -511,15 +572,19 @@ auto resetTakenTricks(Context& ctx) -> void
 // ├────────┼──────┤
 // │  MISER │   0  │
 // └────────┴──────┘
-[[nodiscard]] constexpr auto obligatoryTricksForDeclarer(const std::string_view contract) noexcept -> int
+[[nodiscard]] constexpr auto obligatoryTricksForDeclarer(const ContractLevel level) noexcept -> int
 { // clang-format off
-    if (contract.starts_with("6"))  { return  6; }
-    if (contract.starts_with("7"))  { return  7; }
-    if (contract.starts_with("8"))  { return  8; }
-    if (contract.starts_with("9"))  { return  9; }
-    if (contract.starts_with("10")) { return 10; }
-    return 0; // clang-format on
-}
+    using enum ContractLevel;
+    switch (level) {
+        case Six  : return  6;
+        case Seven: return  7;
+        case Eight: return  8;
+        case Nine : return  9;
+        case Ten  : return 10;
+        case Miser: return 10;
+    };
+    std::unreachable();
+} // clang-format on
 
 // ┌────────┬──────┐
 // │Contract│Tricks│
@@ -536,70 +601,50 @@ auto resetTakenTricks(Context& ctx) -> void
 // ├────────┼──────┤
 // │  MISER │   0  │
 // └────────┴──────┘
-[[nodiscard]] constexpr auto obligatoryTricksForBothWhisters(const std::string_view contract) noexcept -> int
-{ // clang-format off
-    if (contract.starts_with("6"))  { return 4; }
-    if (contract.starts_with("7"))  { return 2; }
-    if (contract.starts_with("8"))  { return 1; }
-    if (contract.starts_with("9"))  { return 1; }
-    if (contract.starts_with("10")) { return 1; }
-    return 0; // clang-format on
-}
-
 [[nodiscard]] constexpr auto obligatoryTricksForBothWhisters(const ContractLevel level) noexcept -> int
-{
+{ // clang-format off
     using enum ContractLevel;
-    switch (level) { // clang-format off
-        case Six: return 4;
+    switch (level) {
+        case Six  : return 4;
         case Seven: return 2;
         case Eight: return 1;
-        case Nine: return 1;
-        case Ten: return 1;
+        case Nine : return 1;
+        case Ten  : return 1;
         case Miser: return 0;
-    }; // clang-format on
+    };
     std::unreachable();
-}
-
-[[nodiscard]] constexpr auto obligatoryTricksForOneWhisters(const std::string_view contract) noexcept -> int
-{ // clang-format off
-    if (contract.starts_with("6"))  { return 2; }
-    if (contract.starts_with("7"))  { return 1; }
-    if (contract.starts_with("8"))  { return 1; }
-    if (contract.starts_with("9"))  { return 1; }
-    if (contract.starts_with("10")) { return 1; }
-    return 0; // clang-format on
-}
+} // clang-format on
 
 [[nodiscard]] constexpr auto obligatoryTricksForOneWhisters(const ContractLevel level) noexcept -> int
-{
+{ // clang-format off
     using enum ContractLevel;
-    switch (level) { // clang-format off
-        case Six: return 2;
+    switch (level) {
+        case Six  : return 2;
         case Seven: return 1;
         case Eight: return 1;
-        case Nine: return 1;
-        case Ten: return 1;
+        case Nine : return 1;
+        case Ten  : return 1;
         case Miser: return 0;
-    }; // clang-format on
+    };
     std::unreachable();
-}
+} // clang-format on
 
 [[nodiscard]] constexpr auto makeWhistChoise(const std::string_view contract) noexcept -> WhistChoise
 { // clang-format off
-    if (contract == WHIST) { return WhistChoise::Whist; }
-    if (contract == PASS) { return WhistChoise::Pass; }
+    if (contract == WHIST)      { return WhistChoise::Whist;     }
+    if (contract == PASS)       { return WhistChoise::Pass;      }
     if (contract == HALF_WHIST) { return WhistChoise::HalfWhist; }
     std::unreachable();
-}
+} // clang-format on
 
-[[nodiscard]] auto findDeclarerId(const Context::Players& players) -> std::optional<Player::Id>
+[[nodiscard]] auto findDeclarerId(const Context::Players& players) -> std::expected<Player::Id, std::string>
 {
     for (const auto& [playerId, player] : players) {
         if (player.bid != "Pass") {
             return playerId;
         }
     }
-    return std::nullopt;
+    return std::unexpected{"could not find declarerId"};
 }
 
 [[nodiscard]] auto findWhisterIds(const Context::Players& players) -> std::vector<Player::Id>
@@ -610,64 +655,58 @@ auto resetTakenTricks(Context& ctx) -> void
             result.push_back(playerId);
         }
     }
-    return result; 
+    return result;
 }
 
-auto updateScoreSheetForRound(Context& ctx) -> void
-{
-    const auto maybeDeclarer = findDeclarerId(ctx.players);
-    if (not maybeDeclarer.has_value()) {
-        PREF_WARN("no declarer");
-        return;
-    }
-    const auto& declarerId = *maybeDeclarer;
-    const auto& declarerPlayer = ctx.players.at(declarerId);
-    const auto declarer = Declarer{.id = declarerId, .contractLevel = makeContractLevel(declarerPlayer.bid)};
-    auto whisters = std::vector<Whister>{};
-    for (const auto& id : findWhisterIds(ctx.players)) {
-        const auto& whisterPlayer = ctx.players.at(id);
-        whisters.emplace_back(id, makeWhistChoise(whisterPlayer.whistChoice), whisterPlayer.tricksTaken);
-    }
-    for (const auto& [id, entry] : calculateScoreEntry(declarer, whisters)) {
-        ctx.scoreSheet[id].dump.push_back(entry.dump);
-        ctx.scoreSheet[id].pool.push_back(entry.pool);
-        ctx.scoreSheet[id].whists[declarerId].push_back(entry.whist);
-    }
-}
-
-auto roundFinished(Context& ctx) -> Awaitable<>
-{
-    updateScoreSheetForRound(ctx);
-    for (const auto& [p, d] : ctx.scoreSheet) {
-        INFO_VAR(p);
-        INFO_VAR(d.dump);
-        INFO_VAR(d.pool);
-        for (const auto& [pp, w] : d.whists) {
-            INFO_VAR(pp, w);
+auto updateScoreSheetForDeal(Context& ctx) -> void
+{ // clang-format off
+  // NOLINTNEXTLINE(bugprone-unused-return-value)
+    auto _ = findDeclarerId(ctx.players).transform([&](const Player::Id& declarerId) {
+        const auto& declarerPlayer = ctx.players.at(declarerId);
+        const auto declarer
+            = Declarer{.id = declarerId, .contractLevel = makeContractLevel(declarerPlayer.bid)};
+        auto whisters = std::vector<Whister>{};
+        for (const auto& id : findWhisterIds(ctx.players)) {
+            const auto& whisterPlayer = ctx.players.at(id);
+            whisters.emplace_back(id, makeWhistChoise(whisterPlayer.whistChoice), whisterPlayer.tricksTaken);
         }
-    }
-    const auto roundFinished = makeRoundFinished(ctx);
-    auto msg = Message{};
-    msg.set_method("RoundFinished");
-    msg.set_payload(roundFinished.SerializeAsString());
-    co_await sendToAll(msg, ctx.players);
-    resetTakenTricks(ctx);
-    co_await trickFinished(ctx);
+        for (const auto& [id, entry] : calculateScoreEntry(declarer, whisters)) {
+            ctx.scoreSheet[id].dump.push_back(entry.dump);
+            ctx.scoreSheet[id].pool.push_back(entry.pool);
+            ctx.scoreSheet[id].whists[declarerId].push_back(entry.whist);
+        }
+    }).or_else([](const std::string& error) {
+        WARN_VAR(error);
+        return std::expected<void, std::string>(std::unexpect, error);
+    });
+} // clang-format on
+
+auto dealFinished(Context& ctx) -> Awaitable<>
+{
+    PREF_INFO();
+    updateScoreSheetForDeal(ctx);
+    co_await sendToAll(makeMessage(makeDealFinished(ctx.scoreSheet)), ctx.players);
+    resetGameState(ctx);
+    // TODO: Reset taken tricks on the client side upon receiving `DealFinished`
+    // so we don't have to send a `TrickFinished` with zero tricks
+    co_await trickFinished(ctx.players);
 }
 
-auto trickFinished(Context& ctx) -> Awaitable<>
+[[nodiscard]] auto makeTrickFinished(const Context::Players& players) -> TrickFinished
 {
-    auto trickFinished = TrickFinished{};
-    for (const auto& [playerId, player] : ctx.players) {
-        //   INFO_VAR(playerId, player.tricksTaken, player.bid, player.whistChoice);
-        auto tricks = trickFinished.add_tricks();
+    PREF_INFO();
+    auto result = TrickFinished{};
+    for (const auto& [playerId, player] : players) {
+        auto tricks = result.add_tricks();
         tricks->set_player_id(playerId);
         tricks->set_taken(player.tricksTaken);
     }
-    auto msg = Message{};
-    msg.set_method("TrickFinished");
-    msg.set_payload(trickFinished.SerializeAsString());
-    co_await sendToAll(msg, ctx.players);
+    return result;
+}
+
+auto trickFinished(const Context::Players& players) -> Awaitable<>
+{
+    co_await sendToAll(makeMessage(makeTrickFinished(players)), players);
 }
 
 [[nodiscard]] auto stageGame(Context& ctx) -> std::string_view
@@ -715,25 +754,25 @@ auto launchSession(Context& ctx, const std::shared_ptr<Stream> ws) -> Awaitable<
             }
             break;
         }
-        const auto maybeMsg = makeMessage(buffer);
-        if (not maybeMsg) {
+        const auto msg = makeMessage(buffer);
+        if (not msg) {
             continue;
         }
-        if (const auto& msg = *maybeMsg; msg.method() == "JoinRequest") {
-            session = co_await joined(ctx, msg, ws);
+        if (msg->method() == "JoinRequest") {
+            session = co_await joined(ctx, *msg, ws);
             if (std::size(ctx.players) == NumberOfPlayers) {
                 co_await dealCards(ctx);
                 resetWhoseTurn(ctx);
-                ctx.forehandId = ctx.whoseTurnId();
+                setForehandId(ctx);
                 co_await playerTurn(ctx, "Bidding");
             }
-        } else if (msg.method() == "Bidding") {
-            co_await bid(ctx, msg);
+        } else if (msg->method() == "Bidding") {
+            co_await bid(ctx, *msg);
             const auto stage = stageGame(ctx);
             advanceWhoseTurn(ctx, stage);
             co_await playerTurn(ctx, stage);
-        } else if (msg.method() == "Whisting") {
-            co_await whistChoice(ctx, msg);
+        } else if (msg->method() == "Whisting") {
+            co_await whistChoice(ctx, *msg);
             if (ctx.isWhistingDone()) {
                 forehandsTurn(ctx);
                 co_await playerTurn(ctx, "Playing");
@@ -741,16 +780,16 @@ auto launchSession(Context& ctx, const std::shared_ptr<Stream> ws) -> Awaitable<
                 advanceWhoseTurn(ctx);
                 co_await playerTurn(ctx, "Whisting");
             }
-        } else if (msg.method() == "PlayCard") {
-            co_await cardPlayed(ctx, msg);
-        } else if (msg.method() == "DiscardTalon") {
-            const auto [playerId, bid] = talonDiscarded(ctx, msg);
+        } else if (msg->method() == "PlayCard") {
+            co_await cardPlayed(ctx, *msg);
+        } else if (msg->method() == "DiscardTalon") {
+            const auto [playerId, bid] = talonDiscarded(ctx, *msg);
             co_await finalBid(ctx, playerId, bid);
             // TODO: is the player turn advance correctly?
             advanceWhoseTurn(ctx);
             co_await playerTurn(ctx, "Whisting");
         } else {
-            PREF_WARN("error: unknown method: {}", msg.method());
+            PREF_WARN("error: unknown method: {}", msg->method());
             continue;
         }
     }
@@ -832,15 +871,15 @@ auto finishTrick(const std::vector<PlayedCard>& trick, const std::string_view tr
 [[nodiscard]] auto calculateScoreEntry(const Declarer& declarer, const std::vector<Whister>& whisters)
     -> std::map<Player::Id, ScoreEntry>
 {
-    Expects(std::size(whisters) == 2uz);
+    assert(std::size(whisters) == 2uz);
 
     const auto& w1 = whisters[0];
     const auto& w2 = whisters[1];
 
-    Expects(not std::empty(declarer.id) and not std::empty(w1.id) and not std::empty(w2.id));
-    Expects(declarer.id != w1.id and declarer.id != w2.id and w1.id != w2.id);
-    Expects(0 <= w1.tricksTaken and w1.tricksTaken <= 10);
-    Expects(0 <= w2.tricksTaken and w2.tricksTaken <= 10);
+    assert(not std::empty(declarer.id) and not std::empty(w1.id) and not std::empty(w2.id));
+    assert(declarer.id != w1.id and declarer.id != w2.id and w1.id != w2.id);
+    assert(0 <= w1.tricksTaken and w1.tricksTaken <= 10);
+    assert(0 <= w2.tricksTaken and w2.tricksTaken <= 10);
 
     static constexpr auto totalTricksPerDeal = 10;
 
@@ -849,7 +888,7 @@ auto finishTrick(const std::vector<PlayedCard>& trick, const std::string_view tr
     const auto whistersReqTricksTotal = obligatoryTricksForBothWhisters(declarer.contractLevel);
 
     const auto whistersTakenTricks = w1.tricksTaken + w2.tricksTaken;
-    Expects(0 <= whistersTakenTricks and whistersTakenTricks <= totalTricksPerDeal);
+    assert(0 <= whistersTakenTricks and whistersTakenTricks <= totalTricksPerDeal);
 
     const auto declarerTakenTricks = totalTricksPerDeal - whistersTakenTricks;
     const auto declarerSucceeded = declarerTakenTricks >= declarerReqTricks;

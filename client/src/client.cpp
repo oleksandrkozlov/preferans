@@ -107,6 +107,7 @@ enum class GameText : std::size_t {
     Whist,
     HalfWhist,
     Pass,
+    Miser,
     YourTurn,
     Settings,
     ColorScheme,
@@ -142,7 +143,8 @@ constexpr auto localization = std::
             "Enter",
             WHIST,
             HALF_WHIST,
-            "Pass",
+            PASS,
+            MISER,
             "Your turn",
             "Settings",
             "Color scheme",
@@ -175,6 +177,7 @@ constexpr auto localization = std::
             "Віст",
             "Піввіста",
             "Пас",
+            "Мізер",
             "Ваш хід",
             "Налаштування",
             "Кольорова схема",
@@ -207,6 +210,7 @@ constexpr auto localization = std::
             "Вист",
             "Полвиста",
             "Пас",
+            "Мизер",
             "Ваш ход",
             "Настройки",
             "Цветовая схема",
@@ -236,7 +240,7 @@ struct Card {
     Card(CardName n, RVector2 pos)
         : name{std::move(n)}
         , position{pos}
-        , image{RImage{fmt::format("resources/cards/{}.png", name)}}
+        , image{RImage{fs::path{"resources"} / "cards" / std::format("{}.png", name)}}
     {
         image.Resize(static_cast<int>(cardWidth), static_cast<int>(cardHeight));
         texture = image.LoadTexture();
@@ -345,7 +349,7 @@ struct WhistingMenu {
     return {gsl::narrow_cast<unsigned int>(GuiGetStyle(control, property))};
 }
 
-[[nodiscard]] auto localizeText(const GameText text, const GameLang lang) -> std::string_view
+[[nodiscard]] constexpr auto localizeText(const GameText text, const GameLang lang) noexcept -> std::string_view
 {
     return localization[std::to_underlying(lang)][std::to_underlying(text)];
 }
@@ -376,7 +380,8 @@ struct SettingsMenu {
     std::string loadedLang;
 };
 
-struct ScoreSheet {
+struct ScoreSheetMenu {
+    ScoreSheet score;
     bool isVisible{};
 };
 
@@ -414,7 +419,7 @@ struct Context {
     std::string leadSuit;
     GameLang lang{};
     SettingsMenu settingsMenu;
-    ScoreSheet scoreSheet;
+    ScoreSheetMenu scoreSheet;
 
     auto reset() -> void
     {
@@ -439,15 +444,15 @@ struct Context {
         if (lang == GameLang::Russian) { // clang-format off
             if (bid == NINE_WT) { return NINE " БП"; }
             if (bid == TEN_WT) { return TEN " БП"; }
-            if (bid == MISER) { return "Мизер"; }
+            if (bid == MISER) { return pref::localizeText(GameText::Miser, lang); }
             if (bid == MISER_WT) { return "Миз.БП"; }
-            if (bid == PASS) { return "Пас"; }
+            if (bid == PASS) { return pref::localizeText(GameText::Pass, lang);  }
         } else if (lang == GameLang::Ukrainian) {
             if (bid == NINE_WT) { return NINE " БП"; }
             if (bid == TEN_WT) { return TEN " БП"; }
-            if (bid == MISER) { return "Мізер"; }
+            if (bid == MISER) { return pref::localizeText(GameText::Miser, lang); }
             if (bid == MISER_WT) { return "Міз.БП"; }
-            if (bid == PASS) { return "Пас"; }
+            if (bid == PASS) { return pref::localizeText(GameText::Pass, lang);  }
         } // clang-format on
         return bid;
     }
@@ -480,7 +485,7 @@ struct Context {
     for (const auto& [id, _] : ctx.players) {
         order.push_back(id);
     }
-    const auto it = ranges::find(order, ctx.myPlayerId);
+    const auto it = rng::find(order, ctx.myPlayerId);
     assert(it != order.end());
     const auto selfIndex = std::distance(order.begin(), it);
     const auto leftIndex = (selfIndex + 1) % 3;
@@ -545,26 +550,17 @@ auto handlePlayCard(Context& ctx, PlayCard playCard) -> void
     ctx.cardsOnTable.insert_or_assign(std::move(playerId), Card{std::move(cardName), RVector2{}});
 }
 
-auto handleRoundFinished([[maybe_unused]] Context& ctx, const RoundFinished roundFinished) -> void
+auto handleDealFinished(Context& ctx, const DealFinished dealFinished) -> void
 {
-    // TODO: draw data in the score sheet
-    for (const auto& [playerId, score] : roundFinished.score_sheet()) {
-        PREF_INFO("{}, dump:", VAR(playerId));
-        for (auto value : score.dump().values()) {
-            INFO_VAR(value);
-        }
-        PREF_INFO("pool:");
-        for (auto value : score.pool().values()) {
-            INFO_VAR(value);
-        }
-        PREF_INFO("whists:");
-        for (const auto& [whistPlayerId, whists] : score.whists()) {
-            INFO_VAR(whistPlayerId);
-            for (auto value : whists.values()) {
-                INFO_VAR(value);
-            }
-        }
-    }
+    ctx.scoreSheet.score = dealFinished.score_sheet() // clang-format off
+        | rv::transform(unpack([](const auto& playerId, const auto& score) {
+        return std::pair{playerId, Score{
+            .dump = score.dump().values() | rng::to_vector,
+            .pool = score.pool().values() | rng::to_vector,
+            .whists = score.whists() | rv::transform(unpack([](const auto& id, const auto& whist) {
+                return std::pair{id, whist.values() | rng::to_vector};
+        })) | rng::to<std::map>}};
+    })) | rng::to<ScoreSheet>; // clang-format on
 }
 
 auto handleTrickFinished(Context& ctx, const TrickFinished& trickFinished) -> void
@@ -778,13 +774,13 @@ auto onWsMessage(const int eventType, const EmscriptenWebSocketMessageEvent* e, 
             return EM_TRUE;
         }
         handleTrickFinished(ctx, std::move(trickFinished));
-    } else if (msg.method() == "RoundFinished") {
-        auto roundFinished = RoundFinished{};
-        if (not roundFinished.ParseFromString(msg.payload())) {
-            PREF_WARN("error: failed to parse RoundFinished");
+    } else if (msg.method() == "DealFinished") {
+        auto dealFinished = DealFinished{};
+        if (not dealFinished.ParseFromString(msg.payload())) {
+            PREF_WARN("error: failed to parse DealFinished");
             return EM_TRUE;
         }
-        handleRoundFinished(ctx, std::move(roundFinished));
+        handleDealFinished(ctx, std::move(dealFinished));
     } else {
         PREF_WARN("error: unknown method: {}", msg.method());
     }
@@ -1218,8 +1214,8 @@ auto drawBiddingMenu(Context& ctx) -> void
             // TODO: Enable Miser and Miser WT only as a first bid
             auto state = (not isPass //
                           and (ctx.bidding.rank != allRanks) //
-                          and (rank <= ctx.bidding.rank))
-                    or (isPass and isFinalBid)
+                          and (ctx.bidding.rank >= rank))
+                    or (isPass and isFinalBid) // a declarer cannot pass after declaring a bid
                 ? GuiState{STATE_DISABLED}
                 : GuiState{STATE_NORMAL};
             const auto pos = RVector2{
@@ -1347,8 +1343,8 @@ auto handleCardClick(Context& ctx, Action act) -> void
 [[nodiscard]] auto makeCodepoints() -> std::vector<int>
 {
     auto codepointSize = 0;
-    const auto ascii = ranges::views::closed_iota(0x20, 0x7E); // space..~
-    const auto cyrillic = ranges::views::closed_iota(0x0410, 0x044F); // А..я
+    const auto ascii = rv::closed_iota(0x20, 0x7E); // space..~
+    const auto cyrillic = rv::closed_iota(0x0410, 0x044F); // А..я
     const auto extras = {
         GetCodepoint("Ё", &codepointSize),
         GetCodepoint("ё", &codepointSize),
@@ -1368,7 +1364,7 @@ auto handleCardClick(Context& ctx, Action act) -> void
         GetCodepoint(ARROW_RIGHT, &codepointSize),
         GetCodepoint(ARROW_LEFT, &codepointSize),
     };
-    return ranges::views::concat(ascii, cyrillic, extras) | ranges::to_vector;
+    return rv::concat(ascii, cyrillic, extras) | rng::to_vector;
 }
 
 auto setFont(const RFont& font) -> void
@@ -1483,7 +1479,7 @@ auto drawSettingsMenu(Context& ctx) -> void
     GuiSetStyle(LABEL, TEXT_COLOR_NORMAL, GuiGetStyle(LABEL, TEXT_COLOR_PRESSED));
     GuiLabel(langsLabelBounds, ctx.localizeText(GameText::Language).c_str());
     GuiSetStyle(LABEL, TEXT_COLOR_NORMAL, prev);
-    const auto joinedLangs = langs | ranges::views::intersperse(";") | ranges::views::join | ranges::to<std::string>;
+    const auto joinedLangs = langs | rv::intersperse(";") | rv::join | rng::to<std::string>;
     const auto langsBounds = RRectangle{
         inner.x, langsLabelBounds.y + langsLabelBounds.height + labelGap, inner.width, static_cast<float>(langsH)};
     GuiListView(langsBounds, joinedLangs.c_str(), &ctx.settingsMenu.langIdScroll, &ctx.settingsMenu.langIdSelect);
@@ -1502,8 +1498,7 @@ auto drawSettingsMenu(Context& ctx) -> void
     GuiSetStyle(LABEL, TEXT_COLOR_NORMAL, GuiGetStyle(LABEL, TEXT_COLOR_PRESSED));
     GuiLabel(colorSchemeLabelBounds, ctx.localizeText(GameText::ColorScheme).c_str());
     GuiSetStyle(LABEL, TEXT_COLOR_NORMAL, prev);
-    const auto joinedColorSchemes
-        = colorSchemes | ranges::views::intersperse(";") | ranges::views::join | ranges::to<std::string>;
+    const auto joinedColorSchemes = colorSchemes | rv::intersperse(";") | rv::join | rng::to<std::string>;
     const auto colorSchemesBounds = RRectangle{
         inner.x,
         colorSchemeLabelBounds.y + colorSchemeLabelBounds.height + labelGap,
@@ -1580,20 +1575,57 @@ auto drawScoreSheet(Context& ctx) -> void
     RVector2{r.x, center.y}.DrawLine({rr.x, center.y}, thick, borderColor);
     RVector2{r.x + r.width, center.y}.DrawLine({rr.x + rr.width, center.y}, thick, borderColor);
     RVector2{center.x, r.y + r.height}.DrawLine({center.x, rr.y + rr.height}, thick, borderColor);
-    font.DrawText("L. W. On R.", {rr.x, rr.y + gap}, {}, rotateL, fSize, fSpace, c);
-    font.DrawText("L. W. On M.", {rr.x, center.y + gap}, {}, rotateL, fSize, fSpace, c);
-    font.DrawText("L. P.", {rrr.x, rrr.y + gap}, {}, rotateL, fSize, fSpace, c);
-    font.DrawText("L. D.", {center.x, r.y + gap}, {}, rotateL, fSize, fSpace, c);
-    font.DrawText("R. W. on L.", {rr.x + rr.width, center.y - gap}, {}, rotateR, fSize, fSpace, c);
-    font.DrawText("R. W. on M.", {rr.x + rr.width, rr.y + rr.height - gap}, {}, rotateR, fSize, fSpace, c);
-    font.DrawText("R. P.", {rrr.x + rrr.width, rrr.y + rrr.height - gap}, {}, rotateR, fSize, fSpace, c);
-    font.DrawText("R. D.", {center.x, center.y - radius - gap}, {}, rotateR, fSize, fSpace, c);
-    font.DrawText("M. W on L.", {rr.x + gap, rr.y + rr.height}, fSize, fSpace, c);
-    font.DrawText("M. W on R.", {center.x + gap, rr.y + rr.height}, fSize, fSpace, c);
-    font.DrawText("M. P.", {rrr.x + gap, rrr.y + rrr.height}, fSize, fSpace, c);
-    font.DrawText("M. D.", {rrr.x + radius, rrr.y + rrr.height - fSize}, fSize, fSpace, c);
     font.DrawText("10", {center.x - radius / 2.f, center.y - radius / 2.f}, fSize, fSpace, c);
-    // TODO: don't hardcode the above value
+    // TODO: don't hardcode the above value 10
+
+    // TODO: use `assert(cond)` instead of `else if(cond)`
+    const auto joinValues = [](const auto& values) {
+        return fmt::format("{}", fmt::join(values | rv::filter(std::bind_front(std::not_equal_to{}, 0)), "."));
+    };
+    const auto [leftId, rightId] = getOpponentIds(ctx);
+    for (const auto& [playerId, score] : ctx.scoreSheet.score) {
+        if (playerId == ctx.myPlayerId) {
+            const auto dumpValues = joinValues(score.dump);
+            const auto poolValues = joinValues(score.pool);
+            font.DrawText(dumpValues, {rrr.x + radius, rrr.y + rrr.height - fSize}, fSize, fSpace, c);
+            font.DrawText(poolValues, {rrr.x + gap, rrr.y + rrr.height}, fSize, fSpace, c);
+            for (const auto& [toWhomWhistId, whist] : score.whists) {
+                const auto whistValues = joinValues(whist);
+                if (toWhomWhistId == leftId) {
+                    font.DrawText(whistValues, {rr.x + gap, rr.y + rr.height}, fSize, fSpace, c);
+                } else if (toWhomWhistId == rightId) {
+                    font.DrawText(whistValues, {center.x + gap, rr.y + rr.height}, fSize, fSpace, c);
+                }
+            }
+        } else if (playerId == rightId) {
+            const auto dumpValues = joinValues(score.dump);
+            const auto poolValues = joinValues(score.pool);
+            font.DrawText(dumpValues, {center.x, center.y - radius - gap}, {}, rotateR, fSize, fSpace, c);
+            font.DrawText(poolValues, {rrr.x + rrr.width, rrr.y + rrr.height - gap}, {}, rotateR, fSize, fSpace, c);
+            for (const auto& [toWhomWhistId, whist] : score.whists) {
+                const auto whistValues = joinValues(whist);
+                if (toWhomWhistId == ctx.myPlayerId) {
+                    font.DrawText(
+                        whistValues, {rr.x + rr.width, rr.y + rr.height - gap}, {}, rotateR, fSize, fSpace, c);
+                } else if (toWhomWhistId == leftId) {
+                    font.DrawText(whistValues, {rr.x + rr.width, center.y - gap}, {}, rotateR, fSize, fSpace, c);
+                }
+            }
+        } else if (playerId == leftId) {
+            const auto dumpValues = joinValues(score.dump);
+            const auto poolValues = joinValues(score.pool);
+            font.DrawText(dumpValues, {center.x, r.y + gap}, {}, rotateL, fSize, fSpace, c);
+            font.DrawText(poolValues, {rrr.x, rrr.y + gap}, {}, rotateL, fSize, fSpace, c);
+            for (const auto& [toWhomWhistId, whist] : score.whists) {
+                const auto whistValues = joinValues(whist);
+                if (toWhomWhistId == ctx.myPlayerId) {
+                    font.DrawText(whistValues, {rr.x, center.y + gap}, {}, rotateL, fSize, fSpace, c);
+                } else if (toWhomWhistId == rightId) {
+                    font.DrawText(whistValues, {rr.x, rr.y + gap}, {}, rotateL, fSize, fSpace, c);
+                }
+            }
+        }
+    }
 }
 
 auto updateDrawFrame(void* userData) -> void
@@ -1616,11 +1648,10 @@ auto updateDrawFrame(void* userData) -> void
         } else if ((ctx.stage == "TalonPicking") and (std::size(ctx.discardedTalon) < 2)) {
             handleCardClick(ctx, [&](Card&& card) { ctx.discardedTalon.push_back(card.name); });
             if (std::size(ctx.discardedTalon) == 2) {
-                INFO_VAR(ctx.discardedTalon, ctx.bidding.rank);
-                if (ctx.bidding.rank != 0) {
-                    --ctx.bidding.rank; // allow the final bid as before
-                } else {
+                if (const auto isSixSpade = ctx.bidding.rank == 0; isSixSpade) {
                     ctx.bidding.rank = allRanks;
+                } else if (const auto isNotAllPassed = ctx.bidding.rank != allRanks; isNotAllPassed) {
+                    --ctx.bidding.rank;
                 }
                 ctx.bidding.isVisible = true;
             }

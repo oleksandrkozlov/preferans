@@ -101,22 +101,6 @@ struct Declarer {
     ContractLevel contractLevel = ContractLevel::Six;
 };
 
-struct ScoreEntry {
-    auto operator<=>(const ScoreEntry&) const = default;
-
-    int dump{};
-    int pool{};
-    int whist{};
-};
-
-struct Score {
-    std::vector<std::int32_t> dump;
-    std::vector<std::int32_t> pool;
-    std::map<Player::Id, std::vector<std::int32_t>> whists;
-};
-
-using ScoreSheet = std::map<Player::Id, Score>;
-
 struct Context {
     using Players = std::map<Player::Id, Player>;
 

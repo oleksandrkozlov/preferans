@@ -15,31 +15,27 @@ Both use `Protobuf` for message serialization.
 ```
 xhost +local:docker
 DOCKER_BUILDKIT=0 docker build --tag preferans .
-docker run --privileged -ti -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix -v /home/olkozlo/:/home/olkozlo/ -w /home/olkozlo/Work/workspace/preferans --network host --name preferans preferans
+docker run --privileged -ti -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix \
+    -v $HOME:$HOME -w $PWD --network host --name preferans preferans
 ```
 
-### Build Server
+### Server
 
 ```
 cmake -S server -B build-server -GNinja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build-server --target server
+cmake --build build-server --target server test_server
+./build-server/bin/test_server
+./tests/run-tests.sh
 ./build-server/bin/server 0.0.0.0 8080
 ```
 
-### Build Client
+### Client
 
 ```
-emcmake cmake -S client -B build-client -GNinja -DCMAKE_BUILD_TYPE=Debug -Dprotobuf_BUILD_TESTS=OFF -DPLATFORM=Web
+emcmake cmake -S client -B build-client -GNinja -DCMAKE_BUILD_TYPE=Debug \
+    -Dprotobuf_BUILD_TESTS=OFF -DPLATFORM=Web
 cmake --build build-client
 python3 -m http.server -d build-client/bin 8000
-```
-
-### Test
-
-```
-cmake --build build-server --target server_test
-./build-server/bin/server_test
-./tests/run-tests.sh
 ```
 
 ### Dependencies
