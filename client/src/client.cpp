@@ -349,6 +349,16 @@ struct WhistingMenu {
     return {gsl::narrow_cast<unsigned int>(GuiGetStyle(control, property))};
 }
 
+[[nodiscard]] auto getGuiButtonBorderWidth() noexcept -> float
+{
+    return static_cast<float>(GuiGetStyle(BUTTON, BORDER_WIDTH));
+}
+
+[[nodiscard]] auto getGuiDefaultTextSize() noexcept -> float
+{
+    return static_cast<float>(GuiGetStyle(DEFAULT, TEXT_SIZE));
+}
+
 [[nodiscard]] constexpr auto localizeText(const GameText text, const GameLang lang) noexcept -> std::string_view
 {
     return localization[std::to_underlying(lang)][std::to_underlying(text)];
@@ -846,8 +856,7 @@ auto setup_websocket(Context& ctx) -> void
 
 auto drawGuiLabelCentered(const std::string& text, const RVector2& anchor) -> void
 {
-    const auto size
-        = MeasureTextEx(GuiGetFont(), text.c_str(), static_cast<float>(GuiGetStyle(DEFAULT, TEXT_SIZE)), fontSpacing);
+    const auto size = MeasureTextEx(GuiGetFont(), text.c_str(), getGuiDefaultTextSize(), fontSpacing);
     auto bounds = RRectangle{
         anchor.x - size.x * 0.5f - 4.0f, // shift left to center and add left padding
         anchor.y - size.y * 0.5f - 4.0f, // shift up to center and add top padding
@@ -1107,7 +1116,7 @@ auto drawOpponentHand(Context& ctx, const int cardCount, const float x, const Pl
         ctx.backCard.texture.Draw(RVector2{x, posY});
     }
     // centred name plate above the topmost card
-    const auto fontSize = static_cast<float>(GuiGetStyle(DEFAULT, TEXT_SIZE));
+    const auto fontSize = getGuiDefaultTextSize();
     const auto centerX = x + (cardWidth * 0.5f);
     auto anchor = RVector2{centerX, startY - fontSize};
     {
@@ -1233,7 +1242,7 @@ auto drawBiddingMenu(Context& ctx) -> void
             const auto bgColor = getGuiColor(BUTTON, GUI_PROPERTY(BASE, state));
             const auto textColor = getGuiColor(BUTTON, GUI_PROPERTY(TEXT, state));
             rect.Draw(bgColor);
-            rect.DrawLines(borderColor, static_cast<float>(GuiGetStyle(BUTTON, BORDER_WIDTH)));
+            rect.DrawLines(borderColor, getGuiButtonBorderWidth());
             auto text = std::string{ctx.localizeBid(bid)};
             auto textSize = ctx.fontM.MeasureText(text, ctx.fontSizeM(), fontSpacing);
             const auto textX = rect.x + (rect.width - textSize.x) / 2.0f;
@@ -1304,7 +1313,7 @@ auto drawWhistingMenu(Context& ctx) -> void
         const auto bgColor = getGuiColor(BUTTON, GUI_PROPERTY(BASE, state));
         const auto textColor = getGuiColor(BUTTON, GUI_PROPERTY(TEXT, state));
         rect.Draw(bgColor);
-        rect.DrawLines(borderColor, static_cast<float>(GuiGetStyle(BUTTON, BORDER_WIDTH)));
+        rect.DrawLines(borderColor, getGuiButtonBorderWidth());
         const auto text = ctx.localizeText(whistingFlat[i]);
         const auto textSize = ctx.fontM.MeasureText(text, ctx.fontSizeM(), fontSpacing);
         const auto textX = rect.x + (rect.width - textSize.x) / 2.0f;
@@ -1435,7 +1444,7 @@ auto drawSettingsMenu(Context& ctx) -> void
         return;
     }
     const auto rowH = GuiGetStyle(LISTVIEW, LIST_ITEMS_HEIGHT);
-    const auto textS = GuiGetStyle(DEFAULT, TEXT_SIZE);
+    const auto textS = static_cast<int>(getGuiDefaultTextSize());
     const auto labelH = textS + 6; // readable label height
     const auto labelGap = 6; // gap between label and its list
     const auto spacing = 12; // vertical spacing between sections
@@ -1552,76 +1561,85 @@ auto drawScoreSheet(Context& ctx) -> void
     const auto sheetS = center.y * 1.5f;
     const auto sheet = RVector2{center.x - sheetS / 2.f, center.y - sheetS / 2.f};
     const auto radius = sheetS / 20.f;
-    const auto thick = static_cast<float>(GuiGetStyle(BUTTON, BORDER_WIDTH));
-    const auto r = RRectangle{sheet.x, sheet.y, sheetS, sheetS};
-    const auto rr = RRectangle{r.x + sheetS / 6.f, r.y, sheetS - sheetS / 3.f, sheetS - sheetS / 6.f};
-    const auto rrr = RRectangle{r.x + sheetS / 3.f, r.y, sheetS - sheetS / 1.5f, sheetS - sheetS / 3.f};
+    const auto thick = getGuiButtonBorderWidth();
+    const auto posm = 2.f / 9.f;
+    const auto poss = 5.f / 18.f;
+    const auto rl = RRectangle{sheet.x, sheet.y, sheetS, sheetS};
+    const auto rm = RRectangle{rl.x + sheetS * posm, rl.y, sheetS - sheetS * posm * 2.f, sheetS - sheetS * posm};
+    const auto rs = RRectangle{rl.x + sheetS * poss, rl.y, sheetS - sheetS * poss * 2.f, sheetS - sheetS * poss};
     const auto borderColor = getGuiColor(DEFAULT, BORDER_COLOR_NORMAL);
     const auto sheetColor = getGuiColor(DEFAULT, BASE_COLOR_NORMAL);
     const auto fSize = ctx.fontSizeM();
     const auto c = getGuiColor(LABEL, TEXT_COLOR_NORMAL);
     const auto gap = fSize / 4.f;
     const auto& font = ctx.fontM;
-    r.Draw(sheetColor);
-    r.DrawLines(borderColor, thick);
-    rr.DrawLines(borderColor, thick);
-    rrr.DrawLines(borderColor, thick);
-    center.DrawLine({r.x + thick, r.y + r.height - thick}, thick, borderColor);
-    center.DrawLine({r.x + r.width - thick, r.y + r.height - thick}, thick, borderColor);
-    center.DrawLine({r.x + r.width / 2.f, r.y}, thick, borderColor);
-    center.DrawLine({r.x + r.width / 2.f, r.y}, thick, borderColor);
+    rl.Draw(sheetColor);
+    rl.DrawLines(borderColor, thick);
+    rs.DrawLines(borderColor, thick);
+    rm.DrawLines(borderColor, thick);
+    center.DrawLine({rl.x + thick, rl.y + rl.height - thick}, thick, borderColor);
+    center.DrawLine({rl.x + rl.width - thick, rl.y + rl.height - thick}, thick, borderColor);
+    center.DrawLine({rl.x + rl.width / 2.f, rl.y}, thick, borderColor);
+    center.DrawLine({rl.x + rl.width / 2.f, rl.y}, thick, borderColor);
     center.DrawCircle(radius, borderColor);
     center.DrawCircle(radius - thick, sheetColor);
-    RVector2{r.x, center.y}.DrawLine({rr.x, center.y}, thick, borderColor);
-    RVector2{r.x + r.width, center.y}.DrawLine({rr.x + rr.width, center.y}, thick, borderColor);
-    RVector2{center.x, r.y + r.height}.DrawLine({center.x, rr.y + rr.height}, thick, borderColor);
-    font.DrawText("10", {center.x - radius / 2.f, center.y - radius / 2.f}, fSize, fSpace, c);
-    // TODO: don't hardcode the above value 10
-
+    RVector2{rl.x, center.y}.DrawLine({rm.x, center.y}, thick, borderColor);
+    RVector2{rl.x + rl.width, center.y}.DrawLine({rm.x + rm.width, center.y}, thick, borderColor);
+    RVector2{center.x, rl.y + rl.height}.DrawLine({center.x, rm.y + rm.height}, thick, borderColor);
+    // TODO: don't hardcode `scoreTarget`
+    static constexpr auto scoreTarget = "10";
+    const auto scoreTargetSize = ctx.fontS.MeasureText(scoreTarget, fSize, fSpace);
+    font.DrawText(
+        scoreTarget, {center.x - scoreTargetSize.x / 2.f, center.y - scoreTargetSize.y / 2.f}, fSize, fSpace, c);
     // TODO: use `assert(cond)` instead of `else if(cond)`
-    const auto joinValues = [](const auto& values) {
-        return fmt::format("{}", fmt::join(values | rv::filter(std::bind_front(std::not_equal_to{}, 0)), "."));
-    };
+    const auto joinValues = [](const auto& values) { // clang-format off
+        return fmt::format("{}", fmt::join(values
+                | rv::filter(notEqualTo(0))
+                | rv::partial_sum(std::plus{}), "."));
+    }; // clang-format on
     const auto [leftId, rightId] = getOpponentIds(ctx);
     for (const auto& [playerId, score] : ctx.scoreSheet.score) {
         if (playerId == ctx.myPlayerId) {
             const auto dumpValues = joinValues(score.dump);
             const auto poolValues = joinValues(score.pool);
-            font.DrawText(dumpValues, {rrr.x + radius, rrr.y + rrr.height - fSize}, fSize, fSpace, c);
-            font.DrawText(poolValues, {rrr.x + gap, rrr.y + rrr.height}, fSize, fSpace, c);
+            font.DrawText(dumpValues, {rs.x + radius, rs.y + rs.height - fSize}, fSize, fSpace, c);
+            // TODO: properly center `poolValues` (here and below) instead of adding `gap / 2.f`
+            font.DrawText(poolValues, {rs.x + gap, rs.y + rs.height + gap / 2.f}, fSize, fSpace, c);
             for (const auto& [toWhomWhistId, whist] : score.whists) {
                 const auto whistValues = joinValues(whist);
                 if (toWhomWhistId == leftId) {
-                    font.DrawText(whistValues, {rr.x + gap, rr.y + rr.height}, fSize, fSpace, c);
+                    font.DrawText(whistValues, {rm.x + gap, rm.y + rm.height}, fSize, fSpace, c);
                 } else if (toWhomWhistId == rightId) {
-                    font.DrawText(whistValues, {center.x + gap, rr.y + rr.height}, fSize, fSpace, c);
+                    font.DrawText(whistValues, {center.x + gap, rm.y + rm.height}, fSize, fSpace, c);
                 }
             }
         } else if (playerId == rightId) {
             const auto dumpValues = joinValues(score.dump);
             const auto poolValues = joinValues(score.pool);
-            font.DrawText(dumpValues, {center.x, center.y - radius - gap}, {}, rotateR, fSize, fSpace, c);
-            font.DrawText(poolValues, {rrr.x + rrr.width, rrr.y + rrr.height - gap}, {}, rotateR, fSize, fSpace, c);
+            font.DrawText(
+                dumpValues, {rs.x + rs.width - fSize, rs.y + rs.height - radius}, {}, rotateR, fSize, fSpace, c);
+            font.DrawText(
+                poolValues, {rs.x + rs.width + gap / 2.f, rs.y + rs.height - gap}, {}, rotateR, fSize, fSpace, c);
             for (const auto& [toWhomWhistId, whist] : score.whists) {
                 const auto whistValues = joinValues(whist);
                 if (toWhomWhistId == ctx.myPlayerId) {
                     font.DrawText(
-                        whistValues, {rr.x + rr.width, rr.y + rr.height - gap}, {}, rotateR, fSize, fSpace, c);
+                        whistValues, {rm.x + rm.width, rm.y + rm.height - gap}, {}, rotateR, fSize, fSpace, c);
                 } else if (toWhomWhistId == leftId) {
-                    font.DrawText(whistValues, {rr.x + rr.width, center.y - gap}, {}, rotateR, fSize, fSpace, c);
+                    font.DrawText(whistValues, {rm.x + rm.width, center.y - gap}, {}, rotateR, fSize, fSpace, c);
                 }
             }
         } else if (playerId == leftId) {
             const auto dumpValues = joinValues(score.dump);
             const auto poolValues = joinValues(score.pool);
-            font.DrawText(dumpValues, {center.x, r.y + gap}, {}, rotateL, fSize, fSpace, c);
-            font.DrawText(poolValues, {rrr.x, rrr.y + gap}, {}, rotateL, fSize, fSpace, c);
+            font.DrawText(dumpValues, {rs.x + fSize, rl.y + gap}, {}, rotateL, fSize, fSpace, c);
+            font.DrawText(poolValues, {rs.x - gap / 2, rs.y + gap}, {}, rotateL, fSize, fSpace, c);
             for (const auto& [toWhomWhistId, whist] : score.whists) {
                 const auto whistValues = joinValues(whist);
                 if (toWhomWhistId == ctx.myPlayerId) {
-                    font.DrawText(whistValues, {rr.x, center.y + gap}, {}, rotateL, fSize, fSpace, c);
+                    font.DrawText(whistValues, {rm.x, center.y + gap}, {}, rotateL, fSize, fSpace, c);
                 } else if (toWhomWhistId == rightId) {
-                    font.DrawText(whistValues, {rr.x, rr.y + gap}, {}, rotateL, fSize, fSpace, c);
+                    font.DrawText(whistValues, {rm.x, rm.y + gap}, {}, rotateL, fSize, fSpace, c);
                 }
             }
         }
@@ -1708,12 +1726,12 @@ int main(const int argc, const char* const argv[])
     }
     spdlog::set_pattern("[%^%l%$][%!] %v");
     auto ctx = pref::Context{};
-    ctx.window.SetTargetFPS(60);
     pref::loadLang(ctx, args.at("--language").asString());
     GuiLoadStyleDefault();
     ctx.initialFont = GuiGetFont();
     pref::loadColorScheme(ctx, args.at("--color-scheme").asString());
     pref::loadFonts(ctx);
-    emscripten_set_main_loop_arg(pref::updateDrawFrame, pref::toUserData(ctx), 0, true);
+    static constexpr const auto fps = 60;
+    emscripten_set_main_loop_arg(pref::updateDrawFrame, pref::toUserData(ctx), fps, true);
     return 0;
 }

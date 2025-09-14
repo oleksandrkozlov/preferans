@@ -1,6 +1,5 @@
-#include "server.hpp"
-
 #include "common/common.hpp"
+#include "server.hpp"
 
 #include <catch2/catch_all.hpp>
 
@@ -182,6 +181,18 @@ TEST_CASE("calculate score")
             }; // clang-format on
             REQUIRE(actual == expected);
         }
+}
+
+TEST_CASE("calculateFinalResult")
+{
+    const auto result = calculateFinalResult(
+        {{"p0", {.dump = 12, .pool = 14, .whists = {{"p1", 12}, {"p2", 0}}}},
+         {"p1", {.dump = 26, .pool = 8, .whists = {{"p0", 22}, {"p2", 0}}}},
+         {"p2", {.dump = 6, .pool = 0, .whists = {{"p0", 22}, {"p1", 4}}}}});
+
+    REQUIRE(result.at("p0") == 61);
+    REQUIRE(result.at("p1") == -100);
+    REQUIRE(result.at("p2") == 39);
 }
 
 } // namespace pref

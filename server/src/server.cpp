@@ -206,7 +206,7 @@ auto sendToAllExcept(const Message& msg, const Context::Players& players, const 
 {
     static constexpr auto GetPlayerId = &Context::Players::value_type::first;
     const auto wss = players //
-        | rv::filter(std::bind_front(std::not_equal_to{}, excludedId), GetPlayerId) //
+        | rv::filter(notEqualTo(excludedId), GetPlayerId) //
         | rv::values //
         | rv::transform(&Player::ws) //
         | rng::to_vector;

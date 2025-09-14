@@ -7,6 +7,7 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace pref {
 
@@ -74,7 +75,17 @@ struct Score {
     std::map<PlayerId, std::vector<std::int32_t>> whists;
 };
 
+struct FinalScoreEntry {
+    auto operator<=>(const FinalScoreEntry&) const = default;
+
+    float dump{};
+    float pool{};
+    std::map<PlayerId, float> whists;
+};
+
 using ScoreSheet = std::map<PlayerId, Score>;
+using FinalScore = std::map<PlayerId, FinalScoreEntry>;
+using FinalResult = std::map<PlayerId, int>;
 
 [[nodiscard]] inline auto cardSuit(const std::string_view card) -> std::string
 {
@@ -107,6 +118,47 @@ template<typename Callable>
 [[maybe_unused]] [[nodiscard]] auto unpack(Callable callable)
 {
     return [cb = std::move(callable)](const auto& pair) { return cb(pair.first, pair.second); };
+}
+
+template<typename Value>
+[[nodiscard]] auto notEqualTo(Value&& value)
+{
+    return std::bind_front(std::not_equal_to{}, std::forward<Value>(value));
+}
+
+[[nodiscard]] inline auto calculateFinalResult(FinalScore finalScore) -> FinalResult
+{
+    static constexpr auto numberOfPlayers = static_cast<float>(NumberOfPlayers);
+    static constexpr auto price = 10.f;
+    const auto adjustByMin = [](auto& scores, const auto member) {
+        const auto minScore = rng::min(scores | rv::values, std::less{}, member);
+        for (auto& score : scores | rv::values) {
+            score.*member -= minScore.*member;
+        }
+    };
+    const auto distributeWhists = [&](const auto member, const bool outgoing) {
+        for (auto& [playerId, score] : finalScore | rv::filter([=](auto&& kv) { return kv.second.*member != 0.f; })) {
+            const auto amount = (score.*member * price) / numberOfPlayers;
+            for (const auto& otherId : finalScore | rv::keys | rv::filter(notEqualTo(playerId))) {
+                auto& target = outgoing ? finalScore.at(playerId).whists.at(otherId)
+                                        : finalScore.at(otherId).whists.at(playerId);
+                target += amount;
+            }
+        }
+    };
+    adjustByMin(finalScore, &FinalScoreEntry::dump);
+    adjustByMin(finalScore, &FinalScoreEntry::pool);
+    distributeWhists(&FinalScoreEntry::dump, false);
+    distributeWhists(&FinalScoreEntry::pool, true);
+    auto finalScoreCopy = finalScore;
+    for (auto& [playerId, score] : finalScore) {
+        for (auto& [otherId, whists] : score.whists) {
+            finalScoreCopy.at(playerId).whists.at(otherId) -= finalScore.at(otherId).whists.at(playerId);
+        }
+    }
+    return finalScoreCopy | rv::transform(unpack([](const auto& playerId, const auto& score) { // clang-format off
+        return std::pair{playerId, static_cast<int>(rng::accumulate(score.whists | rv::values, 0.f))}; }))
+            | rng::to<FinalResult>; // clang-format on
 }
 
 } // namespace pref
