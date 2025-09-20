@@ -147,22 +147,21 @@ struct Beat {
 [[nodiscard]] auto beats(Beat beat) -> bool;
 
 [[nodiscard]] auto finishTrick(const std::vector<PlayedCard>& trick, std::string_view trump) -> Player::Id;
-[[nodiscard]] auto calculateScoreEntry(const Declarer& declarer, const std::vector<Whister>& whisters)
-    -> std::map<Player::Id, ScoreEntry>;
+[[nodiscard]] auto calculateDealScore(const Declarer& declarer, const std::vector<Whister>& whisters) -> DealScore;
 
 auto acceptConnectionAndLaunchSession(Context& ctx, net::ip::tcp::endpoint endpoint) -> Awaitable<>;
 
 // NOLINTNEXTLINE
-[[maybe_unused]] auto inline format_as(const ScoreEntry& entry) -> std::string
+[[maybe_unused]] auto inline format_as(const DealScoreEntry& entry) -> std::string
 {
     return fmt::format("dump: {}, pool: {}, whist: {}", entry.dump, entry.pool, entry.whist);
 }
 
 // NOLINTNEXTLINE
-[[maybe_unused]] auto inline format_as(const std::map<Player::Id, ScoreEntry>& scoreEntry) -> std::string
+[[maybe_unused]] auto inline format_as(const DealScore& entry) -> std::string
 { // clang-format off
-    return fmt::format("{}", fmt::join(scoreEntry
-        | rv::transform(unpack([](const auto& k, const auto& v) { return fmt::format("{}: {}", k, v); })), "\n"));
+    return fmt::format("{}", fmt::join(entry
+        | rv::transform(unpair([](const auto& k, const auto& v) { return fmt::format("{}: {}", k, v); })), "\n"));
 } // clang-format on
 
 }; // namespace pref

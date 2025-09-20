@@ -4,11 +4,11 @@ Preferans
 Web Multiplayer Card Game in C++
 --------------------------------
 
-Server is built with `Boost.Beast` (`WebSocket`) and `Boost.Asio` for networking.
-Client uses `Emscripten` for `WebSocket` communication and compilation to
-`WebAssembly`, with `raylib`/`raylib-cpp` for rendering and `raygui` for the
-GUI.
-Both use `Protobuf` for message serialization.
+The server is implemented using `Boost.Beast` (for `WebSocket`) and
+`Boost.Asio` for networking. The client is compiled to `WebAssembly` via
+`Emscripten`, using `WebSockets` for communication. Rendering is handled with
+`raylib`/`raylib-cpp`, and the GUI is built with `raygui`. Both server and
+client use `Protobuf` for message serialization.
 
 ### Docker
 
@@ -23,19 +23,26 @@ docker run --privileged -ti -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix
 
 ```
 cmake -S server -B build-server -GNinja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build-server --target server test_server
-./build-server/bin/test_server
-./tests/run-tests.sh
-./build-server/bin/server 0.0.0.0 8080
+cmake --build build-server --target server
+./build-server/bin/server 0.0.0.0 8080 &
 ```
 
 ### Client
 
 ```
+git submodule update --init --recursive
 emcmake cmake -S client -B build-client -GNinja -DCMAKE_BUILD_TYPE=Debug \
     -Dprotobuf_BUILD_TESTS=OFF -DPLATFORM=Web
 cmake --build build-client
-python3 -m http.server -d build-client/bin 8000
+python3 -m http.server -d build-client/bin 8000 &
+```
+
+### Test
+
+```
+cmake --build build-server --target test_server
+./build-server/bin/test_server
+./tests/run-tests.sh
 ```
 
 ### Dependencies
@@ -44,22 +51,22 @@ python3 -m http.server -d build-client/bin 8000
 * [boost.beast](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/index.html)
 * [boost.uuid](https://www.boost.org/doc/libs/latest/libs/uuid/doc/html/uuid.html)
 * [cmake](https://cmake.org)
-* [docopt.cpp](https://github.com/docopt/docopt.cpp)
+* [docopt](http://docopt.org/)
 * [emscripten](https://emscripten.org)
 * [fmt](https://fmt.dev)
 * [gsl](https://github.com/microsoft/GSL)
-* [protobuf](https://github.com/protocolbuffers/protobuf)
-* [range-v3](https://ericniebler.github.io/range-v3)
+* [protobuf](https://protobuf.dev)
+* [range-v3](https://ericniebler.github.io/range-v3/)
 * [raygui](https://github.com/raysan5/raygui)
-* [raylib-cpp](https://robloach.github.io/raylib-cpp)
+* [raylib-cpp](https://robloach.github.io/raylib-cpp/)
 * [raylib](https://www.raylib.com)
-* [spdlog](https://github.com/gabime/spdlog)
+* [spdlog](https://gabime.github.io/spdlog/)
 * [wasm](https://webassembly.org)
 
 ### License
 
 - **Code**: [MIT](LICENSE)
 - **Cards**: [Public Domain / CC0](client/resources/cards/LICENSE)
-- **Fonts**: [Bitstream Vera / DejaVu](client/resources/fonts/LICENSE)
+- **Fonts**: [DejaVu / Font Awesome Free (OFL)](client/resources/fonts/LICENSE)
 - **Styles**: [zlib](client/resources/styles/LICENSE)
 - **Shells**: [zlib / MIT / NCSA](client/resources/shells/LICENSE)

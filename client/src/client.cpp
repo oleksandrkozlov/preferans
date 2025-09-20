@@ -1,6 +1,3 @@
-// IWYU pragma: no_include <Vector2.hpp>
-// IWYU pragma: no_include <Color.hpp>
-
 #include "common/common.hpp"
 #include "common/logger.hpp"
 #include "proto/pref.pb.h"
@@ -47,11 +44,15 @@ constexpr auto screenHeight = 1080;
 constexpr auto originalCardHeight = 726.0f;
 constexpr auto originalCardWidth = 500.0f;
 constexpr auto cardAspectRatio = originalCardWidth / originalCardHeight;
-constexpr auto cardHeight = screenHeight / 5.0f; // 5th part of screen's height
+constexpr auto cardHeight = screenHeight / 5.0f;
 constexpr auto cardWidth = cardHeight * cardAspectRatio;
 constexpr auto cardOverlapX = cardWidth * 0.6f; // 60% overlap
 constexpr auto cardOverlapY = cardHeight * 0.2f;
 constexpr auto fontSpacing = 1.0f;
+constexpr auto borderMargin = screenWidth / 52.f;
+
+constexpr auto settingsIcon = "";
+constexpr auto scoreSheetIcon = "";
 
 [[nodiscard]] constexpr auto getCloseReason(const std::uint16_t code) noexcept -> std::string_view
 {
@@ -95,7 +96,7 @@ constexpr auto fontSpacing = 1.0f;
 enum class GameLang : std::size_t {
     English,
     Ukrainian,
-    Russian,
+    Alternative,
     Count,
 };
 
@@ -114,7 +115,7 @@ enum class GameText : std::size_t {
     Language,
     English,
     Ukrainian,
-    Russian,
+    Alternative,
     Light,
     Dark,
     Enefete,
@@ -129,7 +130,6 @@ enum class GameText : std::size_t {
     Cherry,
     Genesis,
     Ashes,
-    ScoreSheet,
     Count
 };
 
@@ -139,7 +139,7 @@ constexpr auto localization = std::
             // English
             "PREFERANS",
             "Current players:",
-            "Enter your name:", //
+            "Enter your name:",
             "Enter",
             WHIST,
             HALF_WHIST,
@@ -151,7 +151,7 @@ constexpr auto localization = std::
             "Language",
             "English",
             "Ukrainian",
-            "Russian",
+            "Alternative",
             "light",
             "dark",
             "enefete",
@@ -166,7 +166,6 @@ constexpr auto localization = std::
             "cherry",
             "genesis",
             "ashes",
-            "Score",
         },
         {
             // Ukrainian
@@ -184,7 +183,7 @@ constexpr auto localization = std::
             "Мова",
             "Англійська",
             "Українська",
-            "Російська",
+            "Альтернативна",
             "світлий",
             "темний",
             "енефете",
@@ -199,13 +198,12 @@ constexpr auto localization = std::
             "вишня",
             "генезис",
             "попіл",
-            "Пулька",
         },
         {
-            // Russian
+            // Alternative
             "ПРЕФЕРАНС",
             "Текущие игроки:",
-            "Введите своё имя:", //
+            "Введите своё имя:",
             "Войти",
             "Вист",
             "Полвиста",
@@ -217,7 +215,7 @@ constexpr auto localization = std::
             "Язык",
             "Английский",
             "Украинский",
-            "Русский",
+            "Альтернативный",
             "светлый",
             "тёмный",
             "энефете",
@@ -232,15 +230,20 @@ constexpr auto localization = std::
             "вишня",
             "генезис",
             "пепел",
-            "Пулька",
         },
     }};
+
+template<typename... Args>
+[[nodiscard]] auto resources(Args&&... args) -> std::string
+{
+    return (fs::path("resources") / ... / std::forward<Args>(args)).string();
+}
 
 struct Card {
     Card(CardName n, RVector2 pos)
         : name{std::move(n)}
         , position{pos}
-        , image{RImage{fs::path{"resources"} / "cards" / std::format("{}.png", name)}}
+        , image{RImage{resources("cards", std::format("{}.png", name))}}
     {
         image.Resize(static_cast<int>(cardWidth), static_cast<int>(cardHeight));
         texture = image.LoadTexture();
@@ -277,13 +280,7 @@ struct Player {
     int tricksTaken{};
 };
 
-// ♠ Spades
-// ♣ Clubs
-// ♦ Diamonds
-// ♥ Hearts
-
-// TODO: come up with a solution that doesn't require both `bidsFlat` and `bidTable`.
-
+// ♠ - Spades | ♣ - Clubs | ♦ - Diamonds | ♥ - Hearts
 // clang-format off
 constexpr auto bidsFlat = std::array{
       SIX SPADE,   SIX CLUB,   SIX DIAMOND,    SIX HEART,      SIX,
@@ -293,6 +290,7 @@ constexpr auto bidsFlat = std::array{
       TEN SPADE,   TEN CLUB,    TEN DIAMOND,   TEN HEART,      TEN,  TEN_WT,
                                                    MISER, MISER_WT,    PASS};
 
+// TODO: come up with a solution that doesn't require both `bidsFlat` and `bidTable`.
 constexpr auto bidTable = std::array<std::array<std::string_view, 6>, 6>{
     {{   SIX SPADE,   SIX CLUB,   SIX DIAMOND,   SIX HEART,      SIX,      "" },
      { SEVEN SPADE, SEVEN CLUB, SEVEN DIAMOND, SEVEN HEART,    SEVEN,      "" },
@@ -300,7 +298,6 @@ constexpr auto bidTable = std::array<std::array<std::string_view, 6>, 6>{
      {  NINE SPADE,  NINE CLUB,  NINE DIAMOND,  NINE HEART,     NINE, NINE_WT },
      {   TEN SPADE,   TEN CLUB,   TEN DIAMOND,   TEN HEART,      TEN,  TEN_WT },
      {          "",         "",            "",       MISER, MISER_WT,    PASS }}};
-
 // clang-format on
 
 constexpr auto allRanks = std::size(bidsFlat);
@@ -308,7 +305,7 @@ constexpr auto whistingFlat = std::array{GameText::Whist, GameText::HalfWhist, G
 
 struct BiddingMenu {
     bool isVisible{};
-    std::string bid; // text button
+    std::string bid;
     std::size_t rank = allRanks;
 
     auto clear() -> void
@@ -385,7 +382,7 @@ struct SettingsMenu {
     int colorSchemeIdSelect = -1;
     int langIdScroll = -1;
     int langIdSelect = -1;
-    bool isVisible = true;
+    bool isVisible{};
     std::string loadedColorScheme;
     std::string loadedLang;
 };
@@ -402,6 +399,7 @@ struct Context {
     RFont fontM;
     RFont fontL;
     RFont initialFont;
+    RFont fontAwesome;
     RVector2 screen{screenWidth, screenHeight};
     RWindow window{
         static_cast<int>(screen.x),
@@ -451,7 +449,7 @@ struct Context {
 
     [[nodiscard]] constexpr auto localizeBid(const std::string_view bid) const noexcept -> std::string_view
     {
-        if (lang == GameLang::Russian) { // clang-format off
+        if (lang == GameLang::Alternative) { // clang-format off
             if (bid == NINE_WT) { return NINE " БП"; }
             if (bid == TEN_WT) { return TEN " БП"; }
             if (bid == MISER) { return pref::localizeText(GameText::Miser, lang); }
@@ -538,7 +536,7 @@ auto handlePlayCard(Context& ctx, PlayCard playCard) -> void
 {
     auto [leftOpponentId, rightOpponentId] = getOpponentIds(ctx);
     auto& playerId = *playCard.mutable_player_id();
-    auto& cardName = *playCard.mutable_card(); // "queen_of_hearts"
+    auto& cardName = *playCard.mutable_card();
     INFO_VAR(playerId, cardName);
 
     if (playerId == leftOpponentId) {
@@ -563,11 +561,11 @@ auto handlePlayCard(Context& ctx, PlayCard playCard) -> void
 auto handleDealFinished(Context& ctx, const DealFinished dealFinished) -> void
 {
     ctx.scoreSheet.score = dealFinished.score_sheet() // clang-format off
-        | rv::transform(unpack([](const auto& playerId, const auto& score) {
+        | rv::transform(unpair([](const auto& playerId, const auto& score) {
         return std::pair{playerId, Score{
             .dump = score.dump().values() | rng::to_vector,
             .pool = score.pool().values() | rng::to_vector,
-            .whists = score.whists() | rv::transform(unpack([](const auto& id, const auto& whist) {
+            .whists = score.whists() | rv::transform(unpair([](const auto& id, const auto& whist) {
                 return std::pair{id, whist.values() | rng::to_vector};
         })) | rng::to<std::map>}};
     })) | rng::to<ScoreSheet>; // clang-format on
@@ -685,8 +683,7 @@ auto onWsMessage(const int eventType, const EmscriptenWebSocketMessageEvent* e, 
                 ctx.myPlayerName = player.player_name();
             }
             ctx.players.insert_or_assign(
-                std::move(*player.mutable_player_id()), //
-                Player{std::move(*player.mutable_player_name()), {}, {}, {}});
+                std::move(*player.mutable_player_id()), Player{std::move(*player.mutable_player_name()), {}, {}, {}});
         }
     } else if (method == "PlayerJoined") {
         auto playerJoined = PlayerJoined{};
@@ -896,18 +893,16 @@ auto drawEnterNameScreen(Context& ctx) -> void
 
     const auto buttonBox = RRectangle{boxPos.x, boxPos.y + boxHeight + 20.0f, boxWidth, 40.0f};
     const auto clicked = GuiButton(buttonBox, ctx.localizeText(GameText::Enter).c_str());
-    // Accept with Enter or button click
     if ((clicked or RKeyboard::IsKeyPressed(KEY_ENTER)) and (nameBuffer[0] != '\0') and editMode) {
         ctx.myPlayerName = nameBuffer;
         ctx.hasEnteredName = true;
-        editMode = false; // Disable further typing
+        editMode = false;
         setup_websocket(ctx);
     }
 }
 
 auto drawConnectedPlayersPanel(const Context& ctx) -> void
 {
-    static constexpr auto margin = 20.0f;
     static constexpr auto pad = 10.0f;
     static constexpr auto minWidth = 200.0f;
     static constexpr auto minHeight = 80.0f;
@@ -927,7 +922,7 @@ auto drawConnectedPlayersPanel(const Context& ctx) -> void
     const auto contentH = pad * 2.0f + headerSize.y + headerGap + static_cast<float>(rows) * lineGap;
     const auto panelW = std::max(minWidth, contentW);
     const auto panelH = std::max(minHeight, contentH);
-    const auto r = RRectangle{{margin, margin}, {panelW, panelH}};
+    const auto r = RRectangle{{borderMargin, borderMargin}, {panelW, panelH}};
     GuiPanel(r, nullptr);
     auto textPos = RVector2{r.x + pad, r.y + pad};
     ctx.fontS.DrawText(headerText, textPos, fontSize, fontSpacing, getGuiColor(LABEL, TEXT_COLOR_NORMAL));
@@ -1052,9 +1047,10 @@ auto drawMyHand(Context& ctx) -> void
     if (ctx.turnPlayerId == ctx.myPlayerId) {
         const auto text = ctx.localizeText(GameText::YourTurn);
         const auto textSize = ctx.fontM.MeasureText(text, ctx.fontSizeM(), fontSpacing);
+        static constexpr auto gapAboveCard = 25.0f;
         const auto rect = RRectangle{
             startX + (totalWidth - textSize.x) * 0.5f - 4.0f, // horizontally centered
-            y - textSize.y - 12.0f, // above the cards
+            y - textSize.y - gapAboveCard,
             textSize.x + 8.0f,
             textSize.y + 8.0f};
         GuiLabel(rect, text.c_str());
@@ -1068,11 +1064,41 @@ auto drawMyHand(Context& ctx) -> void
             GuiSetState(STATE_NORMAL);
         }
     }
-    // cards themselves
+    const auto mousePos = RMouse::GetPosition();
+    const auto toX = [&](const auto i) { return startX + static_cast<float>(i) * cardOverlapX; };
+    const auto hoveredIndex = std::invoke([&] {
+        auto reversed = rv::iota(0, std::ssize(hand)) | rv::reverse;
+        const auto it = rng::find_if(
+            reversed, [&](const auto i) { return mousePos.CheckCollision({toX(i), y, cardWidth, cardHeight}); });
+        return it == rng::end(reversed) ? -1 : *it;
+    });
+    struct CardShineEffect {
+        float speed = 90.f;
+        float stripeWidth = cardWidth / 5.f;
+        float intensity = 0.3f; // 0..1 alpha
+    };
+    const auto shine = CardShineEffect{};
     for (auto&& [i, card] : hand | rv::enumerate) {
-        const auto x = startX + static_cast<float>(i) * cardOverlapX;
-        card.position = RVector2{x, y};
+        const auto isHovered = ctx.turnPlayerId == ctx.myPlayerId
+            and (ctx.stage == "Playing" or ctx.stage == "TalonPicking")
+            and not ctx.bidding.isVisible
+            and isCardPlayable(ctx, card)
+            and static_cast<int>(i) == hoveredIndex;
+        static constexpr auto offset = cardHeight / 10.f;
+        const auto yOffset = isHovered ? -offset : 0.f;
+        card.position = RVector2{toX(i), y + yOffset};
         card.texture.Draw(card.position, tintForCard(ctx, card));
+        if (isHovered) {
+            const auto time = static_cast<float>(ctx.window.GetTime());
+            const auto shineX = std::fmod(time * shine.speed, cardWidth - shine.stripeWidth);
+            const auto shineRect = RRectangle{card.position.x + shineX, card.position.y, shine.stripeWidth, cardHeight};
+            const auto whiteColor = RColor::White();
+            shineRect.DrawGradient(
+                whiteColor.Fade(shine.intensity), // top left
+                whiteColor.Fade(0.f), // bottom left
+                whiteColor.Fade(shine.intensity), // bottom right
+                whiteColor.Fade(0.f)); // top right
+        }
     }
     if (not std::empty(ctx.player.whistingChoice)) {
         const auto text = ctx.localizeText(whistingChoiceToGameText(ctx.player.whistingChoice));
@@ -1100,7 +1126,6 @@ auto drawMyHand(Context& ctx) -> void
 auto drawOpponentHand(Context& ctx, const int cardCount, const float x, const PlayerId& playerId, const bool isRight)
     -> void
 {
-    // draw if I have cards
     if (std::empty(ctx.player.cards)) {
         return;
     }
@@ -1110,7 +1135,6 @@ auto drawOpponentHand(Context& ctx, const int cardCount, const float x, const Pl
     const auto countF = static_cast<float>(cardCount);
     const auto startY = (screenHeight - cardHeight - (countF - 1.0f) * cardOverlapY) * 0.5f;
 
-    // draw back-faces
     for (auto i = 0.0f; i < countF; ++i) {
         const auto posY = startY + i * cardOverlapY;
         ctx.backCard.texture.Draw(RVector2{x, posY});
@@ -1221,9 +1245,7 @@ auto drawBiddingMenu(Context& ctx) -> void
             const auto isPass = (bid == PASS);
             const auto isFinalBid = std::size(ctx.discardedTalon) == 2;
             // TODO: Enable Miser and Miser WT only as a first bid
-            auto state = (not isPass //
-                          and (ctx.bidding.rank != allRanks) //
-                          and (ctx.bidding.rank >= rank))
+            auto state = (not isPass and (ctx.bidding.rank != allRanks) and (ctx.bidding.rank >= rank))
                     or (isPass and isFinalBid) // a declarer cannot pass after declaring a bid
                 ? GuiState{STATE_DISABLED}
                 : GuiState{STATE_NORMAL};
@@ -1276,7 +1298,7 @@ auto drawBiddingMenu(Context& ctx) -> void
                 }
                 ctx.bidding.isVisible = false;
                 if (isFinalBid) {
-                    discardTalon(ctx, bid); // final bid
+                    discardTalon(ctx, bid);
                 } else {
                     sendBidding(ctx, bid);
                 }
@@ -1328,7 +1350,6 @@ auto drawWhistingMenu(Context& ctx) -> void
     }
 }
 
-
 template<typename Action>
 auto handleCardClick(Context& ctx, Action act) -> void
 {
@@ -1376,6 +1397,15 @@ auto handleCardClick(Context& ctx, Action act) -> void
     return rv::concat(ascii, cyrillic, extras) | rng::to_vector;
 }
 
+[[nodiscard]] auto makeAwesomeCodepoints() -> std::vector<int>
+{
+    auto codepointSize = 0;
+    return {
+        GetCodepoint(scoreSheetIcon, &codepointSize),
+        GetCodepoint(settingsIcon, &codepointSize),
+    };
+}
+
 auto setFont(const RFont& font) -> void
 {
     GuiSetFont(font);
@@ -1392,14 +1422,19 @@ auto loadFonts(Context& ctx) -> void
     static constexpr auto FontSizeS = 20;
     static constexpr auto FontSizeM = 36;
     static constexpr auto FontSizeL = 96;
-    const auto fontPath = "resources/fonts/DejaVuSans.ttf";
+    const auto fontPath = resources("fonts", "DejaVuSans.ttf");
+    const auto fontAwesomePath = resources("fonts", "Font-Awesome-7-Free-Solid-900.otf");
     auto codepoints = makeCodepoints();
-    ctx.fontS = LoadFontEx(fontPath, FontSizeS, std::data(codepoints), std::ssize(codepoints));
-    ctx.fontM = LoadFontEx(fontPath, FontSizeM, std::data(codepoints), std::ssize(codepoints));
-    ctx.fontL = LoadFontEx(fontPath, FontSizeL, std::data(codepoints), std::ssize(codepoints));
+    auto awesomeCodepoints = makeAwesomeCodepoints();
+    ctx.fontS = LoadFontEx(fontPath.c_str(), FontSizeS, std::data(codepoints), std::ssize(codepoints));
+    ctx.fontM = LoadFontEx(fontPath.c_str(), FontSizeM, std::data(codepoints), std::ssize(codepoints));
+    ctx.fontL = LoadFontEx(fontPath.c_str(), FontSizeL, std::data(codepoints), std::ssize(codepoints));
+    ctx.fontAwesome
+        = LoadFontEx(fontAwesomePath.c_str(), FontSizeM, std::data(awesomeCodepoints), std::ssize(awesomeCodepoints));
     SetTextureFilter(ctx.fontS.texture, TEXTURE_FILTER_BILINEAR);
     SetTextureFilter(ctx.fontM.texture, TEXTURE_FILTER_BILINEAR);
     SetTextureFilter(ctx.fontL.texture, TEXTURE_FILTER_BILINEAR);
+    SetTextureFilter(ctx.fontAwesome.texture, TEXTURE_FILTER_BILINEAR);
     setDefaultFont(ctx);
 }
 
@@ -1410,7 +1445,8 @@ auto loadColorScheme(Context& ctx, const std::string_view name) -> void
         GuiSetFont(ctx.initialFont);
         GuiLoadStyleDefault();
     } else {
-        GuiLoadStyle(fmt::format("resources/styles/style_{}.rgs", name).c_str());
+        const auto stylePath = resources("styles", std::format("style_{}.rgs", name));
+        GuiLoadStyle(stylePath.c_str());
     }
     ctx.settingsMenu.loadedColorScheme = name;
 }
@@ -1419,28 +1455,43 @@ auto loadColorScheme(Context& ctx, const std::string_view name) -> void
 {
     for (auto i = 0uz; i < std::to_underlying(GameText::Count); ++i) {
         const auto en = localization[std::to_underlying(GameLang::English)][i];
-        if (text == en //
-            or text == localization[std::to_underlying(GameLang::Ukrainian)][i] //
-            or text == localization[std::to_underlying(GameLang::Russian)][i]) {
-            return en; // normalize to English
+        if (text == en
+            or text == localization[std::to_underlying(GameLang::Ukrainian)][i]
+            or text == localization[std::to_underlying(GameLang::Alternative)][i]) {
+            return en;
         }
     }
-    return text; // fallback: unknown string, return as-is
+    return text;
 }
 
 auto loadLang(Context& ctx, const std::string_view lang) -> void
 {
     ctx.lang = std::invoke([&] { // clang-format off
         if (lang == "Ukrainian") { return pref::GameLang::Ukrainian; }
-        if (lang == "Russian") { return pref::GameLang::Russian; }
+        if (lang == "Alternative") { return pref::GameLang::Alternative; }
         return pref::GameLang::English;
     }); // clang-format on
     ctx.settingsMenu.loadedLang = lang;
 }
 
+auto drawSettingsButton(Context& ctx) -> void
+{
+    static constexpr auto buttonW = screenWidth / 26.f;
+    static constexpr auto buttonH = buttonW;
+    const auto bounds
+        = RRectangle{screenWidth - buttonW - borderMargin, screenHeight - buttonH - borderMargin, buttonW, buttonH};
+    setFont(ctx.fontAwesome);
+    if (GuiButton(bounds, settingsIcon)) {
+        // TODO: disable interaction with all other elements while the menu is open
+        ctx.settingsMenu.isVisible = ctx.settingsMenu.isVisible ? false : true;
+    }
+    setDefaultFont(ctx);
+}
+
 auto drawSettingsMenu(Context& ctx) -> void
 {
-    if (not ctx.settingsMenu.isVisible or ctx.hasEnteredName) {
+    drawSettingsButton(ctx);
+    if (not ctx.settingsMenu.isVisible) {
         return;
     }
     const auto rowH = GuiGetStyle(LISTVIEW, LIST_ITEMS_HEIGHT);
@@ -1454,7 +1505,7 @@ auto drawSettingsMenu(Context& ctx) -> void
     const auto langs = std::vector{
         ctx.localizeText(GameText::English),
         ctx.localizeText(GameText::Ukrainian),
-        ctx.localizeText(GameText::Russian),
+        ctx.localizeText(GameText::Alternative),
     };
     const auto colorSchemes = std::vector{
         ctx.localizeText(GameText::Light),
@@ -1474,7 +1525,8 @@ auto drawSettingsMenu(Context& ctx) -> void
     const auto colorSchemesH = (std::ssize(colorSchemes) + 1) * rowH;
     const auto langsH = (std::ssize(langs) + 1) * rowH;
     const auto totalH = headerH + footerH + labelH + labelGap + langsH + spacing + labelH + labelGap + colorSchemesH;
-    const auto panelBounds = RRectangle{60, 60, 420, static_cast<float>(totalH)};
+    static constexpr auto totalW = 420.f;
+    const auto panelBounds = RRectangle{screenWidth - borderMargin - totalW, 150, totalW, static_cast<float>(totalH)};
     setFont(ctx.fontS);
     GuiPanel(panelBounds, ctx.localizeText(GameText::Settings).c_str());
     const auto inner = RRectangle{
@@ -1492,8 +1544,8 @@ auto drawSettingsMenu(Context& ctx) -> void
     const auto langsBounds = RRectangle{
         inner.x, langsLabelBounds.y + langsLabelBounds.height + labelGap, inner.width, static_cast<float>(langsH)};
     GuiListView(langsBounds, joinedLangs.c_str(), &ctx.settingsMenu.langIdScroll, &ctx.settingsMenu.langIdSelect);
-    if (ctx.settingsMenu.langIdSelect >= 0 //
-        and ctx.settingsMenu.langIdSelect < std::ssize(langs) //
+    if (ctx.settingsMenu.langIdSelect >= 0
+        and ctx.settingsMenu.langIdSelect < std::ssize(langs)
         and RMouse::IsButtonPressed(MOUSE_LEFT_BUTTON)) {
         if (const auto langToLoad = textToEnglish(langs[static_cast<std::size_t>(ctx.settingsMenu.langIdSelect)]);
             ctx.settingsMenu.loadedLang != langToLoad) {
@@ -1518,8 +1570,8 @@ auto drawSettingsMenu(Context& ctx) -> void
         joinedColorSchemes.c_str(),
         &ctx.settingsMenu.colorSchemeIdScroll,
         &ctx.settingsMenu.colorSchemeIdSelect);
-    if (ctx.settingsMenu.colorSchemeIdSelect >= 0 //
-        and ctx.settingsMenu.colorSchemeIdSelect < std::ssize(colorSchemes) //
+    if (ctx.settingsMenu.colorSchemeIdSelect >= 0
+        and ctx.settingsMenu.colorSchemeIdSelect < std::ssize(colorSchemes)
         and RMouse::IsButtonPressed(MOUSE_LEFT_BUTTON)) {
         if (const auto colorSchemeToLoad
             = textToEnglish(colorSchemes[static_cast<std::size_t>(ctx.settingsMenu.colorSchemeIdSelect)]);
@@ -1538,14 +1590,20 @@ auto drawSettingsMenu(Context& ctx) -> void
 
 auto drawScoreSheetButton(Context& ctx) -> void
 {
-    static constexpr auto buttonW = screenWidth / 13.f;
-    static constexpr auto buttonH = buttonW / 2.f;
-    static constexpr auto gap = buttonH / 2.f;
-    const auto bounds = RRectangle{screenWidth - buttonW - gap, screenHeight - buttonH - gap, buttonW, buttonH};
-    if (GuiButton(bounds, ctx.localizeText(GameText::ScoreSheet).c_str())) {
-        // TODO: disable interaction with all other elements while the score sheet is open
+    static constexpr auto buttonW = screenWidth / 26.f;
+    static constexpr auto buttonH = buttonW;
+    static constexpr auto gapBetweenButtons = borderMargin / 5.f;
+    const auto bounds = RRectangle{
+        screenWidth - buttonW * 2 - borderMargin - gapBetweenButtons,
+        screenHeight - buttonH - borderMargin,
+        buttonW,
+        buttonH};
+    setFont(ctx.fontAwesome);
+    if (GuiButton(bounds, scoreSheetIcon)) {
+        //  TODO: disable interaction with all other elements while the score sheet is open
         ctx.scoreSheet.isVisible = ctx.scoreSheet.isVisible ? false : true;
     }
+    setDefaultFont(ctx);
 }
 
 auto drawScoreSheet(Context& ctx) -> void
@@ -1569,10 +1627,10 @@ auto drawScoreSheet(Context& ctx) -> void
     const auto rs = RRectangle{rl.x + sheetS * poss, rl.y, sheetS - sheetS * poss * 2.f, sheetS - sheetS * poss};
     const auto borderColor = getGuiColor(DEFAULT, BORDER_COLOR_NORMAL);
     const auto sheetColor = getGuiColor(DEFAULT, BASE_COLOR_NORMAL);
-    const auto fSize = ctx.fontSizeM();
+    const auto fSize = ctx.fontSizeS();
     const auto c = getGuiColor(LABEL, TEXT_COLOR_NORMAL);
     const auto gap = fSize / 4.f;
-    const auto& font = ctx.fontM;
+    const auto& font = ctx.fontS;
     rl.Draw(sheetColor);
     rl.DrawLines(borderColor, thick);
     rs.DrawLines(borderColor, thick);
@@ -1588,18 +1646,37 @@ auto drawScoreSheet(Context& ctx) -> void
     RVector2{center.x, rl.y + rl.height}.DrawLine({center.x, rm.y + rm.height}, thick, borderColor);
     // TODO: don't hardcode `scoreTarget`
     static constexpr auto scoreTarget = "10";
-    const auto scoreTargetSize = ctx.fontS.MeasureText(scoreTarget, fSize, fSpace);
-    font.DrawText(
-        scoreTarget, {center.x - scoreTargetSize.x / 2.f, center.y - scoreTargetSize.y / 2.f}, fSize, fSpace, c);
-    // TODO: use `assert(cond)` instead of `else if(cond)`
-    const auto joinValues = [](const auto& values) { // clang-format off
-        return fmt::format("{}", fmt::join(values
-                | rv::filter(notEqualTo(0))
-                | rv::partial_sum(std::plus{}), "."));
-    }; // clang-format on
+    const auto scoreTargetSize = ctx.fontM.MeasureText(scoreTarget, ctx.fontSizeM(), fSpace);
+    ctx.fontM.DrawText(
+        scoreTarget,
+        {center.x - scoreTargetSize.x / 2.f, center.y - scoreTargetSize.y / 2.f},
+        ctx.fontSizeM(),
+        fSpace,
+        c);
+    const auto joinValues = [](const auto& values) {
+        return fmt::format("{}", fmt::join(values | rv::filter(notEqualTo(0)) | rv::partial_sum(std::plus{}), "."));
+    };
     const auto [leftId, rightId] = getOpponentIds(ctx);
     for (const auto& [playerId, score] : ctx.scoreSheet.score) {
+        const auto resultValue = std::invoke([&]() -> std::optional<std::tuple<std::string, RVector2, RColor>> {
+            const auto finalResult = calculateFinalResult(makeFinalScore(ctx.scoreSheet.score));
+            if (not finalResult.contains(playerId)) {
+                return std::nullopt;
+            }
+            const auto value = finalResult.at(playerId);
+            const auto result = fmt::format("{}{}", value > 0 ? "+" : "", value);
+            return std::tuple{
+                result,
+                ctx.fontM.MeasureText(result, ctx.fontSizeM(), fSpace),
+                result.starts_with('-') ? RColor::Red() : (result.starts_with('+') ? RColor::DarkGreen() : c)};
+        });
+        // TODO: use `assert(cond)` instead of `else if(cond)`?
         if (playerId == ctx.myPlayerId) {
+            if (resultValue) {
+                const auto& [result, resultSize, color] = *resultValue;
+                ctx.fontM.DrawText(
+                    result, {center.x - (resultSize.x / 2.f), center.y + radius}, ctx.fontSizeM(), fSpace, color);
+            }
             const auto dumpValues = joinValues(score.dump);
             const auto poolValues = joinValues(score.pool);
             font.DrawText(dumpValues, {rs.x + radius, rs.y + rs.height - fSize}, fSize, fSpace, c);
@@ -1614,6 +1691,17 @@ auto drawScoreSheet(Context& ctx) -> void
                 }
             }
         } else if (playerId == rightId) {
+            if (resultValue) {
+                const auto& [result, resultSize, color] = *resultValue;
+                ctx.fontM.DrawText(
+                    result,
+                    {center.x + radius, center.y + (resultSize.x / 2.f)},
+                    {},
+                    rotateR,
+                    ctx.fontSizeM(),
+                    fSpace,
+                    color);
+            }
             const auto dumpValues = joinValues(score.dump);
             const auto poolValues = joinValues(score.pool);
             font.DrawText(
@@ -1630,6 +1718,17 @@ auto drawScoreSheet(Context& ctx) -> void
                 }
             }
         } else if (playerId == leftId) {
+            if (resultValue) {
+                const auto& [result, resultSize, color] = *resultValue;
+                ctx.fontM.DrawText(
+                    result,
+                    {center.x - radius, center.y - (resultSize.x / 2.f)},
+                    {},
+                    rotateL,
+                    ctx.fontSizeM(),
+                    fSpace,
+                    color);
+            }
             const auto dumpValues = joinValues(score.dump);
             const auto poolValues = joinValues(score.pool);
             font.DrawText(dumpValues, {rs.x + fSize, rl.y + gap}, {}, rotateL, fSize, fSpace, c);
@@ -1678,12 +1777,12 @@ auto updateDrawFrame(void* userData) -> void
     ctx.window.BeginDrawing();
 
     ctx.window.ClearBackground(getGuiColor(DEFAULT, BACKGROUND_COLOR));
-    drawSettingsMenu(ctx);
     drawBiddingMenu(ctx);
     drawWhistingMenu(ctx);
     if (not ctx.hasEnteredName) {
         drawGameplayScreen(ctx);
         drawEnterNameScreen(ctx);
+        drawSettingsMenu(ctx);
         ctx.window.EndDrawing();
         return;
     }
@@ -1699,6 +1798,7 @@ auto updateDrawFrame(void* userData) -> void
     } else {
         drawConnectedPlayersPanel(ctx);
     }
+    drawSettingsMenu(ctx);
     ctx.window.DrawFPS(screenWidth - 80, 0);
     ctx.window.EndDrawing();
 }
@@ -1709,7 +1809,7 @@ Usage:
 
 Options:
     -h --help               Show this screen.
-    --language=<name>       Language to use [default: English]. Options: English, Ukrainian, Russian
+    --language=<name>       Language to use [default: English]. Options: English, Ukrainian, Alternative
     --color-scheme=<name>   Color scheme to use [default: light]
                             Options: light,  dark,   lavanda, terminal, candy,
                                      jungle, cyber,  enefete, rltech,   bluish,

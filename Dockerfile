@@ -53,7 +53,6 @@ RUN apt update && apt install -y \
 #   iwyu \
 #   kcov \
 #   libgtest-dev \
-#   libspdlog-dev \
 #   pkg-config \
 
 # RUN pip3 install \

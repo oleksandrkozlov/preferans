@@ -23,6 +23,7 @@ add_custom_target(pref_proto_py_files DEPENDS ${PREF_PROTO_PY_FILES})
 
 if(CMAKE_BUILD_TYPE STREQUAL Debug)
     include(cmake-format)
+    include(clang-format)
     include(ccache)
 endif()
 

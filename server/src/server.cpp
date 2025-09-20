@@ -132,13 +132,8 @@ auto setNextDealTurn(Context& ctx) -> void
 {
     assert((std::size(ctx.players) == NumberOfPlayers) and "all players joined");
     assert(ctx.players.contains(ctx.forehandId) and "forehand player exists");
-    auto nextForehandIt = std::invoke([&] {
-        if (auto nextIt = std::next(ctx.players.find(ctx.forehandId)); nextIt != std::end(ctx.players)) {
-            return nextIt;
-        }
-        return std::begin(ctx.players);
-    });
-    setWhoseTurn(ctx, nextForehandIt);
+    const auto nextIt = std::next(ctx.players.find(ctx.forehandId));
+    setWhoseTurn(ctx, nextIt != std::cend(ctx.players) ? nextIt : std::cbegin(ctx.players));
     setForehandId(ctx);
 }
 
@@ -205,10 +200,10 @@ auto sendToAll(const Message& msg, const Context::Players& players) -> Awaitable
 auto sendToAllExcept(const Message& msg, const Context::Players& players, const Player::Id& excludedId) -> Awaitable<>
 {
     static constexpr auto GetPlayerId = &Context::Players::value_type::first;
-    const auto wss = players //
-        | rv::filter(notEqualTo(excludedId), GetPlayerId) //
-        | rv::values //
-        | rv::transform(&Player::ws) //
+    const auto wss = players
+        | rv::filter(notEqualTo(excludedId), GetPlayerId)
+        | rv::values
+        | rv::transform(&Player::ws)
         | rng::to_vector;
     co_await sendToMany(msg, wss);
 }
@@ -359,9 +354,9 @@ auto dealCards(Context& ctx) -> Awaitable<>
         const auto& [rank, suit] = card;
         return fmt::format("{}" _OF_ "{}", rank, suit);
     };
-    const auto deck = rv::cartesian_product(ranks, suits) //
-        | rv::transform(toCard) //
-        | rng::to_vector //
+    const auto deck = rv::cartesian_product(ranks, suits)
+        | rv::transform(toCard)
+        | rng::to_vector
         | rng::actions::shuffle(std::mt19937{std::invoke(std::random_device{})});
     const auto chunks = deck | rv::chunk(10);
     const auto hands = chunks | rv::take(NumberOfPlayers) | rng::to_vector;
@@ -572,7 +567,7 @@ auto resetGameState(Context& ctx) -> void
 // ├────────┼──────┤
 // │  MISER │   0  │
 // └────────┴──────┘
-[[nodiscard]] constexpr auto obligatoryTricksForDeclarer(const ContractLevel level) noexcept -> int
+[[nodiscard]] constexpr auto declarerReqTricks(const ContractLevel level) noexcept -> int
 { // clang-format off
     using enum ContractLevel;
     switch (level) {
@@ -601,7 +596,7 @@ auto resetGameState(Context& ctx) -> void
 // ├────────┼──────┤
 // │  MISER │   0  │
 // └────────┴──────┘
-[[nodiscard]] constexpr auto obligatoryTricksForBothWhisters(const ContractLevel level) noexcept -> int
+[[nodiscard]] constexpr auto twoWhistersReqTricks(const ContractLevel level) noexcept -> int
 { // clang-format off
     using enum ContractLevel;
     switch (level) {
@@ -615,7 +610,7 @@ auto resetGameState(Context& ctx) -> void
     std::unreachable();
 } // clang-format on
 
-[[nodiscard]] constexpr auto obligatoryTricksForOneWhisters(const ContractLevel level) noexcept -> int
+[[nodiscard]] constexpr auto oneWhisterReqTricks(const ContractLevel level) noexcept -> int
 { // clang-format off
     using enum ContractLevel;
     switch (level) {
@@ -670,10 +665,12 @@ auto updateScoreSheetForDeal(Context& ctx) -> void
             const auto& whisterPlayer = ctx.players.at(id);
             whisters.emplace_back(id, makeWhistChoise(whisterPlayer.whistChoice), whisterPlayer.tricksTaken);
         }
-        for (const auto& [id, entry] : calculateScoreEntry(declarer, whisters)) {
+        for (const auto& [id, entry] : calculateDealScore(declarer, whisters)) {
             ctx.scoreSheet[id].dump.push_back(entry.dump);
             ctx.scoreSheet[id].pool.push_back(entry.pool);
-            ctx.scoreSheet[id].whists[declarerId].push_back(entry.whist);
+            if (id != declarerId) {
+                ctx.scoreSheet[id].whists[declarerId].push_back(entry.whist);
+            }
         }
     }).or_else([](const std::string& error) {
         WARN_VAR(error);
@@ -683,8 +680,13 @@ auto updateScoreSheetForDeal(Context& ctx) -> void
 
 auto dealFinished(Context& ctx) -> Awaitable<>
 {
-    PREF_INFO();
     updateScoreSheetForDeal(ctx);
+    for (const auto& [playerId, score] : ctx.scoreSheet) {
+        INFO_VAR(playerId, score.dump, score.pool);
+        for (const auto& [id, whists] : score.whists) {
+            PREF_INFO("whists: {} -> {}", whists, id);
+        }
+    }
     co_await sendToAll(makeMessage(makeDealFinished(ctx.scoreSheet)), ctx.players);
     resetGameState(ctx);
     // TODO: Reset taken tricks on the client side upon receiving `DealFinished`
@@ -718,7 +720,7 @@ auto trickFinished(const Context::Players& players) -> Awaitable<>
             PREF_ERROR("The Pass Game is not implemented");
             return "Playing";
         }
-        if ((rng::count_if(bids, std::bind_front(std::not_equal_to{}, PASS)) == 1) and (rng::count(bids, PASS) == 2)) {
+        if ((rng::count_if(bids, notEqualTo(PASS)) == 1) and (rng::count(bids, PASS) == 2)) {
             return "TalonPicking";
         }
     }
@@ -741,9 +743,9 @@ auto launchSession(Context& ctx, const std::shared_ptr<Stream> ws) -> Awaitable<
     while (true) {
         auto buffer = beast::flat_buffer{};
         if (const auto [error, _] = co_await ws->async_read(buffer, net::as_tuple); error) {
-            if (error == web::error::closed //
-                or error == net::error::not_connected //
-                or error == net::error::connection_reset //
+            if (error == web::error::closed
+                or error == net::error::not_connected
+                or error == net::error::connection_reset
                 or error == net::error::eof) {
                 PREF_INFO("{}: disconnected: {}, {}", VAR(error), VAR(session.playerName), VAR(session.playerId));
             } else if (error == net::error::operation_aborted) {
@@ -868,8 +870,7 @@ auto finishTrick(const std::vector<PlayedCard>& trick, const std::string_view tr
     }).playerId; // clang-format on
 }
 
-[[nodiscard]] auto calculateScoreEntry(const Declarer& declarer, const std::vector<Whister>& whisters)
-    -> std::map<Player::Id, ScoreEntry>
+[[nodiscard]] auto calculateDealScore(const Declarer& declarer, const std::vector<Whister>& whisters) -> DealScore
 {
     assert(std::size(whisters) == 2uz);
 
@@ -884,44 +885,41 @@ auto finishTrick(const std::vector<PlayedCard>& trick, const std::string_view tr
     static constexpr auto totalTricksPerDeal = 10;
 
     const auto contractPrice = pref::contractPrice(declarer.contractLevel);
-    const auto declarerReqTricks = obligatoryTricksForDeclarer(declarer.contractLevel);
-    const auto whistersReqTricksTotal = obligatoryTricksForBothWhisters(declarer.contractLevel);
+    const auto declarerReqTricks = pref::declarerReqTricks(declarer.contractLevel);
+    const auto twoWhistersReqTricks = pref::twoWhistersReqTricks(declarer.contractLevel);
 
     const auto whistersTakenTricks = w1.tricksTaken + w2.tricksTaken;
     assert(0 <= whistersTakenTricks and whistersTakenTricks <= totalTricksPerDeal);
 
     const auto declarerTakenTricks = totalTricksPerDeal - whistersTakenTricks;
-    const auto declarerSucceeded = declarerTakenTricks >= declarerReqTricks;
-
-    const auto deficit = [](auto need, auto got) { return std::max(0, need - got); };
-
+    const auto deficit = [](auto req, auto got) { return std::max(0, req - got); };
     const auto declarerFailedTricks = deficit(declarerReqTricks, declarerTakenTricks);
-    const auto whistersFailedTricks = deficit(whistersReqTricksTotal, whistersTakenTricks);
-    const auto bothSaidWhist = rng::all_of(whisters, [](const auto& w) { return w.choise == WhistChoise::Whist; });
-    const auto singleWhisterReqTricks = obligatoryTricksForOneWhisters(declarer.contractLevel);
 
     const auto makeDeclarerScore = [&] {
-        auto s = ScoreEntry{};
-        if (declarerSucceeded) {
-            s.pool = contractPrice;
+        auto result = DealScoreEntry{};
+        if (declarerTakenTricks >= declarerReqTricks) {
+            result.pool = contractPrice;
         } else {
-            s.dump = declarerFailedTricks * contractPrice;
+            result.dump = declarerFailedTricks * contractPrice;
         }
-        return s;
+        return result;
     };
 
     const auto makeWhisterScore = [&](const Whister& w) {
-        auto s = ScoreEntry{};
+        auto result = DealScoreEntry{};
         if (w.choise == WhistChoise::Whist) {
-            s.whist += w.tricksTaken * contractPrice;
-            if (whistersFailedTricks > 0) {
-                const auto needForThisWhister = bothSaidWhist ? singleWhisterReqTricks : whistersReqTricksTotal;
-                const auto underForThisWhister = deficit(needForThisWhister, w.tricksTaken);
-                s.dump += underForThisWhister * contractPrice;
+            result.whist += w.tricksTaken * contractPrice;
+            if (deficit(twoWhistersReqTricks, whistersTakenTricks) > 0) {
+                const auto reqTricks = rng::all_of(whisters, equalTo(WhistChoise::Whist), &Whister::choise)
+                    ? oneWhisterReqTricks(declarer.contractLevel)
+                    : twoWhistersReqTricks;
+                result.dump += deficit(reqTricks, w.tricksTaken) * contractPrice;
             }
+        } else if (w.choise == WhistChoise::HalfWhist) {
+            // TODO: Handle `HalfWhist`
         }
-        s.whist += declarerFailedTricks * contractPrice;
-        return s;
+        result.whist += declarerFailedTricks * contractPrice;
+        return result;
     };
 
     return {
