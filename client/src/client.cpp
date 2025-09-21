@@ -29,30 +29,22 @@
 namespace pref {
 namespace {
 
-// 1920x1080 @ 16:9 - Full HD
-[[maybe_unused]] constexpr auto ratioWidth = 16;
-[[maybe_unused]] constexpr auto ratioHeigh = 9;
-constexpr auto screenWidth = 1920;
-constexpr auto screenHeight = 1080;
-
-// 3440x1440 @ 21:9 - Ultra-Wide
-// constexpr auto ratioWidth = 21;
-// constexpr auto ratioHeigh = 9;
-// constexpr auto screenWidth = 3440;
-// constexpr auto screenHeight = 1440;
-
+constexpr auto virtualWidth = 1920;
+constexpr auto virtualHeight = 1080;
 constexpr auto originalCardHeight = 726.0f;
 constexpr auto originalCardWidth = 500.0f;
 constexpr auto cardAspectRatio = originalCardWidth / originalCardHeight;
-constexpr auto cardHeight = screenHeight / 5.0f;
+constexpr auto cardHeight = virtualHeight / 5.0f;
 constexpr auto cardWidth = cardHeight * cardAspectRatio;
 constexpr auto cardOverlapX = cardWidth * 0.6f; // 60% overlap
 constexpr auto cardOverlapY = cardHeight * 0.2f;
 constexpr auto fontSpacing = 1.0f;
-constexpr auto borderMargin = screenWidth / 52.f;
+constexpr auto borderMargin = virtualWidth / 52.f;
 
 constexpr auto settingsIcon = "";
 constexpr auto scoreSheetIcon = "";
+constexpr auto enterFullScreenIcon = "";
+constexpr auto exitFullScreenIcon = "";
 
 [[nodiscard]] constexpr auto getCloseReason(const std::uint16_t code) noexcept -> std::string_view
 {
@@ -303,6 +295,16 @@ constexpr auto bidTable = std::array<std::array<std::string_view, 6>, 6>{
 constexpr auto allRanks = std::size(bidsFlat);
 constexpr auto whistingFlat = std::array{GameText::Whist, GameText::HalfWhist, GameText::Pass};
 
+constexpr auto bidCellW = virtualWidth / 13;
+constexpr auto bidCellH = bidCellW / 2;
+constexpr auto bidGap = bidCellH / 10;
+constexpr auto bidRows = static_cast<int>(std::size(bidTable));
+constexpr auto bidCols = static_cast<int>(std::size(bidTable[0]));
+constexpr auto bidMenuW = bidCols * bidCellW + (bidCols - 1) * bidGap;
+constexpr auto bidMenuH = bidRows * bidCellH + (bidRows - 1) * bidGap;
+constexpr auto bidOriginX = (virtualWidth - bidMenuW) / 2.0f;
+constexpr auto bidOriginY = (virtualHeight - bidMenuH) / 2.0f;
+
 struct BiddingMenu {
     bool isVisible{};
     std::string bid;
@@ -400,14 +402,20 @@ struct Context {
     RFont fontL;
     RFont initialFont;
     RFont fontAwesome;
-    RVector2 screen{screenWidth, screenHeight};
+    float scale = 1.f;
+    float offsetX = 0.f;
+    float offsetY = 0.f;
+    int windowWidth = virtualWidth;
+    int windowHeight = virtualHeight;
     RWindow window{
-        static_cast<int>(screen.x),
-        static_cast<int>(screen.y),
+        windowWidth,
+        windowHeight,
         "Preferans",
         FLAG_MSAA_4X_HINT // smooth edges for circles, rings, etc.
             | FLAG_WINDOW_ALWAYS_RUN // don't throttle when tab is not focused
+            | FLAG_WINDOW_RESIZABLE,
     };
+    RRenderTexture target{virtualWidth, virtualHeight};
     Player player;
     PlayerId myPlayerId;
     PlayerName myPlayerName;
@@ -485,6 +493,28 @@ struct Context {
         return fontSize(fontL);
     }
 };
+
+auto updateWindowSize(Context& ctx) -> void
+{
+    auto cssW = 0.0;
+    auto cssH = 0.0;
+    if (emscripten_get_element_css_size("#canvas", &cssW, &cssH) != EMSCRIPTEN_RESULT_SUCCESS) {
+        return;
+    }
+    ctx.windowWidth = static_cast<int>(cssW);
+    ctx.windowHeight = static_cast<int>(cssH);
+    INFO_VAR(cssW, cssH, ctx.windowWidth, ctx.windowHeight);
+    ctx.window.SetSize(ctx.windowWidth, ctx.windowHeight);
+    // Compute scale factor (preserve aspect ratio)
+    ctx.scale = std::fminf(
+        static_cast<float>(ctx.windowWidth) / virtualWidth, //
+        static_cast<float>(ctx.windowHeight) / virtualHeight);
+    // Compute offsets for centering (letterboxing)
+    ctx.offsetX = (static_cast<float>(ctx.windowWidth) - virtualWidth * ctx.scale) * 0.5f;
+    ctx.offsetY = (static_cast<float>(ctx.windowHeight) - virtualHeight * ctx.scale) * 0.5f;
+    RMouse::SetOffset(static_cast<int>(-ctx.offsetX), static_cast<int>(-ctx.offsetY));
+    RMouse::SetScale(1.0f / ctx.scale, 1.0f / ctx.scale);
+}
 
 [[nodiscard]] auto getOpponentIds(Context& ctx) -> std::pair<PlayerId, PlayerId>
 {
@@ -867,7 +897,7 @@ auto drawGameplayScreen(Context& ctx) -> void
 {
     const auto title = ctx.localizeText(GameText::Preferans);
     const auto textSize = ctx.fontL.MeasureText(title, ctx.fontSizeL(), fontSpacing);
-    const auto x = static_cast<float>(screenWidth - textSize.x) / 2.0f;
+    const auto x = static_cast<float>(virtualWidth - textSize.x) / 2.0f;
     ctx.fontL.DrawText(title, {x, 20.f}, ctx.fontSizeL(), fontSpacing, getGuiColor(LABEL, TEXT_COLOR_NORMAL));
 }
 
@@ -875,7 +905,7 @@ auto drawEnterNameScreen(Context& ctx) -> void
 {
     static constexpr auto boxWidth = 400.0f;
     static constexpr auto boxHeight = 60.0f;
-    const auto screenCenter = ctx.screen / 2.0f;
+    const auto screenCenter = RVector2{virtualWidth, virtualHeight} / 2.0f;
     const auto boxPos = RVector2{screenCenter.x - boxWidth / 2.0f, screenCenter.y};
     const auto labelPos = RVector2{boxPos.x, boxPos.y - 40.0f};
     ctx.fontM.DrawText(
@@ -1027,8 +1057,8 @@ auto drawMyHand(Context& ctx) -> void
 {
     auto& hand = ctx.player.cards;
     const auto totalWidth = static_cast<float>(std::ssize(hand) - 1) * cardOverlapX + cardWidth;
-    const auto startX = (screenWidth - totalWidth) / 2.0f;
-    const auto y = screenHeight - cardHeight - 20.0f; // bottom padding
+    const auto startX = (virtualWidth - totalWidth) / 2.0f;
+    const auto y = virtualHeight - cardHeight - 20.0f; // bottom padding
     const auto tricksTaken = ctx.players.at(ctx.myPlayerId).tricksTaken;
     const auto name = fmt::format(
         "{}{}{}",
@@ -1037,22 +1067,23 @@ auto drawMyHand(Context& ctx) -> void
         tricksTaken != 0 ? fmt::format(" ({})", tricksTaken) : "");
     const auto size = ctx.fontM.MeasureText(name, ctx.fontSizeM(), fontSpacing);
 
+    // TODO: should `gap` be relative to something?
+    static constexpr auto gap = 8.f;
     auto label = RRectangle{
         startX - size.x - 20.0f, // to the left of the first card
-        y + cardHeight * 0.5f - size.y * 0.5f - 4, // vertically centred on the card
-        size.x + 8.0f,
-        size.y + 8.0f};
+        y + cardHeight * 0.5f - size.y * 0.5f - gap * 0.5f, // vertically centred on the card
+        size.x + gap,
+        size.y + gap};
     // TODO: still draw name if no cards left
 
     if (ctx.turnPlayerId == ctx.myPlayerId) {
         const auto text = ctx.localizeText(GameText::YourTurn);
         const auto textSize = ctx.fontM.MeasureText(text, ctx.fontSizeM(), fontSpacing);
-        static constexpr auto gapAboveCard = 25.0f;
-        const auto rect = RRectangle{
-            startX + (totalWidth - textSize.x) * 0.5f - 4.0f, // horizontally centered
-            y - textSize.y - gapAboveCard,
-            textSize.x + 8.0f,
-            textSize.y + 8.0f};
+        const auto bidEndY = bidOriginY + bidMenuH;
+        const auto spaceH = y - bidEndY;
+        const auto textY = bidEndY + ((spaceH - textSize.y) * 0.5f);
+        const auto textX = startX + std::abs(totalWidth - textSize.x) * 0.5f;
+        const auto rect = RRectangle{textX + gap * 0.5f, textY - gap * 0.5f, textSize.x + gap, textSize.y + gap};
         GuiLabel(rect, text.c_str());
     }
     {
@@ -1133,7 +1164,7 @@ auto drawOpponentHand(Context& ctx, const int cardCount, const float x, const Pl
         return;
     }
     const auto countF = static_cast<float>(cardCount);
-    const auto startY = (screenHeight - cardHeight - (countF - 1.0f) * cardOverlapY) * 0.5f;
+    const auto startY = (virtualHeight - cardHeight - (countF - 1.0f) * cardOverlapY) * 0.5f;
 
     for (auto i = 0.0f; i < countF; ++i) {
         const auto posY = startY + i * cardOverlapY;
@@ -1188,7 +1219,7 @@ auto drawPlayedCards(Context& ctx) -> void
     }
     const auto cardSpacing = cardWidth * 0.1f;
     const auto yOffset = cardHeight / 4.0f;
-    const auto centerPos = RVector2{screenWidth / 2.0f, screenHeight / 2.0f - cardHeight / 2.0f};
+    const auto centerPos = RVector2{virtualWidth / 2.0f, virtualHeight / 2.0f - cardHeight / 2.0f};
     const auto leftPlayPos = RVector2{centerPos.x - cardWidth - cardSpacing, centerPos.y - yOffset};
     const auto middlePlayPos = RVector2{centerPos.x, centerPos.y + yOffset};
     const auto rightPlayPos = RVector2{centerPos.x + cardWidth + cardSpacing, centerPos.y - yOffset};
@@ -1225,18 +1256,8 @@ auto drawBiddingMenu(Context& ctx) -> void
         return;
     }
 
-    static constexpr auto cellW = screenWidth / 13;
-    static constexpr auto cellH = cellW / 2;
-    static constexpr auto gap = cellH / 10;
-    static constexpr auto rows = static_cast<int>(std::size(bidTable));
-    static constexpr auto cols = static_cast<int>(std::size(bidTable[0]));
-    static constexpr auto menuW = cols * cellW + (cols - 1) * gap;
-    static constexpr auto menuH = rows * cellH + (rows - 1) * gap;
-    static constexpr auto originX = (screenWidth - menuW) / 2.0f;
-    static constexpr auto originY = (screenHeight - menuH) / 2.0f;
-
-    for (int r = 0; r < rows; ++r) {
-        for (int c = 0; c < cols; ++c) {
+    for (int r = 0; r < bidRows; ++r) {
+        for (int c = 0; c < bidCols; ++c) {
             const auto& bid = bidTable[static_cast<std::size_t>(r)][static_cast<std::size_t>(c)];
             if (std::empty(bid)) {
                 continue;
@@ -1250,9 +1271,9 @@ auto drawBiddingMenu(Context& ctx) -> void
                 ? GuiState{STATE_DISABLED}
                 : GuiState{STATE_NORMAL};
             const auto pos = RVector2{
-                originX + static_cast<float>(c) * (cellW + gap), //
-                originY + static_cast<float>(r) * (cellH + gap)};
-            const auto rect = RRectangle{pos, {cellW, cellH}};
+                bidOriginX + static_cast<float>(c) * (bidCellW + bidGap), //
+                bidOriginY + static_cast<float>(r) * (bidCellH + bidGap)};
+            const auto rect = RRectangle{pos, {bidCellW, bidCellH}};
             const auto clicked = std::invoke([&] {
                 if ((state == STATE_DISABLED) or not RMouse::GetPosition().CheckCollision(rect)) {
                     return false;
@@ -1313,12 +1334,12 @@ auto drawWhistingMenu(Context& ctx) -> void
     if (!ctx.whisting.isVisible) {
         return;
     }
-    static constexpr auto cellW = screenWidth / 6;
+    static constexpr auto cellW = virtualWidth / 6;
     static constexpr auto cellH = cellW / 2;
     static constexpr auto gap = cellH / 10;
     static constexpr auto menuW = std::size(whistingFlat) * cellW + (std::size(whistingFlat) - 1) * gap;
-    static constexpr auto originX = (screenWidth - menuW) / 2.0f;
-    static constexpr auto originY = (screenHeight - cellH) / 2.0f;
+    static constexpr auto originX = (virtualWidth - menuW) / 2.0f;
+    static constexpr auto originY = (virtualHeight - cellH) / 2.0f;
 
     for (auto i = 0uz; i < std::size(whistingFlat); ++i) {
         auto state = GuiState{STATE_NORMAL};
@@ -1403,6 +1424,8 @@ auto handleCardClick(Context& ctx, Action act) -> void
     return {
         GetCodepoint(scoreSheetIcon, &codepointSize),
         GetCodepoint(settingsIcon, &codepointSize),
+        GetCodepoint(enterFullScreenIcon, &codepointSize),
+        GetCodepoint(exitFullScreenIcon, &codepointSize),
     };
 }
 
@@ -1419,9 +1442,9 @@ auto setDefaultFont(Context& ctx) -> void
 
 auto loadFonts(Context& ctx) -> void
 {
-    static constexpr auto FontSizeS = 20;
-    static constexpr auto FontSizeM = 36;
-    static constexpr auto FontSizeL = 96;
+    static constexpr auto FontSizeS = static_cast<int>(virtualHeight / 54.f);
+    static constexpr auto FontSizeM = static_cast<int>(virtualHeight / 30.f);
+    static constexpr auto FontSizeL = static_cast<int>(virtualHeight / 11.25f);
     const auto fontPath = resources("fonts", "DejaVuSans.ttf");
     const auto fontAwesomePath = resources("fonts", "Font-Awesome-7-Free-Solid-900.otf");
     auto codepoints = makeCodepoints();
@@ -1429,8 +1452,8 @@ auto loadFonts(Context& ctx) -> void
     ctx.fontS = LoadFontEx(fontPath.c_str(), FontSizeS, std::data(codepoints), std::ssize(codepoints));
     ctx.fontM = LoadFontEx(fontPath.c_str(), FontSizeM, std::data(codepoints), std::ssize(codepoints));
     ctx.fontL = LoadFontEx(fontPath.c_str(), FontSizeL, std::data(codepoints), std::ssize(codepoints));
-    ctx.fontAwesome
-        = LoadFontEx(fontAwesomePath.c_str(), FontSizeM, std::data(awesomeCodepoints), std::ssize(awesomeCodepoints));
+    ctx.fontAwesome = LoadFontEx(
+        fontAwesomePath.c_str(), FontSizeM - 1, std::data(awesomeCodepoints), std::ssize(awesomeCodepoints));
     SetTextureFilter(ctx.fontS.texture, TEXTURE_FILTER_BILINEAR);
     SetTextureFilter(ctx.fontM.texture, TEXTURE_FILTER_BILINEAR);
     SetTextureFilter(ctx.fontL.texture, TEXTURE_FILTER_BILINEAR);
@@ -1474,18 +1497,40 @@ auto loadLang(Context& ctx, const std::string_view lang) -> void
     ctx.settingsMenu.loadedLang = lang;
 }
 
-auto drawSettingsButton(Context& ctx) -> void
+auto drawToolbarButton(Context& ctx, const int indexFromRight, const char* icon, const auto onClick) -> void
 {
-    static constexpr auto buttonW = screenWidth / 26.f;
+    assert(indexFromRight >= 1);
+    static constexpr auto buttonW = virtualWidth / 26.f;
     static constexpr auto buttonH = buttonW;
-    const auto bounds
-        = RRectangle{screenWidth - buttonW - borderMargin, screenHeight - buttonH - borderMargin, buttonW, buttonH};
+    static constexpr auto gapBetweenButtons = borderMargin / 5.f;
+    const auto i = static_cast<float>(indexFromRight);
+    const auto bounds = RRectangle{
+        virtualWidth - buttonW * i - borderMargin - gapBetweenButtons * (i - 1),
+        virtualHeight - buttonH - borderMargin,
+        buttonW,
+        buttonH};
     setFont(ctx.fontAwesome);
-    if (GuiButton(bounds, settingsIcon)) {
-        // TODO: disable interaction with all other elements while the menu is open
-        ctx.settingsMenu.isVisible = ctx.settingsMenu.isVisible ? false : true;
+    if (GuiButton(bounds, icon)) {
+        onClick();
     }
     setDefaultFont(ctx);
+}
+
+auto drawFullScreenButton(Context& ctx) -> void
+{
+    drawToolbarButton(ctx, 1, ctx.window.IsFullscreen() ? exitFullScreenIcon : enterFullScreenIcon, [&] {
+        ctx.window.ToggleFullscreen();
+    });
+}
+
+auto drawSettingsButton(Context& ctx) -> void
+{
+    drawToolbarButton(ctx, 2, settingsIcon, [&] { ctx.settingsMenu.isVisible = not ctx.settingsMenu.isVisible; });
+}
+
+auto drawScoreSheetButton(Context& ctx) -> void
+{
+    drawToolbarButton(ctx, 3, scoreSheetIcon, [&] { ctx.scoreSheet.isVisible = not ctx.scoreSheet.isVisible; });
 }
 
 auto drawSettingsMenu(Context& ctx) -> void
@@ -1526,7 +1571,7 @@ auto drawSettingsMenu(Context& ctx) -> void
     const auto langsH = (std::ssize(langs) + 1) * rowH;
     const auto totalH = headerH + footerH + labelH + labelGap + langsH + spacing + labelH + labelGap + colorSchemesH;
     static constexpr auto totalW = 420.f;
-    const auto panelBounds = RRectangle{screenWidth - borderMargin - totalW, 150, totalW, static_cast<float>(totalH)};
+    const auto panelBounds = RRectangle{virtualWidth - borderMargin - totalW, 150, totalW, static_cast<float>(totalH)};
     setFont(ctx.fontS);
     GuiPanel(panelBounds, ctx.localizeText(GameText::Settings).c_str());
     const auto inner = RRectangle{
@@ -1588,24 +1633,6 @@ auto drawSettingsMenu(Context& ctx) -> void
     setDefaultFont(ctx);
 }
 
-auto drawScoreSheetButton(Context& ctx) -> void
-{
-    static constexpr auto buttonW = screenWidth / 26.f;
-    static constexpr auto buttonH = buttonW;
-    static constexpr auto gapBetweenButtons = borderMargin / 5.f;
-    const auto bounds = RRectangle{
-        screenWidth - buttonW * 2 - borderMargin - gapBetweenButtons,
-        screenHeight - buttonH - borderMargin,
-        buttonW,
-        buttonH};
-    setFont(ctx.fontAwesome);
-    if (GuiButton(bounds, scoreSheetIcon)) {
-        //  TODO: disable interaction with all other elements while the score sheet is open
-        ctx.scoreSheet.isVisible = ctx.scoreSheet.isVisible ? false : true;
-    }
-    setDefaultFont(ctx);
-}
-
 auto drawScoreSheet(Context& ctx) -> void
 {
     drawScoreSheetButton(ctx);
@@ -1615,7 +1642,7 @@ auto drawScoreSheet(Context& ctx) -> void
     static constexpr auto fSpace = fontSpacing;
     static constexpr auto rotateL = 90.f;
     static constexpr auto rotateR = 270.f;
-    const auto center = RVector2{screenWidth / 2.f, screenHeight / 2.f};
+    const auto center = RVector2{virtualWidth / 2.f, virtualHeight / 2.f};
     const auto sheetS = center.y * 1.5f;
     const auto sheet = RVector2{center.x - sheetS / 2.f, center.y - sheetS / 2.f};
     const auto radius = sheetS / 20.f;
@@ -1774,8 +1801,7 @@ auto updateDrawFrame(void* userData) -> void
             }
         }
     }
-    ctx.window.BeginDrawing();
-
+    ctx.target.BeginMode();
     ctx.window.ClearBackground(getGuiColor(DEFAULT, BACKGROUND_COLOR));
     drawBiddingMenu(ctx);
     drawWhistingMenu(ctx);
@@ -1783,13 +1809,15 @@ auto updateDrawFrame(void* userData) -> void
         drawGameplayScreen(ctx);
         drawEnterNameScreen(ctx);
         drawSettingsMenu(ctx);
-        ctx.window.EndDrawing();
-        return;
+        drawFullScreenButton(ctx);
+        ctx.window.DrawFPS(virtualWidth - 80, 0);
+        ctx.target.EndMode();
+        goto end;
     }
     if (ctx.areAllPlayersJoined()) {
         drawMyHand(ctx);
         auto leftX = 80.0f;
-        auto rightX = screenWidth - cardWidth - leftX;
+        auto rightX = virtualWidth - cardWidth - leftX;
         const auto [leftId, rightId] = getOpponentIds(ctx);
         drawOpponentHand(ctx, ctx.leftCardCount, leftX, leftId, false);
         drawOpponentHand(ctx, ctx.rightCardCount, rightX, rightId, true);
@@ -1799,7 +1827,19 @@ auto updateDrawFrame(void* userData) -> void
         drawConnectedPlayersPanel(ctx);
     }
     drawSettingsMenu(ctx);
-    ctx.window.DrawFPS(screenWidth - 80, 0);
+    drawFullScreenButton(ctx);
+    ctx.window.DrawFPS(virtualWidth - 80, 0);
+    ctx.target.EndMode();
+end:
+    ctx.window.BeginDrawing();
+    ctx.window.ClearBackground(getGuiColor(DEFAULT, BACKGROUND_COLOR));
+    ctx.target.GetTexture().Draw(
+        RRectangle{
+            0,
+            0,
+            static_cast<float>(ctx.target.GetTexture().width),
+            -static_cast<float>(ctx.target.GetTexture().height)}, // flip vertically
+        RRectangle{ctx.offsetX, ctx.offsetY, virtualWidth * ctx.scale, virtualHeight * ctx.scale});
     ctx.window.EndDrawing();
 }
 
@@ -1826,11 +1866,23 @@ int main(const int argc, const char* const argv[])
     }
     spdlog::set_pattern("[%^%l%$][%!] %v");
     auto ctx = pref::Context{};
+    pref::updateWindowSize(ctx);
+    SetTextureFilter(ctx.target.texture, TEXTURE_FILTER_BILINEAR);
     pref::loadLang(ctx, args.at("--language").asString());
     GuiLoadStyleDefault();
     ctx.initialFont = GuiGetFont();
     pref::loadColorScheme(ctx, args.at("--color-scheme").asString());
     pref::loadFonts(ctx);
+    emscripten_set_resize_callback(
+        EMSCRIPTEN_EVENT_TARGET_WINDOW,
+        &ctx,
+        true,
+        []([[maybe_unused]] const int eventType, [[maybe_unused]] const EmscriptenUiEvent* e, void* userData) {
+            auto& ctx = pref::toContext(userData);
+            pref::updateWindowSize(ctx);
+            return EM_TRUE;
+        });
+
     static constexpr const auto fps = 60;
     emscripten_set_main_loop_arg(pref::updateDrawFrame, pref::toUserData(ctx), fps, true);
     return 0;

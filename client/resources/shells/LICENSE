@@ -5,6 +5,7 @@ This license applies to the following files:
 
   minshell.html
   shell.html
+  shell_minimal.html
 
 -------------------------------------------------------------------------------
 minshell.html
@@ -19,6 +20,13 @@ shell.html
 Source: https://github.com/emscripten-core/emscripten/blob/main/src/shell.html
 Author: Emscripten authors
 License: Dual-licensed under MIT and University of Illinois/NCSA Open Source License
+
+-------------------------------------------------------------------------------
+shell_minimal.html
+----------
+Source: https://github.com/ocornut/imgui/blob/master/examples/libs/emscripten/shell_minimal.html
+Author: Dear ImGui authors
+License: MIT
 
 ===============================================================================
 zlib License

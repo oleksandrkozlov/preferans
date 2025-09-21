@@ -51,6 +51,7 @@ target_include_directories(client PRIVATE ${PROJECT_SOURCE_DIR}/../include)
 
 set_target_properties(client PROPERTIES SUFFIX ".html")
 set_target_properties(client PROPERTIES OUTPUT_NAME "index")
+set(SHELL resources/shells/shell_minimal.html)
 target_link_options(
     client
     PUBLIC
@@ -60,7 +61,7 @@ target_link_options(
     -sALLOW_MEMORY_GROWTH
     -sFORCE_FILESYSTEM=1
     --shell-file
-    resources/shells/shell.html
+    ${SHELL}
     --preload-file
     resources
     -lwebsocket.js
@@ -68,5 +69,5 @@ target_link_options(
 
 add_custom_command(
     OUTPUT ${CMAKE_SOURCE_DIR}/src/client.cpp COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_SOURCE_DIR}/src/client.cpp
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/resources/shells/shell.html
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${SHELL}
 )
