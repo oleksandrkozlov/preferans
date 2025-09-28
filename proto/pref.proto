@@ -80,6 +80,11 @@ message DealFinished {
   map<string /*player_id*/, ScoreData> score_sheet = 1;
 }
 
+message Log {
+  string player_id = 1;
+  string text = 2;
+}
+
 message Message {
   string method = 1;
   bytes payload = 2;

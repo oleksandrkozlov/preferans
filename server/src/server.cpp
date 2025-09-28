@@ -49,9 +49,10 @@ template<> [[nodiscard]] constexpr auto methodName<PlayCard>     () noexcept -> 
 template<> [[nodiscard]] constexpr auto methodName<PlayerJoined> () noexcept -> std::string_view { return "PlayerJoined";  }
 template<> [[nodiscard]] constexpr auto methodName<PlayerLeft>   () noexcept -> std::string_view { return "PlayerLeft";    }
 template<> [[nodiscard]] constexpr auto methodName<PlayerTurn>   () noexcept -> std::string_view { return "PlayerTurn";    }
-template<> [[nodiscard]] constexpr auto methodName<DealFinished> () noexcept -> std::string_view { return "DealFinished"; }
+template<> [[nodiscard]] constexpr auto methodName<DealFinished> () noexcept -> std::string_view { return "DealFinished";  }
 template<> [[nodiscard]] constexpr auto methodName<TrickFinished>() noexcept -> std::string_view { return "TrickFinished"; }
 template<> [[nodiscard]] constexpr auto methodName<Whisting>     () noexcept -> std::string_view { return "Whisting";      }
+template<> [[nodiscard]] constexpr auto methodName<Log>          () noexcept -> std::string_view { return "Log";           }
 // clang-format on
 
 template<typename Method>
@@ -790,6 +791,10 @@ auto launchSession(Context& ctx, const std::shared_ptr<Stream> ws) -> Awaitable<
             // TODO: is the player turn advance correctly?
             advanceWhoseTurn(ctx);
             co_await playerTurn(ctx, "Whisting");
+        } else if (msg->method() == "Log") {
+            if (const auto log = makeMethod<Log>(*msg); log) {
+                PREF_INFO("[client] {}, playerId: {}", log->text(), log->player_id());
+            }
         } else {
             PREF_WARN("error: unknown method: {}", msg->method());
             continue;

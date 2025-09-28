@@ -29,8 +29,13 @@
 namespace pref {
 namespace {
 
-constexpr auto virtualWidth = 1920;
-constexpr auto virtualHeight = 1080;
+constexpr auto virtualWidth = 2560;
+constexpr auto virtualHeight = 1440;
+// constexpr auto virtualWidth = 1920;
+// constexpr auto virtualHeight = 1080;
+constexpr auto virtualW = static_cast<float>(virtualWidth);
+constexpr auto virtualH = static_cast<float>(virtualHeight);
+
 constexpr auto originalCardHeight = 726.0f;
 constexpr auto originalCardWidth = 500.0f;
 constexpr auto cardAspectRatio = originalCardWidth / originalCardHeight;
@@ -83,6 +88,51 @@ constexpr auto exitFullScreenIcon = "";
     case EMSCRIPTEN_RESULT_TIMED_OUT: return "Operation timed out";
     } // clang-format on
     return "Unknown";
+}
+
+[[maybe_unused]] [[nodiscard]] constexpr auto htmlEventType(const int eventType) noexcept -> std::string_view
+{
+    switch (eventType) { // clang-format off
+    case EMSCRIPTEN_EVENT_KEYPRESS:              return "KEYPRESS";
+    case EMSCRIPTEN_EVENT_KEYDOWN:               return "KEYDOWN";
+    case EMSCRIPTEN_EVENT_KEYUP:                 return "KEYUP";
+    case EMSCRIPTEN_EVENT_CLICK:                 return "CLICK";
+    case EMSCRIPTEN_EVENT_MOUSEDOWN:             return "MOUSEDOWN";
+    case EMSCRIPTEN_EVENT_MOUSEUP:               return "MOUSEUP";
+    case EMSCRIPTEN_EVENT_DBLCLICK:              return "DBLCLICK";
+    case EMSCRIPTEN_EVENT_MOUSEMOVE:             return "MOUSEMOVE";
+    case EMSCRIPTEN_EVENT_WHEEL:                 return "WHEEL";
+    case EMSCRIPTEN_EVENT_RESIZE:                return "RESIZE";
+    case EMSCRIPTEN_EVENT_SCROLL:                return "SCROLL";
+    case EMSCRIPTEN_EVENT_BLUR:                  return "BLUR";
+    case EMSCRIPTEN_EVENT_FOCUS:                 return "FOCUS";
+    case EMSCRIPTEN_EVENT_FOCUSIN:               return "FOCUSIN";
+    case EMSCRIPTEN_EVENT_FOCUSOUT:              return "FOCUSOUT";
+    case EMSCRIPTEN_EVENT_DEVICEORIENTATION:     return "DEVICEORIENTATION";
+    case EMSCRIPTEN_EVENT_DEVICEMOTION:          return "DEVICEMOTION";
+    case EMSCRIPTEN_EVENT_ORIENTATIONCHANGE:     return "ORIENTATIONCHANGE";
+    case EMSCRIPTEN_EVENT_FULLSCREENCHANGE:      return "FULLSCREENCHANGE";
+    case EMSCRIPTEN_EVENT_POINTERLOCKCHANGE:     return "POINTERLOCKCHANGE";
+    case EMSCRIPTEN_EVENT_VISIBILITYCHANGE:      return "VISIBILITYCHANGE";
+    case EMSCRIPTEN_EVENT_TOUCHSTART:            return "TOUCHSTART";
+    case EMSCRIPTEN_EVENT_TOUCHEND:              return "TOUCHEND";
+    case EMSCRIPTEN_EVENT_TOUCHMOVE:             return "TOUCHMOVE";
+    case EMSCRIPTEN_EVENT_TOUCHCANCEL:           return "TOUCHCANCEL";
+    case EMSCRIPTEN_EVENT_GAMEPADCONNECTED:      return "GAMEPADCONNECTED";
+    case EMSCRIPTEN_EVENT_GAMEPADDISCONNECTED:   return "GAMEPADDISCONNECTED";
+    case EMSCRIPTEN_EVENT_BEFOREUNLOAD:          return "BEFOREUNLOAD";
+    case EMSCRIPTEN_EVENT_BATTERYCHARGINGCHANGE: return "BATTERYCHARGINGCHANGE";
+    case EMSCRIPTEN_EVENT_BATTERYLEVELCHANGE:    return "BATTERYLEVELCHANGE";
+    case EMSCRIPTEN_EVENT_WEBGLCONTEXTLOST:      return "WEBGLCONTEXTLOST";
+    case EMSCRIPTEN_EVENT_WEBGLCONTEXTRESTORED:  return "WEBGLCONTEXTRESTORED";
+    case EMSCRIPTEN_EVENT_MOUSEENTER:            return "MOUSEENTER";
+    case EMSCRIPTEN_EVENT_MOUSELEAVE:            return "MOUSELEAVE";
+    case EMSCRIPTEN_EVENT_MOUSEOVER:             return "MOUSEOVER";
+    case EMSCRIPTEN_EVENT_MOUSEOUT:              return "MOUSEOUT";
+    case EMSCRIPTEN_EVENT_CANVASRESIZED:         return "CANVASRESIZED";
+    case EMSCRIPTEN_EVENT_POINTERLOCKERROR:      return "POINTERLOCKERROR";
+    } // clang-format on
+    return "UNKNOWN_EVENT";
 }
 
 enum class GameLang : std::size_t {
@@ -303,7 +353,8 @@ constexpr auto bidCols = static_cast<int>(std::size(bidTable[0]));
 constexpr auto bidMenuW = bidCols * bidCellW + (bidCols - 1) * bidGap;
 constexpr auto bidMenuH = bidRows * bidCellH + (bidRows - 1) * bidGap;
 constexpr auto bidOriginX = (virtualWidth - bidMenuW) / 2.0f;
-constexpr auto bidOriginY = (virtualHeight - bidMenuH) / 2.0f;
+// TODO: properly align bid menu vertically
+constexpr auto bidOriginY = (virtualHeight - bidMenuH) / 2.0f - virtualH / 10.8f;
 
 struct BiddingMenu {
     bool isVisible{};
@@ -494,26 +545,76 @@ struct Context {
     }
 };
 
-auto updateWindowSize(Context& ctx) -> void
+[[maybe_unused]] auto sendLog(Context& ctx, const std::string& text) -> void
 {
-    auto cssW = 0.0;
-    auto cssH = 0.0;
-    if (emscripten_get_element_css_size("#canvas", &cssW, &cssH) != EMSCRIPTEN_RESULT_SUCCESS) {
+    if (ctx.ws == 0) {
+        PREF_WARN("error: socket is closed");
         return;
     }
-    ctx.windowWidth = static_cast<int>(cssW);
-    ctx.windowHeight = static_cast<int>(cssH);
-    INFO_VAR(cssW, cssH, ctx.windowWidth, ctx.windowHeight);
+    auto log = Log{};
+    log.set_player_id(ctx.myPlayerId);
+    log.set_text(text);
+    auto msg = Message{};
+    static constexpr auto method = "Log";
+    msg.set_method(method);
+    msg.set_payload(log.SerializeAsString());
+    auto data = msg.SerializeAsString();
+    if (const auto error = emscripten_websocket_send_binary(ctx.ws, data.data(), std::size(data));
+        error != EMSCRIPTEN_RESULT_SUCCESS) {
+        PREF_WARN("could not send {}: {}", VAR(method), what(error));
+    }
+}
+
+auto updateWindowSize(Context& ctx) -> void
+{
+    EmscriptenFullscreenChangeEvent f;
+    emscripten_get_fullscreen_status(&f);
+    const auto t = fmt::format(
+        "isFullscreen: {}, fullscreenEnabled: {}, nodeName {}, id: {}, elementWidth: {}, elementHeight: {}, "
+        "screenWidth: {}, screenHeight: {}",
+        f.isFullscreen,
+        f.fullscreenEnabled,
+        f.nodeName,
+        f.id,
+        f.elementWidth,
+        f.elementHeight,
+        f.screenWidth,
+        f.screenHeight);
+    sendLog(ctx, t);
+    PREF_INFO("{}", t);
+
+    auto canvasCssW = 0.0;
+    auto canvasCssH = 0.0;
+    if (emscripten_get_element_css_size("#canvas", &canvasCssW, &canvasCssH) != EMSCRIPTEN_RESULT_SUCCESS) {
+        return;
+    }
+    const auto dpr = emscripten_get_device_pixel_ratio();
+    ctx.windowWidth = static_cast<int>(canvasCssW * dpr);
+    ctx.windowHeight = static_cast<int>(canvasCssH * dpr);
+    emscripten_set_canvas_element_size("#canvas", ctx.windowWidth, ctx.windowHeight);
     ctx.window.SetSize(ctx.windowWidth, ctx.windowHeight);
-    // Compute scale factor (preserve aspect ratio)
-    ctx.scale = std::fminf(
-        static_cast<float>(ctx.windowWidth) / virtualWidth, //
-        static_cast<float>(ctx.windowHeight) / virtualHeight);
-    // Compute offsets for centering (letterboxing)
-    ctx.offsetX = (static_cast<float>(ctx.windowWidth) - virtualWidth * ctx.scale) * 0.5f;
-    ctx.offsetY = (static_cast<float>(ctx.windowHeight) - virtualHeight * ctx.scale) * 0.5f;
+    const auto windowW = static_cast<float>(ctx.windowWidth);
+    const auto windowH = static_cast<float>(ctx.windowHeight);
+    ctx.scale = std::fminf(windowW / virtualW, windowH / virtualH);
+    ctx.offsetX = (windowW - virtualW * ctx.scale) * 0.5f;
+    ctx.offsetY = (windowH - virtualH * ctx.scale) * 0.5f;
+    // TODO: Fix incorrect mouse scaling/offset when entering fullscreen mode
+    // in smartphone browsers
+    auto text = fmt::format(
+        "[updateWindowSize] cssW: {}, cssH: {}, dpr: {}, w: {}, h: {}, scale: {}, offX: {}, "
+        "offY: {}",
+        canvasCssW,
+        canvasCssH,
+        dpr,
+        ctx.windowWidth,
+        ctx.windowHeight,
+        ctx.scale,
+        ctx.offsetX,
+        ctx.offsetY);
+    sendLog(ctx, text);
+    PREF_INFO("{}", text);
     RMouse::SetOffset(static_cast<int>(-ctx.offsetX), static_cast<int>(-ctx.offsetY));
-    RMouse::SetScale(1.0f / ctx.scale, 1.0f / ctx.scale);
+    RMouse::SetScale(1.f / ctx.scale, 1.f / ctx.scale);
 }
 
 [[nodiscard]] auto getOpponentIds(Context& ctx) -> std::pair<PlayerId, PlayerId>
@@ -884,11 +985,12 @@ auto setup_websocket(Context& ctx) -> void
 auto drawGuiLabelCentered(const std::string& text, const RVector2& anchor) -> void
 {
     const auto size = MeasureTextEx(GuiGetFont(), text.c_str(), getGuiDefaultTextSize(), fontSpacing);
-    auto bounds = RRectangle{
-        anchor.x - size.x * 0.5f - 4.0f, // shift left to center and add left padding
-        anchor.y - size.y * 0.5f - 4.0f, // shift up to center and add top padding
-        size.x + 8.0f, // width = text + left + right padding
-        size.y + 8.0f // height = text + top + bottom padding
+    const auto shift = virtualH / 135.f;
+    const auto bounds = RRectangle{
+        anchor.x - size.x * 0.5f - (shift / 2.f), // shift left to center and add left padding
+        anchor.y - size.y * 0.5f - (shift / 2.f), // shift up to center and add top padding
+        size.x + shift, // width = text + left + right padding
+        size.y + shift // height = text + top + bottom padding
     };
     GuiLabel(bounds, text.c_str());
 }
@@ -897,17 +999,18 @@ auto drawGameplayScreen(Context& ctx) -> void
 {
     const auto title = ctx.localizeText(GameText::Preferans);
     const auto textSize = ctx.fontL.MeasureText(title, ctx.fontSizeL(), fontSpacing);
-    const auto x = static_cast<float>(virtualWidth - textSize.x) / 2.0f;
-    ctx.fontL.DrawText(title, {x, 20.f}, ctx.fontSizeL(), fontSpacing, getGuiColor(LABEL, TEXT_COLOR_NORMAL));
+    const auto x = (virtualW - textSize.x) / 2.0f;
+    const auto y = virtualH / 54.f;
+    ctx.fontL.DrawText(title, {x, y}, ctx.fontSizeL(), fontSpacing, getGuiColor(LABEL, TEXT_COLOR_NORMAL));
 }
 
 auto drawEnterNameScreen(Context& ctx) -> void
 {
-    static constexpr auto boxWidth = 400.0f;
-    static constexpr auto boxHeight = 60.0f;
+    static constexpr auto boxWidth = virtualW / 4.8f;
+    static constexpr auto boxHeight = virtualH / 18.f;
     const auto screenCenter = RVector2{virtualWidth, virtualHeight} / 2.0f;
     const auto boxPos = RVector2{screenCenter.x - boxWidth / 2.0f, screenCenter.y};
-    const auto labelPos = RVector2{boxPos.x, boxPos.y - 40.0f};
+    const auto labelPos = RVector2{boxPos.x, boxPos.y - virtualH / 27.f};
     ctx.fontM.DrawText(
         ctx.localizeText(GameText::EnterYourName),
         labelPos,
@@ -917,11 +1020,10 @@ auto drawEnterNameScreen(Context& ctx) -> void
 
     const auto inputBox = RRectangle{boxPos, {boxWidth, boxHeight}};
     static constexpr auto maxLenghtName = 11;
-    static char nameBuffer[maxLenghtName] = "";
+    static char nameBuffer[maxLenghtName] = "Player";
     static auto editMode = true;
     GuiTextBox(inputBox, nameBuffer, sizeof(nameBuffer), editMode);
-
-    const auto buttonBox = RRectangle{boxPos.x, boxPos.y + boxHeight + 20.0f, boxWidth, 40.0f};
+    const auto buttonBox = RRectangle{boxPos.x, boxPos.y + boxHeight + virtualH / 54.f, boxWidth, virtualH / 27.f};
     const auto clicked = GuiButton(buttonBox, ctx.localizeText(GameText::Enter).c_str());
     if ((clicked or RKeyboard::IsKeyPressed(KEY_ENTER)) and (nameBuffer[0] != '\0') and editMode) {
         ctx.myPlayerName = nameBuffer;
@@ -933,9 +1035,9 @@ auto drawEnterNameScreen(Context& ctx) -> void
 
 auto drawConnectedPlayersPanel(const Context& ctx) -> void
 {
-    static constexpr auto pad = 10.0f;
-    static constexpr auto minWidth = 200.0f;
-    static constexpr auto minHeight = 80.0f;
+    static constexpr auto pad = virtualH / 108.f;
+    static constexpr auto minWidth = virtualW / 9.6f;
+    static constexpr auto minHeight = virtualH / 13.5f;
     const auto fontSize = ctx.fontSizeS();
     const auto lineGap = fontSize * 1.2f;
     const auto headerGap = fontSize * .5f;
@@ -948,8 +1050,8 @@ auto drawConnectedPlayersPanel(const Context& ctx) -> void
             maxWidth = sz.x;
     }
     const auto rows = std::size(ctx.players);
-    const auto contentW = pad * 2.0f + maxWidth;
-    const auto contentH = pad * 2.0f + headerSize.y + headerGap + static_cast<float>(rows) * lineGap;
+    const auto contentW = pad * 2.f + maxWidth;
+    const auto contentH = pad * 2.f + headerSize.y + headerGap + static_cast<float>(rows) * lineGap;
     const auto panelW = std::max(minWidth, contentW);
     const auto panelH = std::max(minHeight, contentH);
     const auto r = RRectangle{{borderMargin, borderMargin}, {panelW, panelH}};
@@ -1058,29 +1160,15 @@ auto drawMyHand(Context& ctx) -> void
     auto& hand = ctx.player.cards;
     const auto totalWidth = static_cast<float>(std::ssize(hand) - 1) * cardOverlapX + cardWidth;
     const auto startX = (virtualWidth - totalWidth) / 2.0f;
-    const auto y = virtualHeight - cardHeight - 20.0f; // bottom padding
+    const auto myHandTopY = virtualHeight - cardHeight - cardHeight / 10.8f; // bottom padding
     const auto tricksTaken = ctx.players.at(ctx.myPlayerId).tricksTaken;
-    const auto name = fmt::format(
-        "{}{}{}",
-        ctx.turnPlayerId == ctx.myPlayerId ? fmt::format("{} ", ARROW_RIGHT) : "",
-        ctx.myPlayerName,
-        tricksTaken != 0 ? fmt::format(" ({})", tricksTaken) : "");
-    const auto size = ctx.fontM.MeasureText(name, ctx.fontSizeM(), fontSpacing);
-
-    // TODO: should `gap` be relative to something?
-    static constexpr auto gap = 8.f;
-    auto label = RRectangle{
-        startX - size.x - 20.0f, // to the left of the first card
-        y + cardHeight * 0.5f - size.y * 0.5f - gap * 0.5f, // vertically centred on the card
-        size.x + gap,
-        size.y + gap};
-    // TODO: still draw name if no cards left
+    static constexpr auto gap = cardHeight / 27.f;
 
     if (ctx.turnPlayerId == ctx.myPlayerId) {
         const auto text = ctx.localizeText(GameText::YourTurn);
         const auto textSize = ctx.fontM.MeasureText(text, ctx.fontSizeM(), fontSpacing);
         const auto bidEndY = bidOriginY + bidMenuH;
-        const auto spaceH = y - bidEndY;
+        const auto spaceH = myHandTopY - bidEndY;
         const auto textY = bidEndY + ((spaceH - textSize.y) * 0.5f);
         const auto textX = startX + std::abs(totalWidth - textSize.x) * 0.5f;
         const auto rect = RRectangle{textX + gap * 0.5f, textY - gap * 0.5f, textSize.x + gap, textSize.y + gap};
@@ -1090,7 +1178,18 @@ auto drawMyHand(Context& ctx) -> void
         if (ctx.turnPlayerId == ctx.myPlayerId) {
             GuiSetState(STATE_PRESSED);
         }
-        GuiLabel(label, name.c_str());
+        const auto name = fmt::format(
+            "{}{}{}",
+            ctx.turnPlayerId == ctx.myPlayerId ? fmt::format("{} ", ARROW_RIGHT) : "",
+            ctx.myPlayerName,
+            tricksTaken != 0 ? fmt::format(" ({})", tricksTaken) : "");
+        const auto textSize = ctx.fontM.MeasureText(name, ctx.fontSizeM(), fontSpacing);
+        const auto anchor = RVector2{
+            startX - textSize.x * 0.5f - virtualW / 96.f, // to the left of the first card
+            myHandTopY + cardHeight * 0.5f, // vertically centred on the card
+        };
+        // TODO: still draw name if no cards left
+        drawGuiLabelCentered(name, anchor);
         if (ctx.turnPlayerId == ctx.myPlayerId) {
             GuiSetState(STATE_NORMAL);
         }
@@ -1099,8 +1198,9 @@ auto drawMyHand(Context& ctx) -> void
     const auto toX = [&](const auto i) { return startX + static_cast<float>(i) * cardOverlapX; };
     const auto hoveredIndex = std::invoke([&] {
         auto reversed = rv::iota(0, std::ssize(hand)) | rv::reverse;
-        const auto it = rng::find_if(
-            reversed, [&](const auto i) { return mousePos.CheckCollision({toX(i), y, cardWidth, cardHeight}); });
+        const auto it = rng::find_if(reversed, [&](const auto i) {
+            return mousePos.CheckCollision({toX(i), myHandTopY, cardWidth, cardHeight});
+        });
         return it == rng::end(reversed) ? -1 : *it;
     });
     struct CardShineEffect {
@@ -1117,7 +1217,7 @@ auto drawMyHand(Context& ctx) -> void
             and static_cast<int>(i) == hoveredIndex;
         static constexpr auto offset = cardHeight / 10.f;
         const auto yOffset = isHovered ? -offset : 0.f;
-        card.position = RVector2{toX(i), y + yOffset};
+        card.position = RVector2{toX(i), myHandTopY + yOffset};
         card.texture.Draw(card.position, tintForCard(ctx, card));
         if (isHovered) {
             const auto time = static_cast<float>(ctx.window.GetTime());
@@ -1135,8 +1235,8 @@ auto drawMyHand(Context& ctx) -> void
         const auto text = ctx.localizeText(whistingChoiceToGameText(ctx.player.whistingChoice));
         const auto textSize = ctx.fontM.MeasureText(text, ctx.fontSizeM(), fontSpacing);
         auto anchor = RVector2{
-            startX + totalWidth + 20.0f + textSize.x * 0.5f, // right of last card
-            y + cardHeight * 0.5f - textSize.y * 0.5f // vertically centered
+            startX + textSize.x * 0.5f + virtualW / 96.f + totalWidth, // right of last card
+            myHandTopY + cardHeight * 0.5f // vertically centered
         };
         drawGuiLabelCentered(text, anchor);
         return;
@@ -1145,8 +1245,8 @@ auto drawMyHand(Context& ctx) -> void
         auto text = std::string{ctx.localizeBid(ctx.player.bid)};
         const auto textSize = ctx.fontM.MeasureText(text, ctx.fontSizeM(), fontSpacing);
         auto anchor = RVector2{
-            startX + totalWidth + 20.0f + textSize.x * 0.5f, // right of last card
-            y + cardHeight * 0.5f - textSize.y * 0.5f // vertically centered
+            startX + textSize.x * 0.5f + virtualW / 96.f + totalWidth, // right of last card
+            myHandTopY + cardHeight * 0.5f // vertically centered
         };
         // TODO: draw ♥ and ♦ in red
         drawGuiLabelCentered(text, anchor);
@@ -1540,13 +1640,13 @@ auto drawSettingsMenu(Context& ctx) -> void
         return;
     }
     const auto rowH = GuiGetStyle(LISTVIEW, LIST_ITEMS_HEIGHT);
-    const auto textS = static_cast<int>(getGuiDefaultTextSize());
-    const auto labelH = textS + 6; // readable label height
-    const auto labelGap = 6; // gap between label and its list
-    const auto spacing = 12; // vertical spacing between sections
-    const auto headerH = 36; // panel title strip
-    const auto footerH = 72; // bottom area for button
-    const auto margin = 12;
+    const auto textS = getGuiDefaultTextSize();
+    const auto labelGap = virtualH / 180.f; // gap between label and its list
+    const auto labelH = textS + labelGap; // readable label height
+    const auto spacing = virtualH / 90.f; // vertical spacing between sections
+    const auto headerH = virtualH / 30.f; // panel title strip
+    const auto footerH = virtualH / 15.f; // bottom area for button
+    const auto margin = virtualH / 90.f;
     const auto langs = std::vector{
         ctx.localizeText(GameText::English),
         ctx.localizeText(GameText::Ukrainian),
@@ -1567,11 +1667,11 @@ auto drawSettingsMenu(Context& ctx) -> void
         ctx.localizeText(GameText::Cherry),
         ctx.localizeText(GameText::Genesis),
         ctx.localizeText(GameText::Ashes)};
-    const auto colorSchemesH = (std::ssize(colorSchemes) + 1) * rowH;
-    const auto langsH = (std::ssize(langs) + 1) * rowH;
+    const auto colorSchemesH = static_cast<float>((std::ssize(colorSchemes) + 1) * rowH);
+    const auto langsH = static_cast<float>((std::ssize(langs) + 1) * rowH);
     const auto totalH = headerH + footerH + labelH + labelGap + langsH + spacing + labelH + labelGap + colorSchemesH;
-    static constexpr auto totalW = 420.f;
-    const auto panelBounds = RRectangle{virtualWidth - borderMargin - totalW, 150, totalW, static_cast<float>(totalH)};
+    static constexpr auto totalW = virtualW / 5.f;
+    const auto panelBounds = RRectangle{virtualWidth - borderMargin - totalW, virtualH / 7.2f, totalW, totalH};
     setFont(ctx.fontS);
     GuiPanel(panelBounds, ctx.localizeText(GameText::Settings).c_str());
     const auto inner = RRectangle{
@@ -1579,15 +1679,14 @@ auto drawSettingsMenu(Context& ctx) -> void
         panelBounds.y + headerH,
         panelBounds.width - margin * 2,
         panelBounds.height - headerH - footerH};
-
-    const auto langsLabelBounds = RRectangle{inner.x, inner.y, inner.width, static_cast<float>(labelH)};
+    const auto langsLabelBounds = RRectangle{inner.x, inner.y, inner.width, labelH};
     auto prev = GuiGetStyle(LABEL, TEXT_COLOR_NORMAL);
     GuiSetStyle(LABEL, TEXT_COLOR_NORMAL, GuiGetStyle(LABEL, TEXT_COLOR_PRESSED));
     GuiLabel(langsLabelBounds, ctx.localizeText(GameText::Language).c_str());
     GuiSetStyle(LABEL, TEXT_COLOR_NORMAL, prev);
     const auto joinedLangs = langs | rv::intersperse(";") | rv::join | rng::to<std::string>;
-    const auto langsBounds = RRectangle{
-        inner.x, langsLabelBounds.y + langsLabelBounds.height + labelGap, inner.width, static_cast<float>(langsH)};
+    const auto langsBounds
+        = RRectangle{inner.x, langsLabelBounds.y + langsLabelBounds.height + labelGap, inner.width, langsH};
     GuiListView(langsBounds, joinedLangs.c_str(), &ctx.settingsMenu.langIdScroll, &ctx.settingsMenu.langIdSelect);
     if (ctx.settingsMenu.langIdSelect >= 0
         and ctx.settingsMenu.langIdSelect < std::ssize(langs)
@@ -1599,17 +1698,14 @@ auto drawSettingsMenu(Context& ctx) -> void
     }
 
     const auto colorSchemeLabelBounds
-        = RRectangle{inner.x, langsBounds.y + langsBounds.height + spacing, inner.width, static_cast<float>(labelH)};
+        = RRectangle{inner.x, langsBounds.y + langsBounds.height + spacing, inner.width, labelH};
     prev = GuiGetStyle(LABEL, TEXT_COLOR_NORMAL);
     GuiSetStyle(LABEL, TEXT_COLOR_NORMAL, GuiGetStyle(LABEL, TEXT_COLOR_PRESSED));
     GuiLabel(colorSchemeLabelBounds, ctx.localizeText(GameText::ColorScheme).c_str());
     GuiSetStyle(LABEL, TEXT_COLOR_NORMAL, prev);
     const auto joinedColorSchemes = colorSchemes | rv::intersperse(";") | rv::join | rng::to<std::string>;
     const auto colorSchemesBounds = RRectangle{
-        inner.x,
-        colorSchemeLabelBounds.y + colorSchemeLabelBounds.height + labelGap,
-        inner.width,
-        static_cast<float>(colorSchemesH)};
+        inner.x, colorSchemeLabelBounds.y + colorSchemeLabelBounds.height + labelGap, inner.width, colorSchemesH};
     GuiListView(
         colorSchemesBounds,
         joinedColorSchemes.c_str(),
@@ -1625,8 +1721,10 @@ auto drawSettingsMenu(Context& ctx) -> void
         }
     }
 
+    const auto okW = virtualW / 20.f;
+    const auto okH = virtualH / 36.f;
     const auto okBounds = RRectangle{
-        inner.x + inner.width - 90, panelBounds.y + panelBounds.height - footerH + (footerH - 28) * 0.5f, 90, 28};
+        inner.x + inner.width - okW, panelBounds.y + panelBounds.height - footerH + (footerH - okH) * 0.5f, okW, okH};
     if (GuiButton(okBounds, "OK")) {
         ctx.settingsMenu.isVisible = false;
     }
@@ -1776,6 +1874,12 @@ auto updateDrawFrame(void* userData) -> void
 {
     assert(userData);
     auto& ctx = toContext(userData);
+
+    if (RMouse::IsButtonPressed(MOUSE_LEFT_BUTTON)) {
+        const auto mousePos = RMouse::GetPosition();
+        sendLog(ctx, fmt::format("[mousePressed] x: {}, y: {}", mousePos.x, mousePos.y));
+        PREF_INFO("x: {}, y: {}", mousePos.x, mousePos.y);
+    }
     if (std::empty(ctx.myPlayerId)) {
         ctx.myPlayerId = loadPlayerIdFromLocalStorage();
     }
@@ -1810,13 +1914,13 @@ auto updateDrawFrame(void* userData) -> void
         drawEnterNameScreen(ctx);
         drawSettingsMenu(ctx);
         drawFullScreenButton(ctx);
-        ctx.window.DrawFPS(virtualWidth - 80, 0);
+        ctx.window.DrawFPS(virtualWidth - virtualWidth / 24, 0);
         ctx.target.EndMode();
         goto end;
     }
     if (ctx.areAllPlayersJoined()) {
         drawMyHand(ctx);
-        auto leftX = 80.0f;
+        auto leftX = virtualW / 24.f;
         auto rightX = virtualWidth - cardWidth - leftX;
         const auto [leftId, rightId] = getOpponentIds(ctx);
         drawOpponentHand(ctx, ctx.leftCardCount, leftX, leftId, false);
@@ -1828,7 +1932,7 @@ auto updateDrawFrame(void* userData) -> void
     }
     drawSettingsMenu(ctx);
     drawFullScreenButton(ctx);
-    ctx.window.DrawFPS(virtualWidth - 80, 0);
+    ctx.window.DrawFPS(virtualWidth - virtualWidth / 24, 0);
     ctx.target.EndMode();
 end:
     ctx.window.BeginDrawing();
@@ -1878,11 +1982,23 @@ int main(const int argc, const char* const argv[])
         &ctx,
         true,
         []([[maybe_unused]] const int eventType, [[maybe_unused]] const EmscriptenUiEvent* e, void* userData) {
-            auto& ctx = pref::toContext(userData);
-            pref::updateWindowSize(ctx);
+            PREF_INFO("resize");
+            sendLog(pref::toContext(userData), "resize");
+            pref::updateWindowSize(pref::toContext(userData));
             return EM_TRUE;
         });
-
+    emscripten_set_fullscreenchange_callback(
+        EMSCRIPTEN_EVENT_TARGET_WINDOW,
+        &ctx,
+        true,
+        []([[maybe_unused]] const int eventType,
+           [[maybe_unused]] const EmscriptenFullscreenChangeEvent* e,
+           void* userData) {
+            PREF_INFO("fullscreen");
+            sendLog(pref::toContext(userData), "fullscreen");
+            pref::updateWindowSize(pref::toContext(userData));
+            return EM_FALSE;
+        });
     static constexpr const auto fps = 60;
     emscripten_set_main_loop_arg(pref::updateDrawFrame, pref::toUserData(ctx), fps, true);
     return 0;
