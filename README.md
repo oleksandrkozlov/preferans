@@ -66,7 +66,7 @@ cmake --build build-server --target test_server
 ### License
 
 - **Code**: [MIT](LICENSE)
-- **Cards**: [Public Domain / CC0](client/resources/cards/LICENSE)
+- **Cards**: [Public Domain](client/resources/cards/LICENSE)
 - **Fonts**: [DejaVu / Font Awesome Free (OFL)](client/resources/fonts/LICENSE)
 - **Styles**: [zlib](client/resources/styles/LICENSE)
 - **Shells**: [zlib / MIT / NCSA](client/resources/shells/LICENSE)

@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <exception>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <optional>
@@ -75,10 +76,13 @@ struct PlayedCard {
     CardName name;
 };
 
+// NOLINTBEGIN(performance-enum-size)
 enum class WhistChoise {
     Pass,
     Whist,
-    HalfWhist, // 6-7 contracts
+    HalfWhist,
+    PassWhist,
+    PassPass,
 };
 
 struct Whister {
@@ -95,10 +99,12 @@ enum class ContractLevel {
     Ten,
     Miser,
 };
+// NOLINTEND(performance-enum-size)
 
 struct Declarer {
     Player::Id id;
     ContractLevel contractLevel = ContractLevel::Six;
+    int tricksTaken{};
 };
 
 struct Context {
@@ -107,7 +113,12 @@ struct Context {
     [[nodiscard]] auto whoseTurnId() const -> const Player::Id&;
     [[nodiscard]] auto player(const Player::Id& playerId) const -> Player&;
     [[nodiscard]] auto playerName(const Player::Id& playerId) const -> const std::string&;
-    [[nodiscard]] auto isWhistingDone() const -> bool;
+    [[nodiscard]] auto areWhistersPassOrWhist() const -> bool;
+    [[nodiscard]] auto areWhistersPass() const -> bool;
+    [[nodiscard]] auto isHalfWhistAfterPass() const -> bool;
+    [[nodiscard]] auto isWhistAfterHalfWhist() const -> bool;
+    [[nodiscard]] auto isPassAfterHalfWhist() const -> bool;
+    [[nodiscard]] auto countWhistChoice(std::initializer_list<WhistChoise> choices) const -> std::ptrdiff_t;
 
     mutable Players players;
     Players::const_iterator whoseTurnIt;
@@ -120,15 +131,11 @@ struct Context {
 
 constexpr auto Detached = [](const std::string_view func) { // NOLINT(fuchsia-statically-constructed-objects)
     return [func](const std::exception_ptr& eptr) {
-        if (not eptr) {
-            return;
-        }
+        if (not eptr) { return; }
         try {
             std::rethrow_exception(eptr);
         } catch (const sys::system_error& error) {
-            if (error.code() != net::error::operation_aborted) {
-                PREF_WARN("[{}][Detached] error: {}", func, error);
-            }
+            if (error.code() != net::error::operation_aborted) { PREF_WARN("[{}][Detached] error: {}", func, error); }
         } catch (const std::exception& error) {
             PREF_WARN("[{}][Detached] error: {}", func, error);
         } catch (...) {

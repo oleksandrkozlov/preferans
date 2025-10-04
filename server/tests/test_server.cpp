@@ -29,14 +29,14 @@ TEST_CASE("server")
     SECTION("beats")
     {
         // clang-format off
-        REQUIRE_FALSE(beats({.candidate = SEVEN _OF_ HEARTS, .best = EIGHT _OF_ HEARTS, .leadSuit = HEARTS, .trump = SPADES}));
-        REQUIRE_FALSE(beats({.candidate = SEVEN _OF_ HEARTS, .best = SEVEN _OF_ HEARTS, .leadSuit = HEARTS, .trump = SPADES}));
-        REQUIRE_FALSE(beats({.candidate = SEVEN _OF_ HEARTS, .best = SEVEN _OF_ SPADES, .leadSuit = HEARTS, .trump = SPADES}));
+        REQUIRE_FALSE(beats({.candidate = SEVEN PREF_OF_ HEARTS, .best = EIGHT PREF_OF_ HEARTS, .leadSuit = HEARTS, .trump = SPADES}));
+        REQUIRE_FALSE(beats({.candidate = SEVEN PREF_OF_ HEARTS, .best = SEVEN PREF_OF_ HEARTS, .leadSuit = HEARTS, .trump = SPADES}));
+        REQUIRE_FALSE(beats({.candidate = SEVEN PREF_OF_ HEARTS, .best = SEVEN PREF_OF_ SPADES, .leadSuit = HEARTS, .trump = SPADES}));
 
-        REQUIRE(beats({.candidate = EIGHT _OF_ HEARTS, .best = SEVEN _OF_ HEARTS, .leadSuit = HEARTS, .trump = SPADES}));
-        REQUIRE(beats({.candidate = SEVEN _OF_ HEARTS, .best = SEVEN _OF_ SPADES, .leadSuit = HEARTS, .trump = ""}));
-        REQUIRE(beats({.candidate = SEVEN _OF_ SPADES, .best = EIGHT _OF_ HEARTS, .leadSuit = HEARTS, .trump = SPADES}));
-        REQUIRE(beats({.candidate = SEVEN _OF_ SPADES, .best = SEVEN _OF_ HEARTS, .leadSuit = HEARTS, .trump = SPADES}));
+        REQUIRE(beats({.candidate = EIGHT PREF_OF_ HEARTS, .best = SEVEN PREF_OF_ HEARTS, .leadSuit = HEARTS, .trump = SPADES}));
+        REQUIRE(beats({.candidate = SEVEN PREF_OF_ HEARTS, .best = SEVEN PREF_OF_ SPADES, .leadSuit = HEARTS, .trump = ""}));
+        REQUIRE(beats({.candidate = SEVEN PREF_OF_ SPADES, .best = EIGHT PREF_OF_ HEARTS, .leadSuit = HEARTS, .trump = SPADES}));
+        REQUIRE(beats({.candidate = SEVEN PREF_OF_ SPADES, .best = SEVEN PREF_OF_ HEARTS, .leadSuit = HEARTS, .trump = SPADES}));
         // clang-format on
     }
 
@@ -45,37 +45,37 @@ TEST_CASE("server")
     {
         SECTION("higher rank wins last")
         {
-            REQUIRE(finishTrick({{.playerId = "1", .name = SEVEN _OF_ HEARTS},
-                                 {.playerId = "2", .name = EIGHT _OF_ HEARTS},
-                                 {.playerId = "3", .name = NINE  _OF_ HEARTS}}, SPADES) == "3");
+            REQUIRE(finishTrick({{.playerId = "1", .name = SEVEN PREF_OF_ HEARTS},
+                                 {.playerId = "2", .name = EIGHT PREF_OF_ HEARTS},
+                                 {.playerId = "3", .name = NINE  PREF_OF_ HEARTS}}, SPADES) == "3");
         }
 
         SECTION("higer rank wins first")
         {
-            REQUIRE(finishTrick({{.playerId = "1", .name = NINE  _OF_ HEARTS},
-                                 {.playerId = "2", .name = EIGHT _OF_ HEARTS},
-                                 {.playerId = "3", .name = SEVEN _OF_ HEARTS}}, SPADES) == "1");
+            REQUIRE(finishTrick({{.playerId = "1", .name = NINE  PREF_OF_ HEARTS},
+                                 {.playerId = "2", .name = EIGHT PREF_OF_ HEARTS},
+                                 {.playerId = "3", .name = SEVEN PREF_OF_ HEARTS}}, SPADES) == "1");
         }
 
         SECTION("trump wins")
         {
-            REQUIRE(finishTrick({{.playerId = "1", .name = NINE  _OF_ HEARTS},
-                                 {.playerId = "2", .name = SEVEN _OF_ SPADES},
-                                 {.playerId = "3", .name = SEVEN _OF_ HEARTS}}, SPADES) == "2");
+            REQUIRE(finishTrick({{.playerId = "1", .name = NINE  PREF_OF_ HEARTS},
+                                 {.playerId = "2", .name = SEVEN PREF_OF_ SPADES},
+                                 {.playerId = "3", .name = SEVEN PREF_OF_ HEARTS}}, SPADES) == "2");
         }
 
         SECTION ("first lead wins")
         {
-            REQUIRE(finishTrick({{.playerId = "1", .name = SEVEN _OF_ HEARTS},
-                                 {.playerId = "2", .name = SEVEN _OF_ DIAMONDS},
-                                 {.playerId = "3", .name = SEVEN _OF_ CLUBS}}, SPADES) == "1");
+            REQUIRE(finishTrick({{.playerId = "1", .name = SEVEN PREF_OF_ HEARTS},
+                                 {.playerId = "2", .name = SEVEN PREF_OF_ DIAMONDS},
+                                 {.playerId = "3", .name = SEVEN PREF_OF_ CLUBS}}, SPADES) == "1");
         }
 
         SECTION("higher rank wins second without trump")
         {
-            REQUIRE(finishTrick({{.playerId = "1", .name = SEVEN _OF_ HEARTS},
-                                 {.playerId = "2", .name = EIGHT _OF_ HEARTS},
-                                 {.playerId = "3", .name = EIGHT _OF_ CLUBS}}, "") == "2");
+            REQUIRE(finishTrick({{.playerId = "1", .name = SEVEN PREF_OF_ HEARTS},
+                                 {.playerId = "2", .name = EIGHT PREF_OF_ HEARTS},
+                                 {.playerId = "3", .name = EIGHT PREF_OF_ CLUBS}}, "") == "2");
         }
         // clang-format on
     }
@@ -90,19 +90,46 @@ TEST_CASE("calculateDealScore")
     static constexpr auto w1 = "1-whister ";
     static constexpr auto w2 = "2-whister ";
 
+    SECTION("declarer declares miser")
+    { // clang-format off
+        const auto [tricksDeclarer, tricksW1, dump, pool] = GENERATE(
+            table<int, int, int, int>(
+                {{ 0, 10,   0, 10},
+                 { 1,  9,  10,  0},
+                 { 2,  8,  20,  0},
+                 { 3,  7,  30,  0},
+                 { 4,  6,  40,  0},
+                 { 5,  5,  50,  0},
+                 { 6,  4,  60,  0},
+                 { 7,  3,  70,  0},
+                 { 8,  2,  80,  0},
+                 { 9,  1,  90,  0},
+                 {10,  0, 100,  0}}));
+        const auto actual = calculateDealScore(
+            { .id = de, .contractLevel = ContractLevel::Miser, .tricksTaken = tricksDeclarer},
+            {{.id = w1, .choise = Whist,                       .tricksTaken = tricksW1},
+             {.id = w2, .choise = Whist,                       .tricksTaken = 0}});
+        const auto expected = DealScore{
+            {de, {.dump = dump, .pool = pool, .whist = 0}},
+            {w1, {.dump = 0,    .pool = 0,    .whist = 0}},
+            {w2, {.dump = 0,    .pool = 0,    .whist = 0}},
+        }; // clang-format on
+        REQUIRE(actual == expected);
+    }
+
     SECTION("everyone fulfilled what declared")
     { // clang-format off
-            const auto [contractLevel, tricksW1, tricksW2, whistW1, whistW2, declarerPool] = GENERATE(
-                table<ContractLevel, int, int, int, int, int>({
-                     {  Six, 2, 2, 2 *  2, 2 *  2, 2},
-                     {Seven, 1, 2, 1 *  4, 2 *  4, 4},
-                     {Eight, 1, 1, 1 *  6, 1 *  6, 6},
-                     { Nine, 1, 0, 1 *  8, 0 *  8, 8},
+            const auto [contractLevel, tricksDeclarer, tricksW1, tricksW2, whistW1, whistW2, declarerPool] = GENERATE(
+                table<ContractLevel, int,  int, int, int, int, int>({
+                     {  Six, 6, 2, 2, 2 *  2, 2 *  2, 2},
+                     {Seven, 7, 1, 2, 1 *  4, 2 *  4, 4},
+                     {Eight, 8, 1, 1, 1 *  6, 1 *  6, 6},
+                     { Nine, 9, 1, 0, 1 *  8, 0 *  8, 8},
             }));
             const auto actual = calculateDealScore(
-                {.id = de, .contractLevel = contractLevel}, {
-                {.id = w1, .choise = Whist, .tricksTaken = tricksW1},
-                {.id = w2, .choise = Whist, .tricksTaken = tricksW2},
+                {.id = de, .contractLevel = contractLevel, .tricksTaken = tricksDeclarer}, {
+                {.id = w1, .choise = Whist,                .tricksTaken = tricksW1},
+                {.id = w2, .choise = Whist,                .tricksTaken = tricksW2},
             });
             const auto expected = DealScore{
                 {de, {.dump = 0, .pool = declarerPool, .whist = 0}},
@@ -114,6 +141,7 @@ TEST_CASE("calculateDealScore")
 
     SECTION("declarer did not fulfill what declared")
     { // clang-format off
+            const auto tricksDeclarer = 5;
             const auto tricksW1 = 3;
             const auto tricksW2 = 2;
             const auto [contractLevel, dump, whistW1, whistW2] = GENERATE(
@@ -125,9 +153,9 @@ TEST_CASE("calculateDealScore")
                      {  Ten, 5 * 10, (tricksW1 * 10) + (5 * 10), (tricksW2 * 10) + (5 * 10)},
             }));
             const auto actual = calculateDealScore(
-                {.id = de, .contractLevel = contractLevel}, {
-                {.id = w1, .choise = Whist, .tricksTaken = tricksW1},
-                {.id = w2, .choise = Whist, .tricksTaken = tricksW2},
+                {.id = de, .contractLevel = contractLevel, .tricksTaken = tricksDeclarer}, {
+                {.id = w1, .choise = Whist,                .tricksTaken = tricksW1},
+                {.id = w2, .choise = Whist,                .tricksTaken = tricksW2},
             });
             const auto expected = DealScore{
                 {de, {.dump = dump, .pool = 0, .whist = 0}},
@@ -148,9 +176,9 @@ TEST_CASE("calculateDealScore")
                     {  Ten, 10, 1 * 10},
             }));
             const auto actual = calculateDealScore(
-                {.id = de, .contractLevel = contractLevel}, {
-                {.id = w1, .choise = Whist, .tricksTaken = 0},
-                {.id = w2, .choise = Pass,  .tricksTaken = 0},
+                {.id = de, .contractLevel = contractLevel, .tricksTaken = 10}, {
+                {.id = w1, .choise = Whist,                .tricksTaken = 0},
+                {.id = w2, .choise = Pass,                 .tricksTaken = 0},
             });
             const auto expected = DealScore{
                 {de, {.dump = 0,      .pool = declarerPool, .whist = 0}},
@@ -171,7 +199,7 @@ TEST_CASE("calculateDealScore")
                     { Ten, 10, 1 * 10},
             }));
             const auto actual = calculateDealScore(
-                {.id = de, .contractLevel = contractLevel}, {
+                {.id = de, .contractLevel = contractLevel, .tricksTaken = 10}, {
                 {.id = w1, .choise = Whist, .tricksTaken = 0},
                 {.id = w2, .choise = Whist, .tricksTaken = 0},
             });

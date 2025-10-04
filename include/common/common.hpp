@@ -1,5 +1,9 @@
 #pragma once
 
+#include "common/logger.hpp"
+#include "proto/pref.pb.h"
+
+#include <fmt/format.h>
 #include <range/v3/all.hpp>
 
 #include <cstdint>
@@ -35,17 +39,21 @@ namespace pref {
 #define KING "king"
 #define ACE "ace"
 
-#define WT "WT" // without talon
-#define NINE_WT NINE " " WT
-#define TEN_WT TEN " " WT
-#define MISER "Miser"
-#define MISER_WT "Mis." WT
-#define PASS "Pass"
+#define PREF_WT "WT" // without talon
+#define NINE_WT NINE " " PREF_WT
+#define TEN_WT TEN " " PREF_WT
+#define PREF_MISER "Misère"
+#define PREF_MISER_WT "Mis." PREF_WT
+#define PREF_PASS "Pass"
 
-#define WHIST "Whist"
-#define HALF_WHIST "Half-Whist"
+#define PREF_WHIST "Whist"
+#define PREF_HALF_WHIST "Half-whist"
+#define PREF_PASS_WHIST PREF_PASS PREF_WHIST
+#define PREF_PASS_PASS PREF_PASS PREF_PASS
+#define PREF_CATCH "Catch"
+#define PREF_TRUST "Trust"
 
-#define _OF_ "_of_"
+#define PREF_OF_ "_of_"
 
 // NOLINTEND(cppcoreguidelines-macro-usage)
 
@@ -93,12 +101,12 @@ using FinalResult = std::map<PlayerId, std::int32_t>;
 
 [[nodiscard]] inline auto cardSuit(const std::string_view card) -> std::string
 {
-    return std::string{card.substr(card.find(_OF_) + 4)};
+    return std::string{card.substr(card.find(PREF_OF_) + 4)};
 }
 
 [[nodiscard]] inline auto cardRank(const std::string_view card) -> std::string
 {
-    return std::string{card.substr(0, card.find(_OF_))};
+    return std::string{card.substr(0, card.find(PREF_OF_))};
 }
 
 [[nodiscard]] inline auto rankValue(const std::string_view rank) -> int
@@ -109,13 +117,13 @@ using FinalResult = std::map<PlayerId, std::int32_t>;
 }
 
 [[nodiscard]] constexpr auto getTrump(const std::string_view bid) noexcept -> std::string_view
-{ // clang-format off
-    if (bid.contains(WT) or bid.contains(MISER) or bid.contains(PASS)) { return {}; }
+{
+    if (bid.contains(PREF_WT) or bid.contains(PREF_MISER) or bid.contains(PREF_PASS)) { return {}; }
     if (bid.contains(SPADE)) { return SPADES; }
     if (bid.contains(CLUB)) { return CLUBS; }
     if (bid.contains(HEART)) { return HEARTS; }
     if (bid.contains(DIAMOND)) { return DIAMONDS; }
-    return {}; // clang-format on
+    return {};
 }
 
 template<typename Callable>
@@ -138,22 +146,16 @@ template<typename Value>
 
 [[nodiscard]] inline auto calculateFinalResult(FinalScore finalScore) -> FinalResult
 {
-    if (std::empty(finalScore)) {
-        return {};
-    }
+    if (std::empty(finalScore)) { return {}; }
     static constexpr auto numberOfPlayers = static_cast<std::int32_t>(NumberOfPlayers);
     static constexpr auto price = 10;
     const auto adjustByMin = [](auto& scores, const auto member) {
         const auto minScore = rng::min(scores | rv::values, std::less{}, member);
-        for (auto& score : scores | rv::values) {
-            score.*member -= minScore.*member;
-        }
+        for (auto& score : scores | rv::values) { score.*member -= minScore.*member; }
     };
     const auto adjustScore = [&](const int score) {
         const auto value = score * price;
-        if (value % numberOfPlayers == 0) {
-            return 0;
-        }
+        if (value % numberOfPlayers == 0) { return 0; }
         return ((value - price) % numberOfPlayers == 0) ? -1 : +1;
     };
     const auto distributeWhists = [&](const auto member, const bool isDump) {
@@ -187,14 +189,10 @@ template<typename Value>
         for (const auto& otherId : finalScore | rv::keys | rv::filter(notEqualTo(playerId))) {
             assert(finalScoreCopy.contains(playerId));
             auto& player = finalScoreCopy[playerId];
-            if (not player.whists.contains(otherId)) {
-                player.whists.emplace(otherId, 0);
-            }
+            if (not player.whists.contains(otherId)) { player.whists.emplace(otherId, 0); }
             assert(finalScore.contains(otherId));
             const auto& other = finalScore[otherId];
-            if (other.whists.contains(playerId)) {
-                player.whists[otherId] -= other.whists.at(playerId);
-            }
+            if (other.whists.contains(playerId)) { player.whists[otherId] -= other.whists.at(playerId); }
         }
     }
     return finalScoreCopy
@@ -216,6 +214,46 @@ template<typename Value>
             .pool = rng::accumulate(score.pool, 0),
             .whists = accumulate(score.whists)}};
     })) | rng::to<FinalScore>; // clang-format on
+}
+
+// TODO: use C++26 Reflection
+// clang-format off
+template<typename T>
+           [[nodiscard]] constexpr auto methodName() noexcept -> std::string_view { return "Unknown"; }
+template<> [[nodiscard]] constexpr auto methodName<Bidding>() noexcept -> std::string_view { return "Bidding"; }
+template<> [[nodiscard]] constexpr auto methodName<DealCards>() noexcept -> std::string_view { return "DealCards"; }
+template<> [[nodiscard]] constexpr auto methodName<DiscardTalon>() noexcept -> std::string_view { return "DiscardTalon"; }
+template<> [[nodiscard]] constexpr auto methodName<JoinRequest>() noexcept -> std::string_view { return "JoinRequest"; }
+template<> [[nodiscard]] constexpr auto methodName<JoinResponse>() noexcept -> std::string_view { return "JoinResponse"; }
+template<> [[nodiscard]] constexpr auto methodName<PlayCard>() noexcept -> std::string_view { return "PlayCard"; }
+template<> [[nodiscard]] constexpr auto methodName<PlayerJoined>() noexcept -> std::string_view { return "PlayerJoined"; }
+template<> [[nodiscard]] constexpr auto methodName<PlayerLeft>() noexcept -> std::string_view { return "PlayerLeft"; }
+template<> [[nodiscard]] constexpr auto methodName<PlayerTurn>() noexcept -> std::string_view { return "PlayerTurn"; }
+template<> [[nodiscard]] constexpr auto methodName<DealFinished>() noexcept -> std::string_view { return "DealFinished"; }
+template<> [[nodiscard]] constexpr auto methodName<TrickFinished>() noexcept -> std::string_view { return "TrickFinished"; }
+template<> [[nodiscard]] constexpr auto methodName<Whisting>() noexcept -> std::string_view { return "Whisting"; }
+template<> [[nodiscard]] constexpr auto methodName<Log>() noexcept -> std::string_view { return "Log"; }
+// clang-format on
+
+template<typename Method>
+[[nodiscard]] auto makeMessage(const Method& method) -> Message
+{
+    auto result = Message{};
+    result.set_method(std::string{methodName<Method>()});
+    result.set_payload(method.SerializeAsString());
+    return result;
+}
+
+template<typename Method>
+[[nodiscard]] auto makeMethod(const Message& msg) -> std::optional<Method>
+{
+    auto result = Method{};
+    if (not result.ParseFromString(msg.payload())) {
+        const auto error = fmt::format("failed to make {} from string", methodName<Method>());
+        WARN_VAR(error);
+        return {};
+    }
+    return result;
 }
 
 } // namespace pref

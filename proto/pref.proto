@@ -38,7 +38,8 @@ message PlayCard {
 message PlayerTurn {
   string player_id = 1;
   string stage = 2; // Bidding, TalonPicking, Playing, Whisting
-  repeated string talon = 3; // queen_of_hearts, etc.
+  bool can_half_whist = 3 ; // only for the Whisting stage
+  repeated string talon = 4; // queen_of_hearts, etc.
 }
 
 message Bidding {
