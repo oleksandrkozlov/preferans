@@ -11,7 +11,6 @@
 
 #include <cstdint>
 #include <exception>
-#include <initializer_list>
 #include <map>
 #include <memory>
 #include <optional>
@@ -67,8 +66,18 @@ struct Player {
     std::optional<SteadyTimer> reconnectTimer;
     Hand hand;
     std::string bid;
-    std::string whistChoice;
+    std::string whistingChoice;
+    std::string howToPlayChoice;
     int tricksTaken{};
+
+    auto clear() -> void
+    {
+        hand.clear();
+        bid.clear();
+        whistingChoice.clear();
+        howToPlayChoice.clear();
+        tricksTaken = 0;
+    }
 };
 
 struct PlayedCard {
@@ -77,7 +86,7 @@ struct PlayedCard {
 };
 
 // NOLINTBEGIN(performance-enum-size)
-enum class WhistChoise {
+enum class WhistingChoice {
     Pass,
     Whist,
     HalfWhist,
@@ -87,7 +96,7 @@ enum class WhistChoise {
 
 struct Whister {
     Player::Id id;
-    WhistChoise choise = WhistChoise::Pass;
+    WhistingChoice choice = WhistingChoice::Pass;
     int tricksTaken{};
 };
 
@@ -113,12 +122,21 @@ struct Context {
     [[nodiscard]] auto whoseTurnId() const -> const Player::Id&;
     [[nodiscard]] auto player(const Player::Id& playerId) const -> Player&;
     [[nodiscard]] auto playerName(const Player::Id& playerId) const -> const std::string&;
-    [[nodiscard]] auto areWhistersPassOrWhist() const -> bool;
     [[nodiscard]] auto areWhistersPass() const -> bool;
+    [[nodiscard]] auto areWhistersWhist() const -> bool;
+    [[nodiscard]] auto areWhistersPassAndWhist() const -> bool;
     [[nodiscard]] auto isHalfWhistAfterPass() const -> bool;
-    [[nodiscard]] auto isWhistAfterHalfWhist() const -> bool;
     [[nodiscard]] auto isPassAfterHalfWhist() const -> bool;
-    [[nodiscard]] auto countWhistChoice(std::initializer_list<WhistChoise> choices) const -> std::ptrdiff_t;
+    [[nodiscard]] auto isWhistAfterHalfWhist() const -> bool;
+    [[nodiscard]] auto countWhistingChoice(WhistingChoice choice) const -> std::ptrdiff_t;
+
+    auto clear() -> void
+    {
+        talon.clear();
+        trick.clear();
+        trump.clear();
+        for (auto&& [_, p] : players) { p.clear(); }
+    }
 
     mutable Players players;
     Players::const_iterator whoseTurnIt;
@@ -128,6 +146,9 @@ struct Context {
     Player::Id forehandId;
     ScoreSheet scoreSheet;
 };
+
+inline constexpr auto ToPlayerId = &Context::Players::value_type::first;
+inline constexpr auto ToPlayer = &Context::Players::value_type::second;
 
 constexpr auto Detached = [](const std::string_view func) { // NOLINT(fuchsia-statically-constructed-objects)
     return [func](const std::exception_ptr& eptr) {

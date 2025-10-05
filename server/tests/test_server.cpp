@@ -84,7 +84,7 @@ TEST_CASE("server")
 TEST_CASE("calculateDealScore")
 {
     using enum ContractLevel;
-    using enum WhistChoise;
+    using enum WhistingChoice;
 
     static constexpr auto de = "0-declarer";
     static constexpr auto w1 = "1-whister ";
@@ -107,8 +107,8 @@ TEST_CASE("calculateDealScore")
                  {10,  0, 100,  0}}));
         const auto actual = calculateDealScore(
             { .id = de, .contractLevel = ContractLevel::Miser, .tricksTaken = tricksDeclarer},
-            {{.id = w1, .choise = Whist,                       .tricksTaken = tricksW1},
-             {.id = w2, .choise = Whist,                       .tricksTaken = 0}});
+            {{.id = w1, .choice = Whist,                       .tricksTaken = tricksW1},
+             {.id = w2, .choice = Whist,                       .tricksTaken = 0}});
         const auto expected = DealScore{
             {de, {.dump = dump, .pool = pool, .whist = 0}},
             {w1, {.dump = 0,    .pool = 0,    .whist = 0}},
@@ -128,8 +128,8 @@ TEST_CASE("calculateDealScore")
             }));
             const auto actual = calculateDealScore(
                 {.id = de, .contractLevel = contractLevel, .tricksTaken = tricksDeclarer}, {
-                {.id = w1, .choise = Whist,                .tricksTaken = tricksW1},
-                {.id = w2, .choise = Whist,                .tricksTaken = tricksW2},
+                {.id = w1, .choice = Whist,                .tricksTaken = tricksW1},
+                {.id = w2, .choice = Whist,                .tricksTaken = tricksW2},
             });
             const auto expected = DealScore{
                 {de, {.dump = 0, .pool = declarerPool, .whist = 0}},
@@ -154,8 +154,8 @@ TEST_CASE("calculateDealScore")
             }));
             const auto actual = calculateDealScore(
                 {.id = de, .contractLevel = contractLevel, .tricksTaken = tricksDeclarer}, {
-                {.id = w1, .choise = Whist,                .tricksTaken = tricksW1},
-                {.id = w2, .choise = Whist,                .tricksTaken = tricksW2},
+                {.id = w1, .choice = Whist,                .tricksTaken = tricksW1},
+                {.id = w2, .choice = Whist,                .tricksTaken = tricksW2},
             });
             const auto expected = DealScore{
                 {de, {.dump = dump, .pool = 0, .whist = 0}},
@@ -177,8 +177,8 @@ TEST_CASE("calculateDealScore")
             }));
             const auto actual = calculateDealScore(
                 {.id = de, .contractLevel = contractLevel, .tricksTaken = 10}, {
-                {.id = w1, .choise = Whist,                .tricksTaken = 0},
-                {.id = w2, .choise = Pass,                 .tricksTaken = 0},
+                {.id = w1, .choice = Whist,                .tricksTaken = 0},
+                {.id = w2, .choice = Pass,                 .tricksTaken = 0},
             });
             const auto expected = DealScore{
                 {de, {.dump = 0,      .pool = declarerPool, .whist = 0}},
@@ -200,8 +200,8 @@ TEST_CASE("calculateDealScore")
             }));
             const auto actual = calculateDealScore(
                 {.id = de, .contractLevel = contractLevel, .tricksTaken = 10}, {
-                {.id = w1, .choise = Whist, .tricksTaken = 0},
-                {.id = w2, .choise = Whist, .tricksTaken = 0},
+                {.id = w1, .choice = Whist, .tricksTaken = 0},
+                {.id = w2, .choice = Whist, .tricksTaken = 0},
             });
             const auto expected = DealScore{
                 {de, {.dump = 0, .pool = declarerPool, .whist = 0}},

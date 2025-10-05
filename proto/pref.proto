@@ -27,7 +27,8 @@ message PlayerLeft {
 }
 
 message DealCards {
-  repeated string cards = 1;
+  string player_id = 1;
+  repeated string cards = 2;
 }
 
 message PlayCard {
@@ -35,9 +36,18 @@ message PlayCard {
   string card = 2; // e.g. "queen_of_hearts"
 }
 
+enum GameStage {
+  UNKNOWN = 0;
+  BIDDING = 1;
+  TALON_PICKING = 2;
+  WHISTING = 3;
+  HOW_TO_PLAY = 4;
+  PLAYING = 5;
+}
+
 message PlayerTurn {
   string player_id = 1;
-  string stage = 2; // Bidding, TalonPicking, Playing, Whisting
+  GameStage stage = 2;
   bool can_half_whist = 3 ; // only for the Whisting stage
   repeated string talon = 4; // queen_of_hearts, etc.
 }
@@ -47,15 +57,25 @@ message Bidding {
     string bid = 2; // e.g., "8♠", "PASS", "MISER", etc.
 }
 
+message DiscardTalon {
+    string player_id = 1;
+    repeated string cards = 2; // queen_of_hearts, etc.
+    string bid = 3;
+}
+
 message Whisting {
     string player_id = 1;
     string choice = 2; // e.g., "Whist", "Half-Whist", "Pass", etc.
 }
 
-message DiscardTalon {
+message OpenWhistPlay {
+  string active_whister_id = 1;
+  string passive_whister_id = 2;
+}
+
+message HowToPlay {
     string player_id = 1;
-    repeated string cards = 2; // queen_of_hearts, etc.
-    string bid = 3;
+    string choice = 3; // "", "Openly", or "Closed"
 }
 
 message Tricks {
@@ -84,6 +104,15 @@ message DealFinished {
 message Log {
   string player_id = 1;
   string text = 2;
+}
+
+message SpeechBubble {
+  string player_id = 1;
+  string text = 2;
+}
+
+message PingPong {
+  int32 id = 1;
 }
 
 message Message {

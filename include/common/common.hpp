@@ -6,6 +6,7 @@
 #include <fmt/format.h>
 #include <range/v3/all.hpp>
 
+#include <cctype>
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -26,8 +27,8 @@ namespace pref {
 #define CLUB "♣"
 #define HEART "♥"
 #define DIAMOND "♦"
-#define ARROW_LEFT "←"
-#define ARROW_RIGHT "→"
+#define ARROW_LEFT "◀" // ⬅
+#define ARROW_RIGHT "▶" // ➡
 
 #define SIX "6"
 #define SEVEN "7"
@@ -45,6 +46,17 @@ namespace pref {
 #define PREF_MISER "Misère"
 #define PREF_MISER_WT "Mis." PREF_WT
 #define PREF_PASS "Pass"
+
+#define PREF_TRICKS_01 "❶"
+#define PREF_TRICKS_02 "❷"
+#define PREF_TRICKS_03 "❸"
+#define PREF_TRICKS_04 "❹"
+#define PREF_TRICKS_05 "❺"
+#define PREF_TRICKS_06 "❻"
+#define PREF_TRICKS_07 "❼"
+#define PREF_TRICKS_08 "❽"
+#define PREF_TRICKS_09 "❾"
+#define PREF_TRICKS_10 "❿"
 
 #define PREF_WHIST "Whist"
 #define PREF_HALF_WHIST "Half-whist"
@@ -67,7 +79,10 @@ using PlayerId = std::string;
 using PlayerName = std::string;
 
 // TODO: Support 4 players
-constexpr auto NumberOfPlayers = 3uz;
+inline constexpr auto NumberOfPlayers = 3uz;
+
+inline constexpr auto ToString = rng::to<std::string>;
+inline constexpr auto ToLower = rv::transform([](unsigned char c) { return std::tolower(c); });
 
 struct DealScoreEntry {
     auto operator<=>(const DealScoreEntry&) const = default;
@@ -127,9 +142,9 @@ using FinalResult = std::map<PlayerId, std::int32_t>;
 }
 
 template<typename Callable>
-[[maybe_unused]] [[nodiscard]] auto unpair(Callable callable)
+[[maybe_unused]] [[nodiscard]] auto unpair(Callable&& callable)
 {
-    return [cb = std::move(callable)](const auto& pair) { return cb(pair.first, pair.second); };
+    return [cb = std::forward<Callable>(callable)](const auto& pair) { return cb(pair.first, pair.second); };
 }
 
 template<typename Value>
@@ -216,6 +231,23 @@ template<typename Value>
     })) | rng::to<FinalScore>; // clang-format on
 }
 
+[[nodiscard]] inline constexpr auto prettyTricksTaken(const int tricksTaken) noexcept -> std::string_view
+{
+    switch (tricksTaken) {
+    case 1: return PREF_TRICKS_01;
+    case 2: return PREF_TRICKS_02;
+    case 3: return PREF_TRICKS_03;
+    case 4: return PREF_TRICKS_04;
+    case 5: return PREF_TRICKS_05;
+    case 6: return PREF_TRICKS_06;
+    case 7: return PREF_TRICKS_07;
+    case 8: return PREF_TRICKS_08;
+    case 9: return PREF_TRICKS_09;
+    case 10: return PREF_TRICKS_10;
+    }
+    std::unreachable();
+}
+
 // TODO: use C++26 Reflection
 // clang-format off
 template<typename T>
@@ -232,7 +264,11 @@ template<> [[nodiscard]] constexpr auto methodName<PlayerTurn>() noexcept -> std
 template<> [[nodiscard]] constexpr auto methodName<DealFinished>() noexcept -> std::string_view { return "DealFinished"; }
 template<> [[nodiscard]] constexpr auto methodName<TrickFinished>() noexcept -> std::string_view { return "TrickFinished"; }
 template<> [[nodiscard]] constexpr auto methodName<Whisting>() noexcept -> std::string_view { return "Whisting"; }
+template<> [[nodiscard]] constexpr auto methodName<SpeechBubble>() noexcept -> std::string_view { return "SpeechBubble"; }
 template<> [[nodiscard]] constexpr auto methodName<Log>() noexcept -> std::string_view { return "Log"; }
+template<> [[nodiscard]] constexpr auto methodName<HowToPlay>() noexcept -> std::string_view { return "HowToPlay"; }
+template<> [[nodiscard]] constexpr auto methodName<PingPong>() noexcept -> std::string_view { return "PingPong"; }
+template<> [[nodiscard]] constexpr auto methodName<OpenWhistPlay>() noexcept -> std::string_view { return "OpenWhistPlay"; }
 // clang-format on
 
 template<typename Method>
