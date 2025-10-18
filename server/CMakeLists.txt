@@ -7,11 +7,15 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 include(flags)
+
+find_package(PkgConfig REQUIRED)
 find_package(boost_headers REQUIRED)
 find_package(Protobuf REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(docopt REQUIRED)
 find_package(Catch2 REQUIRED)
+find_package(date REQUIRED)
+pkg_check_modules(libsodium REQUIRED IMPORTED_TARGET "libsodium")
 
 file(GLOB_RECURSE PREF_PROTO_FILES ${PROJECT_SOURCE_DIR}/../proto/*.proto)
 protobuf_generate_cpp(
@@ -29,13 +33,17 @@ endif()
 
 add_library(serverlib STATIC src/server.cpp ${PREF_PROTO_CPP_SOURCES})
 add_dependencies(serverlib pref_proto_py_files)
-target_link_libraries(serverlib PUBLIC Boost::headers protobuf::libprotobuf spdlog::spdlog docopt)
+target_link_libraries(
+    serverlib PUBLIC Boost::headers protobuf::libprotobuf spdlog::spdlog docopt PkgConfig::libsodium date::date
+)
 target_include_directories(serverlib PUBLIC ${PROJECT_SOURCE_DIR}/..)
 target_include_directories(serverlib PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_include_directories(serverlib PUBLIC ${PROJECT_SOURCE_DIR}/../include)
 
 add_executable(server src/main.cpp)
 target_link_libraries(server serverlib)
+
+# add_executable(add-user data/add-user.cpp) target_link_libraries(add-user serverlib)
 
 if(CMAKE_BUILD_TYPE STREQUAL Debug)
     add_executable(test_server tests/test_server.cpp)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/logger.hpp"
+#include "common/time.hpp"
 #include "proto/pref.pb.h"
 
 #include <fmt/format.h>
@@ -10,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -27,8 +29,7 @@ namespace pref {
 #define CLUB "♣"
 #define HEART "♥"
 #define DIAMOND "♦"
-#define ARROW_LEFT "◀" // ⬅
-#define ARROW_RIGHT "▶" // ➡
+#define ARROW_RIGHT "▶"
 
 #define SIX "6"
 #define SEVEN "7"
@@ -46,17 +47,6 @@ namespace pref {
 #define PREF_MISER "Misère"
 #define PREF_MISER_WT "Mis." PREF_WT
 #define PREF_PASS "Pass"
-
-#define PREF_TRICKS_01 "❶"
-#define PREF_TRICKS_02 "❷"
-#define PREF_TRICKS_03 "❸"
-#define PREF_TRICKS_04 "❹"
-#define PREF_TRICKS_05 "❺"
-#define PREF_TRICKS_06 "❻"
-#define PREF_TRICKS_07 "❼"
-#define PREF_TRICKS_08 "❽"
-#define PREF_TRICKS_09 "❾"
-#define PREF_TRICKS_10 "❿"
 
 #define PREF_WHIST "Whist"
 #define PREF_HALF_WHIST "Half-whist"
@@ -80,6 +70,8 @@ using PlayerName = std::string;
 
 // TODO: Support 4 players
 inline constexpr auto NumberOfPlayers = 3uz;
+inline constexpr auto WhistersCount = 2uz;
+inline constexpr auto DeclarerCount = 1uz;
 
 inline constexpr auto ToString = rng::to<std::string>;
 inline constexpr auto ToLower = rv::transform([](unsigned char c) { return std::tolower(c); });
@@ -159,6 +151,13 @@ template<typename Value>
     return std::bind_front(std::not_equal_to{}, std::forward<Value>(value));
 }
 
+template<typename Range, typename Value, typename ProjIn = rng::identity, typename ProjOut = rng::identity>
+[[nodiscard]] auto find(Range&& range, const Value& value, ProjIn projIn = {}, ProjOut projOut = {})
+{
+    const auto it = rng::find(range, value, projIn);
+    return it != rng::cend(range) ? std::optional{std::ref(std::invoke(projOut, *it))} : std::nullopt;
+}
+
 [[nodiscard]] inline auto calculateFinalResult(FinalScore finalScore) -> FinalResult
 {
     if (std::empty(finalScore)) { return {}; }
@@ -231,21 +230,19 @@ template<typename Value>
     })) | rng::to<FinalScore>; // clang-format on
 }
 
-[[nodiscard]] inline constexpr auto prettyTricksTaken(const int tricksTaken) noexcept -> std::string_view
+[[nodiscard]] [[maybe_unused]] inline auto formatGame(const UserGame& game) -> std::string
 {
-    switch (tricksTaken) {
-    case 1: return PREF_TRICKS_01;
-    case 2: return PREF_TRICKS_02;
-    case 3: return PREF_TRICKS_03;
-    case 4: return PREF_TRICKS_04;
-    case 5: return PREF_TRICKS_05;
-    case 6: return PREF_TRICKS_06;
-    case 7: return PREF_TRICKS_07;
-    case 8: return PREF_TRICKS_08;
-    case 9: return PREF_TRICKS_09;
-    case 10: return PREF_TRICKS_10;
-    }
-    std::unreachable();
+    return fmt::format(
+        "{{ ID: {}, DATE: {}, TIME: {}, MMR: {}, P/D/W: {}/{}/{}, DURATION: {}, TYPE: {} }}",
+        game.id(),
+        formatDate(game.timestamp()),
+        formatTime(game.timestamp()),
+        game.mmr(),
+        game.pool(),
+        game.dump(),
+        game.whists(),
+        formatDuration(game.duration()),
+        GameType_Name(game.game_type()));
 }
 
 // TODO: use C++26 Reflection
@@ -269,6 +266,7 @@ template<> [[nodiscard]] constexpr auto methodName<Log>() noexcept -> std::strin
 template<> [[nodiscard]] constexpr auto methodName<HowToPlay>() noexcept -> std::string_view { return "HowToPlay"; }
 template<> [[nodiscard]] constexpr auto methodName<PingPong>() noexcept -> std::string_view { return "PingPong"; }
 template<> [[nodiscard]] constexpr auto methodName<OpenWhistPlay>() noexcept -> std::string_view { return "OpenWhistPlay"; }
+template<> [[nodiscard]] constexpr auto methodName<UserGames>() noexcept -> std::string_view { return "UserGames"; }
 // clang-format on
 
 template<typename Method>

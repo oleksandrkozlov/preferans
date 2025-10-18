@@ -2,6 +2,7 @@
 
 #include "common/common.hpp"
 #include "common/logger.hpp"
+#include "proto/pref.pb.h"
 
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
@@ -55,6 +56,9 @@ struct PlayerSession {
 struct Player {
     using Id = PlayerId;
     using Name = PlayerName;
+
+    using IdView = std::string_view;
+    using NameView = std::string_view;
 
     Player() = default;
     Player(Id aId, Name aName, PlayerSession::Id aSessionId, const std::shared_ptr<Stream>& aWs);
@@ -116,12 +120,16 @@ struct Declarer {
     int tricksTaken{};
 };
 
+auto storeGameData(const fs::path& path, const GameData& gameData) -> void;
+[[nodiscard]] auto loadGameData(const fs::path& path) -> GameData;
+[[nodiscard]] auto lastGameId(const GameData& gameData) -> std::int32_t;
+
 struct Context {
     using Players = std::map<Player::Id, Player>;
 
     [[nodiscard]] auto whoseTurnId() const -> const Player::Id&;
     [[nodiscard]] auto player(const Player::Id& playerId) const -> Player&;
-    [[nodiscard]] auto playerName(const Player::Id& playerId) const -> const std::string&;
+    [[nodiscard]] auto playerName(const Player::Id& playerId) const -> Player::NameView;
     [[nodiscard]] auto areWhistersPass() const -> bool;
     [[nodiscard]] auto areWhistersWhist() const -> bool;
     [[nodiscard]] auto areWhistersPassAndWhist() const -> bool;
@@ -145,7 +153,19 @@ struct Context {
     std::string trump;
     Player::Id forehandId;
     ScoreSheet scoreSheet;
+    fs::path gameDataPath{};
+    GameData gameData;
+
+    std::int32_t gameId{};
+    std::int64_t gameStarted{};
+    std::int32_t gameDuration{};
 };
+
+[[nodiscard]] inline auto ctx() -> Context&
+{
+    static auto ctx = Context{};
+    return ctx;
+}
 
 inline constexpr auto ToPlayerId = &Context::Players::value_type::first;
 inline constexpr auto ToPlayer = &Context::Players::value_type::second;
@@ -177,7 +197,7 @@ struct Beat {
 [[nodiscard]] auto finishTrick(const std::vector<PlayedCard>& trick, std::string_view trump) -> Player::Id;
 [[nodiscard]] auto calculateDealScore(const Declarer& declarer, const std::vector<Whister>& whisters) -> DealScore;
 
-auto acceptConnectionAndLaunchSession(Context& ctx, net::ip::tcp::endpoint endpoint) -> Awaitable<>;
+auto acceptConnectionAndLaunchSession(net::ip::tcp::endpoint endpoint) -> Awaitable<>;
 
 // NOLINTNEXTLINE
 [[maybe_unused]] auto inline format_as(const DealScoreEntry& entry) -> std::string

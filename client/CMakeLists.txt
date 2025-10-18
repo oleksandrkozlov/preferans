@@ -22,6 +22,8 @@ add_subdirectory(deps/raylib-cpp)
 add_subdirectory(deps/protobuf)
 add_subdirectory(deps/spdlog)
 add_subdirectory(deps/gsl)
+add_subdirectory(deps/PicoSHA2)
+add_subdirectory(deps/date)
 
 add_executable(client src/client.cpp ../proto/pref.pb.cc)
 
@@ -32,9 +34,12 @@ add_custom_command(
                                     $<TARGET_FILE_DIR:client>/../resources
 )
 
-target_link_libraries(
-    client raylib fmt docopt ${CMAKE_BINARY_DIR}/lib/libprotobuf-lited.a ${CMAKE_BINARY_DIR}/lib/libprotobufd.a
-)
+target_link_libraries(client raylib fmt docopt)
+if(CMAKE_BUILD_TYPE STREQUAL Debug)
+    target_link_libraries(client ${CMAKE_BINARY_DIR}/lib/libprotobuf-lited.a ${CMAKE_BINARY_DIR}/lib/libprotobufd.a)
+else()
+    target_link_libraries(client ${CMAKE_BINARY_DIR}/lib/libprotobuf-lite.a ${CMAKE_BINARY_DIR}/lib/libprotobuf.a)
+endif()
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_BINARY_DIR}/_deps/raylib-build/raylib/include)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_BINARY_DIR}/_deps/absl-src)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/fmt/include/)
@@ -46,12 +51,19 @@ target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/raygui/
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/spdlog/include)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/gsl/include)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/docopt.cpp)
+target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/PicoSHA2)
+target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/date/include)
 target_include_directories(client PRIVATE ${PROJECT_SOURCE_DIR}/..)
 target_include_directories(client PRIVATE ${PROJECT_SOURCE_DIR}/../include)
 
 set_target_properties(client PROPERTIES SUFFIX ".html")
 set_target_properties(client PROPERTIES OUTPUT_NAME "index")
 set(SHELL resources/shells/shell_minimal.html)
+
+if(NOT DEFINED CMAKE_WEBSOCKET_URL)
+    set(CMAKE_WEBSOCKET_URL "ws://0.0.0.0:8080")
+endif()
+configure_file(${SHELL}.in ${SHELL} @ONLY)
 target_link_options(
     client
     PUBLIC
@@ -69,5 +81,5 @@ target_link_options(
 
 add_custom_command(
     OUTPUT ${CMAKE_SOURCE_DIR}/src/client.cpp COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_SOURCE_DIR}/src/client.cpp
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${SHELL}
+    DEPENDS ${SHELL}.in
 )

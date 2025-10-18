@@ -22,17 +22,121 @@ inline constexpr auto OriginalCardWidth = 500.f;
 inline constexpr auto CardAspectRatio = OriginalCardWidth / OriginalCardHeight;
 inline constexpr auto CardHeight = VirtualH / 5.f;
 inline constexpr auto CardWidth = CardHeight * CardAspectRatio;
-inline constexpr auto CardOverlapX = CardWidth * 0.6f;
+inline constexpr auto CardOverlapX = CardWidth * 0.54f;
 inline constexpr auto CardOverlapY = CardHeight * 0.26f;
+inline constexpr auto CardBorderMargin = VirtualW / 30.f;
+inline constexpr auto CardInnerMargin = VirtualW / 100.f;
 inline constexpr auto FontSpacing = 1.f;
 inline constexpr auto BorderMargin = VirtualW / 52.f;
 inline constexpr auto ScrollBarWidth = static_cast<int>(VirtualW / 106.f);
+inline constexpr auto MenuX = VirtualW - CardBorderMargin - CardWidth - CardInnerMargin;
 
 inline constexpr auto SettingsIcon = "";
 inline constexpr auto ScoreSheetIcon = "";
 inline constexpr auto EnterFullScreenIcon = "";
 inline constexpr auto ExitFullScreenIcon = "";
 inline constexpr auto SpeechBubbleIcon = "";
+inline constexpr auto OverallScoreboardIcon = "";
+
+inline constexpr auto PREF_SEVEN_OF_SPADES = 0x1F0A7;
+inline constexpr auto PREF_SEVEN_OF_CLUBS = 0x1F0D7;
+inline constexpr auto PREF_SEVEN_OF_DIAMONDS = 0x1F0C7;
+inline constexpr auto PREF_SEVEN_OF_HEARTS = 0x1F0B7;
+inline constexpr auto PREF_EIGHT_OF_SPADES = 0x1F0A8;
+inline constexpr auto PREF_EIGHT_OF_CLUBS = 0x1F0D8;
+inline constexpr auto PREF_EIGHT_OF_DIAMONDS = 0x01F0C8;
+inline constexpr auto PREF_EIGHT_OF_HEARTS = 0x1F0B8;
+inline constexpr auto PREF_NINE_OF_SPADES = 0x1F0A9;
+inline constexpr auto PREF_NINE_OF_CLUBS = 0x1F0D9;
+inline constexpr auto PREF_NINE_OF_DIAMONDS = 0x1F0C9;
+inline constexpr auto PREF_NINE_OF_HEARTS = 0x1F0B9;
+inline constexpr auto PREF_TEN_OF_SPADES = 0x1F0AA;
+inline constexpr auto PREF_TEN_OF_CLUBS = 0x1F0DA;
+inline constexpr auto PREF_TEN_OF_DIAMONDS = 0x1F0CA;
+inline constexpr auto PREF_TEN_OF_HEARTS = 0x1F0BA;
+inline constexpr auto PREF_JACK_OF_SPADES = 0x1F0AB;
+inline constexpr auto PREF_JACK_OF_CLUBS = 0x1F0DB;
+inline constexpr auto PREF_JACK_OF_DIAMONDS = 0x01F0CB;
+inline constexpr auto PREF_JACK_OF_HEARTS = 0x1F0BB;
+inline constexpr auto PREF_QUEEN_OF_SPADES = 0x1F0AD;
+inline constexpr auto PREF_QUEEN_OF_CLUBS = 0x1F0DD;
+inline constexpr auto PREF_QUEEN_OF_DIAMONDS = 0x1F0CD;
+inline constexpr auto PREF_QUEEN_OF_HEARTS = 0x1F0BD;
+inline constexpr auto PREF_KING_OF_SPADES = 0x1F0AE;
+inline constexpr auto PREF_KING_OF_CLUBS = 0x1F0DE;
+inline constexpr auto PREF_KING_OF_DIAMONDS = 0x1F0CE;
+inline constexpr auto PREF_KING_OF_HEARTS = 0x1F0BE;
+inline constexpr auto PREF_ACE_OF_SPADES = 0x1F0A1;
+inline constexpr auto PREF_ACE_OF_CLUBS = 0x1F0D1;
+inline constexpr auto PREF_ACE_OF_DIAMONDS = 0x1F0C1;
+inline constexpr auto PREF_ACE_OF_HEARTS = 0x1F0B1;
+
+[[nodiscard]] inline constexpr auto cardNameCodepoint(const std::string_view cardName) noexcept -> int
+{
+    if (cardName == SEVEN PREF_OF_ SPADES) { return PREF_SEVEN_OF_SPADES; }
+    if (cardName == SEVEN PREF_OF_ CLUBS) { return PREF_SEVEN_OF_CLUBS; }
+    if (cardName == SEVEN PREF_OF_ DIAMONDS) { return PREF_SEVEN_OF_DIAMONDS; }
+    if (cardName == SEVEN PREF_OF_ HEARTS) { return PREF_SEVEN_OF_HEARTS; }
+    if (cardName == EIGHT PREF_OF_ SPADES) { return PREF_EIGHT_OF_SPADES; }
+    if (cardName == EIGHT PREF_OF_ CLUBS) { return PREF_EIGHT_OF_CLUBS; }
+    if (cardName == EIGHT PREF_OF_ DIAMONDS) { return PREF_EIGHT_OF_DIAMONDS; }
+    if (cardName == EIGHT PREF_OF_ HEARTS) { return PREF_EIGHT_OF_HEARTS; }
+    if (cardName == NINE PREF_OF_ SPADES) { return PREF_NINE_OF_SPADES; }
+    if (cardName == NINE PREF_OF_ CLUBS) { return PREF_NINE_OF_CLUBS; }
+    if (cardName == NINE PREF_OF_ DIAMONDS) { return PREF_NINE_OF_DIAMONDS; }
+    if (cardName == NINE PREF_OF_ HEARTS) { return PREF_NINE_OF_HEARTS; }
+    if (cardName == TEN PREF_OF_ SPADES) { return PREF_TEN_OF_SPADES; }
+    if (cardName == TEN PREF_OF_ DIAMONDS) { return PREF_TEN_OF_DIAMONDS; }
+    if (cardName == TEN PREF_OF_ HEARTS) { return PREF_TEN_OF_HEARTS; }
+    if (cardName == TEN PREF_OF_ CLUBS) { return PREF_TEN_OF_CLUBS; }
+    if (cardName == JACK PREF_OF_ SPADES) { return PREF_JACK_OF_SPADES; }
+    if (cardName == JACK PREF_OF_ CLUBS) { return PREF_JACK_OF_CLUBS; }
+    if (cardName == JACK PREF_OF_ DIAMONDS) { return PREF_JACK_OF_DIAMONDS; }
+    if (cardName == JACK PREF_OF_ HEARTS) { return PREF_JACK_OF_HEARTS; }
+    if (cardName == QUEEN PREF_OF_ SPADES) { return PREF_QUEEN_OF_SPADES; }
+    if (cardName == QUEEN PREF_OF_ CLUBS) { return PREF_QUEEN_OF_CLUBS; }
+    if (cardName == QUEEN PREF_OF_ DIAMONDS) { return PREF_QUEEN_OF_DIAMONDS; }
+    if (cardName == QUEEN PREF_OF_ HEARTS) { return PREF_QUEEN_OF_HEARTS; }
+    if (cardName == KING PREF_OF_ SPADES) { return PREF_KING_OF_SPADES; }
+    if (cardName == KING PREF_OF_ CLUBS) { return PREF_KING_OF_CLUBS; }
+    if (cardName == KING PREF_OF_ DIAMONDS) { return PREF_KING_OF_DIAMONDS; }
+    if (cardName == KING PREF_OF_ HEARTS) { return PREF_KING_OF_HEARTS; }
+    if (cardName == ACE PREF_OF_ SPADES) { return PREF_ACE_OF_SPADES; }
+    if (cardName == ACE PREF_OF_ CLUBS) { return PREF_ACE_OF_CLUBS; }
+    if (cardName == ACE PREF_OF_ DIAMONDS) { return PREF_ACE_OF_DIAMONDS; }
+    if (cardName == ACE PREF_OF_ HEARTS) { return PREF_ACE_OF_HEARTS; }
+    std::unreachable();
+}
+
+#define PREF_TRICKS_01 "❶"
+#define PREF_TRICKS_02 "❷"
+#define PREF_TRICKS_03 "❸"
+#define PREF_TRICKS_04 "❹"
+#define PREF_TRICKS_05 "❺"
+#define PREF_TRICKS_06 "❻"
+#define PREF_TRICKS_07 "❼"
+#define PREF_TRICKS_08 "❽"
+#define PREF_TRICKS_09 "❾"
+#define PREF_TRICKS_10 "❿"
+
+[[nodiscard]] inline constexpr auto prettifyTricksTaken(const int tricksTaken) noexcept -> std::string_view
+{
+    switch (tricksTaken) {
+    case 1: return PREF_TRICKS_01;
+    case 2: return PREF_TRICKS_02;
+    case 3: return PREF_TRICKS_03;
+    case 4: return PREF_TRICKS_04;
+    case 5: return PREF_TRICKS_05;
+    case 6: return PREF_TRICKS_06;
+    case 7: return PREF_TRICKS_07;
+    case 8: return PREF_TRICKS_08;
+    case 9: return PREF_TRICKS_09;
+    case 10: return PREF_TRICKS_10;
+    }
+    std::unreachable();
+}
+
+inline constexpr const auto LocalStoragePrefix = "preferans_";
 
 // ♠ - Spades | ♣ - Clubs | ♦ - Diamonds | ♥ - Hearts
 // clang-format off
@@ -76,7 +180,7 @@ enum class GameText : std::size_t {
     None,
     Preferans,
     CurrentPlayers,
-    EnterYourName,
+    Login,
     Enter,
     Whist,
     HalfWhist,
@@ -94,7 +198,6 @@ enum class GameText : std::size_t {
     Alternative,
     Light,
     Bluish,
-    Ashes,
     Dark,
     Amber,
     Genesis,
@@ -107,6 +210,22 @@ enum class GameText : std::size_t {
     Closed,
     Other,
     ShowFps,
+    Date,
+    Time,
+    WinRate,
+    MMR,
+    PDW,
+    Duration,
+    Games,
+    Type,
+    Ranked,
+    Normal,
+    Total,
+    Result,
+    Win,
+    Lost,
+    Draw,
+    OverallScoreboard,
     Count
 };
 
@@ -117,7 +236,7 @@ inline constexpr auto localization = std::
             "",
             "PREFERANS",
             "Current players:",
-            "Enter your name:",
+            "Log In",
             "Enter",
             PREF_WHIST, //
             PREF_HALF_WHIST,
@@ -135,7 +254,6 @@ inline constexpr auto localization = std::
             "Alternative",
             "Light",
             "Bluish",
-            "Ashes",
             "Dark",
             "Amber",
             "Genesis",
@@ -148,13 +266,29 @@ inline constexpr auto localization = std::
             "Closed",
             "Other",
             "Show Ping & FPS",
+            "DATE",
+            "TIME",
+            "WIN RATE",
+            "MMR",
+            "P/D/W",
+            "DURATION",
+            "GAMES",
+            "TYPE",
+            "Ranked",
+            "Normal",
+            "TOTAL",
+            "RESULT",
+            "Win",
+            "Lost",
+            "Draw",
+            "OVERALL SCOREBOARD",
         },
         {
             // Ukrainian
             "",
             "ПРЕФЕРАНС",
             "Поточні гравці:",
-            "Введіть своє ім’я:",
+            "Логін",
             "Увійти",
             "Віст",
             "Піввіста",
@@ -172,7 +306,6 @@ inline constexpr auto localization = std::
             "Альтернативна",
             "Світлий",
             "Блакитний",
-            "Попіл",
             "Темний",
             "Бурштин",
             "Генезис",
@@ -185,13 +318,29 @@ inline constexpr auto localization = std::
             "У темну",
             "Інше",
             "Показувати пінг та част. кадрів",
+            "ДАТА",
+            "ЧАС",
+            "ПЕРЕМОГ",
+            "РЕЙТИНГ",
+            "П/Г/В",
+            "ТРИВАЛІСТЬ",
+            "К-ТЬ ІГОР",
+            "ТИП",
+            "Рейтингова",
+            "Звичайна",
+            "УСЬОГО",
+            "РЕЗУЛЬТАТ",
+            "Перемога",
+            "Поразка",
+            "Нічия",
+            "ЗАГАЛЬНА ТАБЛИЦЯ РЕЗУЛЬТАТІВ",
         },
         {
             // Alternative
             "",
             "ПРЕФЕРАНС",
             "Текущие игроки:",
-            "Введите своё имя:",
+            "Логин",
             "Войти",
             "Вист",
             "Полвиста",
@@ -209,7 +358,6 @@ inline constexpr auto localization = std::
             "Альтернативный",
             "Светлый",
             "Голубоватый",
-            "Пепел",
             "Тёмный",
             "Янтарь",
             "Генезис",
@@ -222,6 +370,22 @@ inline constexpr auto localization = std::
             "Втёмную",
             "Другое",
             "Показывать пинг и част. кадров",
+            "ДАТА",
+            "ВРЕМЯ",
+            "ПОБЕД",
+            "РЕЙТИНГ",
+            "П/Г/В",
+            "ДЛИТЕЛЬНОСТЬ",
+            "К-ВО ИГР",
+            "ТИП",
+            "Рейтинговая",
+            "Обычная",
+            "ВСЕГО",
+            "РЕЗУЛЬТАТ",
+            "Победа",
+            "Поражение",
+            "Ничья",
+            "ОБЩАЯ ТАБЛИЦА РЕЗУЛЬТАТОВ",
         },
     }};
 

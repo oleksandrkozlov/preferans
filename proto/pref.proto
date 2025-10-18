@@ -9,7 +9,8 @@ message PPlayer {
 
 message JoinRequest {
   string player_name = 1;
-  optional string player_id = 2;
+  string secret = 2;
+  optional string player_id = 3;
 }
 
 message JoinResponse {
@@ -113,6 +114,39 @@ message SpeechBubble {
 
 message PingPong {
   int32 id = 1;
+}
+
+enum GameType {
+  NORMAL = 0;
+  RANKED = 1;
+}
+
+message UserGame {
+  int32 id = 1;
+  GameType game_type = 2;
+  int64 timestamp = 3;
+  int32 duration = 4;
+  int32 pool = 5;
+  int32 dump = 6;
+  int32 whists = 7;
+  int32 mmr = 8;
+}
+
+message User {
+  string player_id = 1;
+  string player_name = 2;
+  string secret = 3;
+  repeated UserGame games = 4;
+  int32 version = 100;
+}
+
+message GameData {
+  repeated User users = 1;
+  int32 version = 100;
+}
+
+message UserGames {
+  repeated UserGame games = 1;
 }
 
 message Message {

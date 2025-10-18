@@ -25,7 +25,7 @@ auto handleSignals() -> Awaitable<>
 
 constexpr auto usage = R"(
 Usage:
-    server <address> <port>
+    server <address> <port> [<data>]
 
 Options:
     -h --help     Show this screen.
@@ -38,15 +38,20 @@ int main(const int argc, const char* const argv[])
 {
     try {
         const auto args = docopt::docopt(pref::usage, {std::next(argv), std::next(argv, argc)});
-        spdlog::set_pattern("[%^%l%$][%!] %v");
         auto const address = net::ip::make_address(args.at("<address>").asString());
         auto const port = gsl::narrow<std::uint16_t>(args.at("<port>").asLong());
+        auto& ctx = pref::ctx();
+        spdlog::set_pattern("[%^%l%$][%!] %v");
         auto loop = net::io_context{};
-        auto ctx = pref::Context{};
+        if (args.contains("<data>") and args.at("<data>").isString()) {
+            ctx.gameDataPath = args.at("<data>").asString();
+            ctx.gameData = pref::loadGameData(ctx.gameDataPath);
+        }
+        ctx.gameId = pref::lastGameId(ctx.gameData);
         net::co_spawn(loop, pref::handleSignals(), pref::Detached("handleStop"));
         net::co_spawn(
             loop,
-            pref::acceptConnectionAndLaunchSession(ctx, {address, port}),
+            pref::acceptConnectionAndLaunchSession({address, port}),
             pref::Detached("acceptConnectionAndLaunchSession"));
         loop.run();
         return EXIT_SUCCESS;
