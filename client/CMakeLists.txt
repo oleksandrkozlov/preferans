@@ -22,7 +22,6 @@ add_subdirectory(deps/raylib-cpp)
 add_subdirectory(deps/protobuf)
 add_subdirectory(deps/spdlog)
 add_subdirectory(deps/gsl)
-add_subdirectory(deps/PicoSHA2)
 add_subdirectory(deps/date)
 
 add_executable(client src/client.cpp ../proto/pref.pb.cc)
@@ -51,7 +50,6 @@ target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/raygui/
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/spdlog/include)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/gsl/include)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/docopt.cpp)
-target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/PicoSHA2)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/date/include)
 target_include_directories(client PRIVATE ${PROJECT_SOURCE_DIR}/..)
 target_include_directories(client PRIVATE ${PROJECT_SOURCE_DIR}/../include)
@@ -72,6 +70,7 @@ target_link_options(
     -sNO_DISABLE_EXCEPTION_CATCHING
     -sALLOW_MEMORY_GROWTH
     -sFORCE_FILESYSTEM=1
+    -sEXPORTED_RUNTIME_METHODS=requestFullscreen
     --shell-file
     ${SHELL}
     --preload-file

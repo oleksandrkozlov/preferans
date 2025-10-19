@@ -15,7 +15,7 @@ find_package(spdlog REQUIRED)
 find_package(docopt REQUIRED)
 find_package(Catch2 REQUIRED)
 find_package(date REQUIRED)
-pkg_check_modules(libsodium REQUIRED IMPORTED_TARGET "libsodium")
+pkg_check_modules(botan-3 REQUIRED IMPORTED_TARGET "botan-3")
 
 file(GLOB_RECURSE PREF_PROTO_FILES ${PROJECT_SOURCE_DIR}/../proto/*.proto)
 protobuf_generate_cpp(
@@ -34,8 +34,15 @@ endif()
 add_library(serverlib STATIC src/server.cpp ${PREF_PROTO_CPP_SOURCES})
 add_dependencies(serverlib pref_proto_py_files)
 target_link_libraries(
-    serverlib PUBLIC Boost::headers protobuf::libprotobuf spdlog::spdlog docopt PkgConfig::libsodium date::date
+    serverlib PUBLIC Boost::headers protobuf::libprotobuf spdlog::spdlog docopt date::date PkgConfig::botan-3
 )
+if(PREF_SSL)
+    find_package(OpenSSL REQUIRED)
+    message(STATUS "PREF_SSL: ${PREF_SSL}")
+    add_compile_definitions("PREF_SSL")
+    target_link_libraries(serverlib PUBLIC OpenSSL::SSL)
+endif()
+
 target_include_directories(serverlib PUBLIC ${PROJECT_SOURCE_DIR}/..)
 target_include_directories(serverlib PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_include_directories(serverlib PUBLIC ${PROJECT_SOURCE_DIR}/../include)

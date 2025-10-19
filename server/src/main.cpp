@@ -13,6 +13,22 @@
 namespace pref {
 namespace {
 
+#ifdef PREF_SSL
+#define SSL_OPTS " --cert=<path> --key=<path> --dh=<path>"
+[[nodiscard]] auto loadCertificate(const fs::path& cert, const fs::path& key, const fs::path& dh) -> net::ssl::context
+{
+    auto ssl = net::ssl::context{net::ssl::context::tlsv12};
+    ssl.set_options(
+        net::ssl::context::default_workarounds | net::ssl::context::no_sslv2 | net::ssl::context::single_dh_use);
+    ssl.use_certificate_chain_file(cert);
+    ssl.use_private_key_file(key, net::ssl::context::file_format::pem);
+    ssl.use_tmp_dh_file(dh);
+    return ssl;
+}
+#else // PREF_SSL
+#define SSL_OPTS ""
+#endif // PREF_SSL
+
 auto handleSignals() -> Awaitable<>
 {
     const auto ex = co_await net::this_coro::executor;
@@ -25,7 +41,7 @@ auto handleSignals() -> Awaitable<>
 
 constexpr auto usage = R"(
 Usage:
-    server <address> <port> [<data>]
+    server <address> <port> [<data>])" SSL_OPTS R"(
 
 Options:
     -h --help     Show this screen.
@@ -49,14 +65,21 @@ int main(const int argc, const char* const argv[])
         }
         ctx.gameId = pref::lastGameId(ctx.gameData);
         net::co_spawn(loop, pref::handleSignals(), pref::Detached("handleStop"));
-        net::co_spawn(
-            loop,
-            pref::acceptConnectionAndLaunchSession({address, port}),
-            pref::Detached("acceptConnectionAndLaunchSession"));
+#ifdef PREF_SSL
+        auto accept = pref::acceptConnectionAndLaunchSession(
+            pref::loadCertificate(
+                args.at("--cert").asString(), args.at("--key").asString(), args.at("--dh").asString()),
+            {address, port});
+#else // PREF_SSL
+        auto accept = pref::acceptConnectionAndLaunchSession({address, port});
+#endif // PREF_SSL
+        net::co_spawn(loop, std::move(accept), pref::Detached("acceptConnectionAndLaunchSession")); // clang-format on
         loop.run();
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
-        PREF_ERROR("{}", VAR(error));
-        return EXIT_FAILURE;
+        ERROR_VAR(error);
+    } catch (...) {
+        PREF_ERROR("error: uknown");
     }
+    return EXIT_FAILURE;
 }

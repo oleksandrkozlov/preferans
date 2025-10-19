@@ -1,10 +1,8 @@
 #include "server.hpp"
 
+#include "auth.hpp"
 #include "common/time.hpp"
-#include "secret.hpp"
 
-#include <boost/uuid/random_generator.hpp>
-#include <boost/uuid/uuid_io.hpp>
 #include <fmt/ranges.h>
 #include <range/v3/all.hpp>
 
@@ -16,6 +14,7 @@
 #include <gsl/gsl>
 #include <iterator>
 #include <utility>
+#include <variant>
 
 namespace pref {
 namespace {
@@ -34,11 +33,6 @@ auto dealFinished() -> Awaitable<>;
     }
     PREF_WARN("error: failed to make Message from array");
     return {};
-}
-
-[[nodiscard]] [[maybe_unused]] auto generateUuid() -> Player::Id
-{
-    return boost::uuids::to_string(std::invoke(boost::uuids::random_generator{}));
 }
 
 auto setWhoseTurn(const auto& it) -> void
@@ -244,16 +238,19 @@ auto addOrUpdateUserGame(GameData& gameData, const Player::IdView playerId, cons
 }
 
 auto joinPlayer(
-    Player::Id playerId, const std::shared_ptr<Stream>& ws, Context::Players& players, PlayerSession& session) -> void
+    const Player::Id& playerId, const std::shared_ptr<Stream>& ws, Context::Players& players, PlayerSession& session)
+    -> void
 {
-    session.playerId = std::move(playerId);
+    session.playerId = playerId;
+    ++session.id;
+    assert(session.id == 1);
     INFO_VAR(session.playerId, session.playerName, session.id);
     players.emplace(session.playerId, Player{session.playerId, session.playerName, session.id, ws});
 }
 
 auto prepareNewSession(const Player::Id& playerId, Context::Players& players, PlayerSession& session) -> Awaitable<>
 {
-    INFO_VAR(playerId, session.playerId, session.playerName, session.id);
+    PREF_INFO("{}, {}, {}{}", VAR(playerId), VAR(session.playerName), VAR(session.id), VAR_MB(session.playerId));
     assert(players.contains(playerId) and "player exists");
     auto& player = players[playerId];
     session.id = ++player.sessionId;
@@ -340,16 +337,69 @@ auto addCardToHand(const Player::Id& playerId, const std::string& card) -> void
     return result;
 }
 
-[[nodiscard]] auto makeJoinResponse(const Context::Players& players, const PlayerSession& session) -> JoinResponse
+[[nodiscard]] auto makeLoginResponse(const std::string& error, const Player::Id& playerId, const std::string& authToken)
+    -> LoginResponse
 {
-    auto result = JoinResponse{};
-    result.set_player_id(session.playerId);
-    for (const auto& [id, player] : players) {
+    auto result = LoginResponse{};
+    if (not std::empty(error)) {
+        result.set_error(error);
+        return result;
+    }
+    result.set_player_id(playerId);
+    result.set_auth_token(authToken);
+    for (const auto& [id, player] : ctx().players) {
         auto p = result.add_players();
         p->set_player_id(id);
         p->set_player_name(player.name);
     }
     return result;
+}
+
+[[nodiscard]] auto makeAuthResponse(const std::string& error, const Player::Name& playerName) -> AuthResponse
+{
+    auto result = AuthResponse{};
+    if (not std::empty(error)) {
+        result.set_error(error);
+        return result;
+    }
+    result.set_player_name(playerName);
+    for (const auto& [id, player] : ctx().players) {
+        auto p = result.add_players();
+        p->set_player_id(id);
+        p->set_player_name(player.name);
+    }
+    return result;
+}
+
+[[nodiscard]] auto userByPlayerId(const Player::IdView playerId) -> User&
+{
+    return pref::find(*ctx().gameData.mutable_users(), playerId, &User::player_id).value().get();
+}
+
+// TODO: support token expiration
+auto addAuthToken(const Player::IdView playerId, std::string serverAuthToken) -> void
+{
+    auto& user = userByPlayerId(playerId);
+    user.add_auth_tokens(std::move(serverAuthToken));
+    const auto totalTokens = std::size(user.auth_tokens());
+    INFO_VAR(playerId, totalTokens);
+    storeGameData(ctx().gameDataPath, ctx().gameData);
+}
+
+auto revokeAuthToken(const Player::IdView playerId, const std::string_view serverAuthToken) -> void
+{
+    INFO_VAR(playerId);
+    pref::find(*ctx().gameData.mutable_users(), playerId, &User::player_id)
+        .transform([&](auto&& user) -> std::monostate {
+            auto& tokens = *user.get().mutable_auth_tokens();
+            const auto tokensCount = std::size(tokens);
+            tokens.erase(rng::remove(tokens, serverAuthToken), rng::end(tokens));
+            const auto tokensLeft = std::size(tokens);
+            const auto tokensRemoved = tokensCount - tokensLeft;
+            INFO_VAR(playerId, tokensRemoved, tokensLeft);
+            return {};
+        });
+    storeGameData(ctx().gameDataPath, ctx().gameData);
 }
 
 [[nodiscard]] auto makePlayerLeft(const Player::Id& playerId) -> PlayerLeft
@@ -453,11 +503,6 @@ auto addCardToHand(const Player::Id& playerId, const std::string& card) -> void
     return result;
 }
 
-[[nodiscard]] auto userByPlayerId(const Player::Id& playerId) -> const User&
-{
-    return pref::find(ctx().gameData.users(), playerId, &User::player_id).value().get();
-}
-
 [[nodiscard]] auto makeUserGames(const Player::Id& playerId) -> UserGames
 {
     auto result = UserGames{};
@@ -498,10 +543,22 @@ auto sendPlayerJoined(const PlayerSession& session) -> Awaitable<>
     return sendToAllExcept(makeMessage(makePlayerJoined(session)), ctx().players, session.playerId);
 }
 
-auto sendJoinResponse(const PlayerSession& session, const std::shared_ptr<Stream>& ws) -> Awaitable<>
+auto sendLoginResponse(
+    const std::shared_ptr<Stream>& ws,
+    const std::string& errorMsg,
+    const Player::Id& playerId = {},
+    const std::string& authToken = {}) -> Awaitable<>
 {
-    if (const auto error = co_await sendToOne(makeMessage(makeJoinResponse(ctx().players, session)), ws)) {
-        PREF_WARN("{}: failed to send JoinResponse", VAR(error));
+    if (const auto error = co_await sendToOne(makeMessage(makeLoginResponse(errorMsg, playerId, authToken)), ws)) {
+        PREF_WARN("{}: failed to send LoginResponse", VAR(error));
+    }
+}
+
+auto sendAuthResponse(
+    const std::shared_ptr<Stream>& ws, const std::string& errorMsg, const Player::Name& playerName = {}) -> Awaitable<>
+{
+    if (const auto error = co_await sendToOne(makeMessage(makeAuthResponse(errorMsg, playerName)), ws)) {
+        PREF_WARN("{}: failed to send AuthResponse", VAR(error));
     }
 }
 
@@ -605,7 +662,15 @@ auto dealCards() -> Awaitable<>
     }
 }
 
-auto disconnected(const Player::Id playerId) -> Awaitable<>
+auto removePlayer(const Player::Id playerId) -> Awaitable<>
+{
+    assert(ctx().players.contains(playerId) and "player exists");
+    INFO_VAR(playerId);
+    ctx().players.erase(playerId);
+    co_await sendPlayerLeft(playerId);
+}
+
+auto disconnected(Player::Id playerId) -> Awaitable<>
 {
     INFO_VAR(playerId);
     auto& player = ctx().player(playerId);
@@ -615,10 +680,7 @@ auto disconnected(const Player::Id playerId) -> Awaitable<>
         if (error != net::error::operation_aborted) { WARN_VAR(error); }
         co_return;
     }
-    assert(ctx().players.contains(playerId) and "player exists");
-    PREF_INFO("removed {} after timeout", VAR(playerId));
-    ctx().players.erase(playerId);
-    co_await sendPlayerLeft(playerId);
+    co_await removePlayer(std::move(playerId));
 }
 
 auto updateScoreSheetForDeal() -> void
@@ -719,66 +781,127 @@ auto dealFinished() -> Awaitable<>
     return passCount == NumberOfPlayers ? GameStage::PLAYING : GameStage::BIDDING;
 }
 
-[[nodiscard]] auto userPlayerId(const Player::Name& playerName) -> Player::IdView
+[[nodiscard]] auto userPlayerId(const Player::NameView playerName) -> Player::IdView
 {
     return pref::find(ctx().gameData.users(), playerName, &User::player_name, &User::player_id).value().get();
 }
 
-[[nodiscard]] auto playerSecretHash(const Player::Name& playerName) -> std::string_view
+[[nodiscard]] auto verifyPlayerIdAndAuthToken(const Player::IdView playerId, const std::string_view authToken) -> bool
+{
+    INFO_VAR(playerId);
+    return pref::find(ctx().gameData.users(), playerId, &User::player_id)
+        .transform([&](auto&& user) { return rng::contains(user.get().auth_tokens(), authToken); })
+        .value_or(false);
+}
+
+[[nodiscard]] auto playerPasswordHash(const Player::NameView playerName) -> std::string_view
 {
     static const auto empty = std::string{};
-    return pref::find(ctx().gameData.users(), playerName, &User::player_name, &User::secret)
+    return pref::find(ctx().gameData.users(), playerName, &User::player_name, &User::password)
         .value_or(std::ref(empty))
         .get();
 }
 
-[[nodiscard]] auto verifyPlayer(const Player::Name& playerName, const std::string_view secretHex) -> bool
+[[nodiscard]] auto verifyPlayerNameAndPassword(const Player::NameView playerName, const std::string_view password)
+    -> bool
 {
-    const auto secretHash = playerSecretHash(playerName);
-    return not std::empty(secretHash) and verifySecretHex(secretHex, secretHash);
+    INFO_VAR(playerName);
+    const auto passwordHash = playerPasswordHash(playerName);
+    return not std::empty(passwordHash) and verifyPassword(password, passwordHash);
 }
 
-auto handleJoinRequest(const Message msg, const std::shared_ptr<Stream>& ws) -> Awaitable<PlayerSession>
+auto maybeStartGame() -> Awaitable<>
 {
-    auto joinRequest = makeMethod<JoinRequest>(msg);
-    if (not joinRequest) { co_return PlayerSession{}; }
+    if (std::size(ctx().players) != NumberOfPlayers) { co_return; }
+    ctx().gameStarted = timeSinceEpochInSec();
+    ++ctx().gameId;
+    PREF_INFO("gameId: {} started: {} {}", ctx().gameId, formatDate(ctx().gameStarted), formatTime(ctx().gameStarted));
+    for (const auto& id : ctx().players | rv::keys) {
+        addOrUpdateUserGame(ctx().gameData, id, makeUserGame(ctx().gameId, GameType::RANKED, ctx().gameStarted));
+    }
+    PREF_INFO("gameData: {}", formatGameData(ctx().gameData));
+    co_await sendUserGames();
+    co_await dealCards();
+    resetWhoseTurn();
+    setForehandId();
+    co_await sendPlayerTurn(GameStage::BIDDING);
+}
+
+[[nodiscard]] auto toServerAuthToken(const std::string_view authToken) -> std::string
+{
+    return hashToken(hex2bytes(authToken));
+}
+
+[[nodiscard]] auto generateClientAuthToken() -> std::string
+{
+    return bytes2hex(generateToken());
+}
+
+auto handleLoginRequest(const Message msg, const std::shared_ptr<Stream>& ws) -> Awaitable<PlayerSession>
+{
+    auto loginRequest = makeMethod<LoginRequest>(msg);
+    if (not loginRequest) { co_return PlayerSession{}; }
     auto session = PlayerSession{};
-    const auto& requestedPlayerId = joinRequest->player_id();
-    auto& playerName = *joinRequest->mutable_player_name();
-    const auto& secret = joinRequest->secret();
-    // Allow joining unknown users
-    if (not verifyPlayer(playerName, secret)) {
-        PREF_WARN("error: unknown {} or wrong secret, {}", VAR(playerName), VAR(requestedPlayerId));
+    const auto& playerName = loginRequest->player_name();
+    const auto& password = loginRequest->password();
+    if (not verifyPlayerNameAndPassword(playerName, password)) {
+        const auto error = fmt::format("unknown {} or wrong password", VAR(playerName));
+        WARN_VAR(error);
+        co_await sendLoginResponse(ws, error);
         co_return session;
     }
-    auto storedPlayerId = std::string{userPlayerId(playerName)};
-    INFO_VAR(requestedPlayerId, storedPlayerId, playerName);
-    session.playerName = std::move(playerName);
-    if (isNewPlayer(storedPlayerId, ctx().players)) {
-        joinPlayer(std::move(storedPlayerId), ws, ctx().players, session);
-        co_await sendJoinResponse(session, ws);
+    const auto playerId = std::string{userPlayerId(playerName)};
+    const auto authToken = generateClientAuthToken();
+    addAuthToken(playerId, toServerAuthToken(authToken));
+    INFO_VAR(playerName, playerId);
+    session.playerName = playerName;
+    if (isNewPlayer(playerId, ctx().players)) {
+        joinPlayer(playerId, ws, ctx().players, session);
+        co_await sendLoginResponse(ws, {}, playerId, authToken);
     } else {
-        co_await reconnectPlayer(ws, storedPlayerId, ctx().players, session);
-        co_await sendJoinResponse(session, ws);
+        co_await reconnectPlayer(ws, playerId, ctx().players, session);
+        co_await sendLoginResponse(ws, {}, playerId, authToken);
         co_return session;
     }
     co_await sendPlayerJoined(session);
-    if (std::size(ctx().players) == NumberOfPlayers) {
-        ctx().gameStarted = timeSinceEpochInSec();
-        ++ctx().gameId;
-        PREF_INFO(
-            "gameId: {} started: {} {}", ctx().gameId, formatDate(ctx().gameStarted), formatTime(ctx().gameStarted));
-        for (const auto& id : ctx().players | rv::keys) {
-            addOrUpdateUserGame(ctx().gameData, id, makeUserGame(ctx().gameId, GameType::RANKED, ctx().gameStarted));
-        }
-        PREF_INFO("gameData: {}", formatGameData(ctx().gameData));
-        co_await sendUserGames();
-        co_await dealCards();
-        resetWhoseTurn();
-        setForehandId();
-        co_await sendPlayerTurn(GameStage::BIDDING);
-    }
+    co_await maybeStartGame();
     co_return session;
+}
+
+auto handleAuthRequest(const Message msg, const std::shared_ptr<Stream>& ws) -> Awaitable<PlayerSession>
+{
+    auto authRequest = makeMethod<AuthRequest>(msg);
+    if (not authRequest) { co_return PlayerSession{}; }
+    auto session = PlayerSession{};
+    const auto& playerId = authRequest->player_id();
+    if (not verifyPlayerIdAndAuthToken(playerId, toServerAuthToken(authRequest->auth_token()))) {
+        const auto error = fmt::format("unknown {} or wrong auth token", VAR(playerId));
+        WARN_VAR(error);
+        co_await sendAuthResponse(ws, error);
+        co_return session;
+    }
+    const auto& playerName = userByPlayerId(playerId).player_name();
+    INFO_VAR(playerName, playerId);
+    session.playerName = playerName;
+    if (isNewPlayer(playerId, ctx().players)) {
+        joinPlayer(playerId, ws, ctx().players, session);
+        co_await sendAuthResponse(ws, {}, playerName);
+    } else {
+        co_await reconnectPlayer(ws, playerId, ctx().players, session);
+        co_await sendAuthResponse(ws, {}, playerName);
+        co_return session;
+    }
+    co_await sendPlayerJoined(session);
+    co_await maybeStartGame();
+    co_return session;
+}
+
+auto handleLogout(const Message& msg) -> Awaitable<>
+{
+    auto logout = makeMethod<Logout>(msg);
+    if (not logout) { co_return; }
+    revokeAuthToken(logout->player_id(), toServerAuthToken(logout->auth_token()));
+    co_await removePlayer(std::move(*logout->mutable_player_id()));
 }
 
 auto handleBidding(Message msg) -> Awaitable<>
@@ -971,14 +1094,17 @@ auto dispatchMessage(PlayerSession& session, const std::shared_ptr<Stream>& ws, 
 { // clang-format off
     if (not msg) { co_return; }
     const auto& method = msg->method();
-    if (method == "JoinRequest") { session = co_await handleJoinRequest(*msg, ws); co_return; }
-    if (method == "Bidding") { co_return co_await handleBidding(std::move(*msg)); }
-    if (method == "DiscardTalon") { co_return co_await handleDiscardTalon(*msg); }
-    if (method == "Whisting") { co_return co_await handleWhisting(std::move(*msg)); }
-    if (method == "HowToPlay") { co_return co_await handleHowToPlay(std::move(*msg)); }
-    if (method == "PlayCard") { co_return co_await handlePlayCard(std::move(*msg)); }
-    if (method == "SpeechBubble") { co_return co_await handleSpeechBubble(std::move(*msg)); }
-    if (method == "PingPong") { co_return co_await handlePingPong(std::move(*msg), ws); }
+    // TODO: don't dispatch messages if AuthRequest or AuthLogin failed
+    if (method == "LoginRequest") { session = co_await handleLoginRequest(*msg, ws); co_return; }
+    if (method == "AuthRequest") { session = co_await handleAuthRequest(*msg, ws); co_return; }
+    if (method == "Logout") { co_await handleLogout(*msg); co_return; }
+    if (method == "Bidding") { co_await handleBidding(std::move(*msg)); co_return; }
+    if (method == "DiscardTalon") { co_await handleDiscardTalon(*msg); co_return; }
+    if (method == "Whisting") { co_await handleWhisting(std::move(*msg)); co_return; }
+    if (method == "HowToPlay") { co_await handleHowToPlay(std::move(*msg)); co_return; }
+    if (method == "PlayCard") { co_await handlePlayCard(std::move(*msg)); co_return; }
+    if (method == "SpeechBubble") { co_await handleSpeechBubble(std::move(*msg)); co_return; }
+    if (method == "PingPong") { co_await handlePingPong(std::move(*msg), ws); co_return; }
     if (method == "Log") { handleLog(*msg); co_return; }
     PREF_WARN("error: unknown {}", VAR(method));
 } // clang-format on
@@ -991,39 +1117,48 @@ auto launchSession(const std::shared_ptr<Stream> ws) -> Awaitable<>
     ws->set_option(web::stream_base::decorator([](web::response_type& res) {
         res.set(beast::http::field::server, std::string{BOOST_BEAST_VERSION_STRING} + " preferans-server");
     }));
-
-    co_await ws->async_accept();
+#ifdef PREF_SSL
+    {
+        auto error = sys::error_code{};
+        co_await ws->next_layer().async_handshake(net::ssl::stream_base::server, net::redirect_error(error));
+        if (error) {
+            PREF_WARN("{} (handshake)", VAR(error));
+            co_return;
+        }
+    }
+#endif // PREF_SSL
+    {
+        auto error = sys::error_code{};
+        co_await ws->async_accept(net::redirect_error(error));
+        if (error) {
+            PREF_WARN("{} (accept)", VAR(error));
+            co_return;
+        }
+    }
     auto session = PlayerSession{};
 
     while (true) {
         auto buffer = beast::flat_buffer{};
         if (const auto [error, _] = co_await ws->async_read(buffer, net::as_tuple); error) {
-            if (error == web::error::closed
-                or error == net::error::not_connected
-                or error == net::error::connection_reset
-                or error == net::error::eof) {
-                PREF_INFO("{}: disconnected: {}, {}", VAR(error), VAR(session.playerName), VAR(session.playerId));
-            } else if (error == net::error::operation_aborted) {
-                PREF_WARN("{}: read: {}, {}", VAR(error), VAR(session.playerName), VAR(session.playerId));
-            } else {
-                ERROR_VAR(session.playerName, session.playerId, error);
-                // TODO: maybe throw to not handle a disconnection?
-            }
+            PREF_INFO("{} (read){}{}", error, VAR_MB(session.playerId), VAR_MB(session.playerName));
             break;
         }
         co_await dispatchMessage(session, ws, makeMessage(buffer));
     }
-    if (std::empty(session.playerId) or not ctx().players.contains(session.playerId)) {
-        PREF_WARN("error: empty or unknown {}", VAR(session.playerId));
+    if (std::empty(session.playerId)) {
+        PREF_WARN("error: playerId is empty");
         co_return;
     }
-    auto& player = ctx().player(session.playerId);
-    if (session.id != player.sessionId) {
+    if (not ctx().players.contains(session.playerId)) {
+        PREF_INFO("{} already left", VAR(session.playerId));
+        co_return;
+    }
+    if (auto& player = ctx().player(session.playerId); session.id != player.sessionId) {
         PREF_INFO("{} reconnected with {} => {}", VAR(session.playerId), VAR(session.id), player.sessionId);
         // TODO: send the game state to the reconnected player
         co_return;
     }
-    PREF_WARN("disconnected {}, waiting for reconnection", VAR(session.playerId));
+    PREF_INFO("disconnected {}, waiting for reconnection", VAR(session.playerId));
     net::co_spawn(co_await net::this_coro::executor, disconnected(session.playerId), Detached("disconnected"));
 }
 
@@ -1164,7 +1299,7 @@ auto Context::countWhistingChoice(const WhistingChoice choice) const -> std::ptr
 
     const auto& w1 = whisters[0];
     const auto& w2 = whisters[1];
-    static constexpr auto totalTricksPerDeal = 10;
+    [[maybe_unused]] static constexpr auto totalTricksPerDeal = 10;
 
     assert(not std::empty(declarer.id) and not std::empty(w1.id) and not std::empty(w2.id));
     assert(declarer.id != w1.id and declarer.id != w2.id and w1.id != w2.id);
@@ -1226,14 +1361,23 @@ auto Context::countWhistingChoice(const WhistingChoice choice) const -> std::ptr
 }
 // NOLINTEND(readability-function-cognitive-complexity, hicpp-uppercase-literal-suffix)
 
-auto acceptConnectionAndLaunchSession(const tcp::endpoint endpoint) -> Awaitable<>
+auto acceptConnectionAndLaunchSession(
+#ifdef PREF_SSL
+    net::ssl::context ssl,
+#endif // PREF_SSL
+    const tcp::endpoint endpoint) -> Awaitable<>
 {
     PREF_INFO();
     const auto ex = co_await net::this_coro::executor;
     auto acceptor = tcp::acceptor{ex, endpoint};
     while (true) {
-        net::co_spawn(
-            ex, launchSession(std::make_shared<Stream>(co_await acceptor.async_accept())), Detached("launchSession"));
+        auto socket = co_await acceptor.async_accept();
+#ifdef PREF_SSL
+        auto ws = std::make_shared<Stream>(std::move(socket), ssl);
+#else // PREF_SSL
+        auto ws = std::make_shared<Stream>(std::move(socket));
+#endif // PREF_SSL
+        net::co_spawn(ex, launchSession(std::move(ws)), Detached("launchSession"));
     }
 }
 

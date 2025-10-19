@@ -56,6 +56,7 @@ inline constexpr std::array<char, 0> FormatString<0>;
 
 // clang-format off
 #define VAR(var) fmt::format("{}: {}", #var, var)
+#define VAR_MB(value) (not std::empty(value) ? fmt::format(", {}", VAR(value)) : "") // VAR_MAYBE
 #define APPLY_VAR_0
 #define APPLY_VAR_1(arg) VAR(arg)
 #define APPLY_VAR_2(arg, ...) VAR(arg), APPLY_VAR_1(__VA_ARGS__)

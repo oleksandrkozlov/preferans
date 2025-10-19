@@ -23,7 +23,7 @@ sudo docker run --privileged -ti -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11
 ### Build
 
 ```
-./build.sh [<ip-address>] [<ws-port>] [(Debug | Release)]
+./build.sh [<host>] [(ws | wss)] [<ws-port>] [(Debug | Release)]
 ```
 Example:
 ```
@@ -31,9 +31,9 @@ Example:
 ```
 Equivalent to:
 ```
-./build.sh 0.0.0.0 8080 Release
+./build.sh 0.0.0.0 ws 8080 Release
 ```
-Executes:
+Which runs:
 ```
 cmake -S server -B build-server -GNinja -DCMAKE_BUILD_TYPE=Release
 cmake --build build-server --target server
@@ -50,7 +50,7 @@ cmake --build build-client --target client
 ### Run
 
 ```
-./run.sh [<ip-address>] [<http-port>] [<ws-port>]
+./run.sh [<ip-address>] [<http-port>] [<ws-port>] [--cert=<fullchain.pem> --key=<privkey.pem> --dh=<ssl-dhparams.pem>]
 ```
 Example:
 ```
@@ -60,7 +60,7 @@ Equivalent to:
 ```
 ./run.sh 0.0.0.0 8000 8080
 ```
-Executes:
+Which runs:
 ```
 ./build-server/bin/server 0.0.0.0 8080 ./server/data/game.dat &
 python3 -m http.server -d build-client/bin -b 0.0.0.0 8000 &
@@ -76,18 +76,16 @@ cmake --build build-server --target test_server
 
 ### Dependencies
 
-* [PicoSHA2](https://github.com/okdshin/PicoSHA2)
-* [boost.algorithm](https://www.boost.org/doc/libs/latest/libs/algorithm/doc/html/index.html)
 * [boost.asio](https://www.boost.org/doc/libs/latest/doc/html/boost_asio.html)
 * [boost.beast](https://www.boost.org/doc/libs/latest/libs/beast/doc/html/index.html)
-* [boost.uuid](https://www.boost.org/doc/libs/latest/libs/uuid/doc/html/uuid.html)
+* [botan](https://botan.randombit.net/)
 * [cmake](https://cmake.org)
 * [date](https://howardhinnant.github.io/date/date.html)
 * [docopt](http://docopt.org/)
 * [emscripten](https://emscripten.org)
 * [fmt](https://fmt.dev)
 * [gsl](https://github.com/microsoft/GSL)
-* [libsodium](https://doc.libsodium.org/)
+* [openssl](https://www.openssl.org/)
 * [protobuf](https://protobuf.dev)
 * [range-v3](https://ericniebler.github.io/range-v3/)
 * [raygui](https://github.com/raysan5/raygui)

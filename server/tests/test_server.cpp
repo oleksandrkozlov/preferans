@@ -1,10 +1,9 @@
+#include "auth.hpp"
 #include "common/common.hpp"
 #include "server.hpp"
 
 #include <catch2/catch_all.hpp>
 #include <catch2/catch_test_macros.hpp>
-
-#include <gsl/gsl>
 
 template<>
 struct Catch::StringMaker<pref::DealScoreEntry> {
@@ -337,6 +336,54 @@ TEST_CASE("makeFinalScore")
     SECTION("empty")
     {
         REQUIRE(std::empty(makeFinalScore({})));
+    }
+}
+
+TEST_CASE("auth")
+{
+    const auto hexStr = "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c"s;
+
+    SECTION("hex2bytes & bytes2hex")
+    {
+        const auto bytes = std::vector<std::uint8_t>{0xB5, 0xBB, 0x9D, 0x80, 0x14, 0xA0, 0xF9, 0xB1, 0xD6, 0x1E, 0x21,
+                                                     0xE7, 0x96, 0xD7, 0x8D, 0xCC, 0xDF, 0x13, 0x52, 0xF2, 0x3C, 0xD3,
+                                                     0x28, 0x12, 0xF4, 0x85, 0x0B, 0x87, 0x8A, 0xE4, 0x94, 0x4C};
+        const auto bytesStr = std::string{std::cbegin(bytes), std::cend(bytes)};
+        REQUIRE(hex2bytes(hexStr) == bytesStr);
+        REQUIRE(bytes2hex(bytesStr) == hexStr);
+    }
+
+    SECTION("generateToken")
+    {
+        const auto token0 = generateToken();
+        const auto token1 = generateToken();
+        REQUIRE(std::size(token0) == 32);
+        REQUIRE(std::size(token1) == 32);
+        REQUIRE(token0 != token1);
+    }
+
+    SECTION("hashToken")
+    {
+        const auto expectedHash = "2dc85e9a540c7016ac1e441d871c6c92b07b74416a5bb6622eeef4f579f46672"s;
+        const auto actualHash = hashToken(hexStr);
+
+        REQUIRE(std::size(expectedHash) == std::size(actualHash));
+        REQUIRE(expectedHash == actualHash);
+    }
+
+    SECTION("generateUuid")
+    {
+        const auto uuid0 = generateUuid();
+        const auto uuid1 = generateUuid();
+        REQUIRE(std::size(uuid0) == 36);
+        REQUIRE(std::size(uuid1) == 36);
+        REQUIRE(uuid0 != uuid1);
+    }
+
+    SECTION("password")
+    {
+        const auto password = "aboba";
+        REQUIRE(verifyPassword(password, hashPassword(password)));
     }
 }
 

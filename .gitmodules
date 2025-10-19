@@ -25,9 +25,6 @@
 [submodule "client/deps/docopt.cpp"]
 	path = client/deps/docopt.cpp
 	url = https://github.com/docopt/docopt.cpp.git
-[submodule "client/deps/PicoSHA2"]
-	path = client/deps/PicoSHA2
-	url = git@github.com:okdshin/PicoSHA2.git
 [submodule "client/deps/date"]
 	path = client/deps/date
 	url = git@github.com:HowardHinnant/date.git

@@ -37,6 +37,7 @@ inline constexpr auto EnterFullScreenIcon = "";
 inline constexpr auto ExitFullScreenIcon = "";
 inline constexpr auto SpeechBubbleIcon = "";
 inline constexpr auto OverallScoreboardIcon = "";
+inline constexpr auto LogoutIcon = "";
 
 inline constexpr auto PREF_SEVEN_OF_SPADES = 0x1F0A7;
 inline constexpr auto PREF_SEVEN_OF_CLUBS = 0x1F0D7;
@@ -226,6 +227,10 @@ enum class GameText : std::size_t {
     Lost,
     Draw,
     OverallScoreboard,
+    LogOut,
+    AreYouSureYouWantToLogOut,
+    Yes,
+    No,
     Count
 };
 
@@ -282,6 +287,10 @@ inline constexpr auto localization = std::
             "Lost",
             "Draw",
             "OVERALL SCOREBOARD",
+            "Log Out",
+            "Are you sure you want to log out?",
+            "Yes",
+            "No",
         },
         {
             // Ukrainian
@@ -334,6 +343,10 @@ inline constexpr auto localization = std::
             "Поразка",
             "Нічия",
             "ЗАГАЛЬНА ТАБЛИЦЯ РЕЗУЛЬТАТІВ",
+            "Вихід",
+            "Ви впевнені, що хочете вийти?",
+            "Так",
+            "Ні",
         },
         {
             // Alternative
@@ -386,6 +399,10 @@ inline constexpr auto localization = std::
             "Поражение",
             "Ничья",
             "ОБЩАЯ ТАБЛИЦА РЕЗУЛЬТАТОВ",
+            "Выход",
+            "Вы уверены, что хотите выйти?",
+            "Да",
+            "Нет",
         },
     }};
 

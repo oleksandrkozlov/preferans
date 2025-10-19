@@ -7,15 +7,32 @@ message PPlayer {
   string player_name = 2;
 }
 
-message JoinRequest {
+message LoginRequest {
   string player_name = 1;
-  string secret = 2;
-  optional string player_id = 3;
+  string password = 2;
 }
 
-message JoinResponse {
+message LoginResponse {
+   string error = 1;
+   string player_id = 2;
+   string auth_token = 3;
+   repeated PPlayer players = 4;
+}
+
+message AuthRequest {
   string player_id = 1;
-  repeated PPlayer players = 2;
+  string auth_token = 2;
+}
+
+message AuthResponse {
+  string error = 1;
+  string player_name = 2;
+  repeated PPlayer players = 3;
+}
+
+message Logout {
+  string player_id = 1;
+  string auth_token = 2;
 }
 
 message PlayerJoined {
@@ -135,8 +152,9 @@ message UserGame {
 message User {
   string player_id = 1;
   string player_name = 2;
-  string secret = 3;
-  repeated UserGame games = 4;
+  string password = 3;
+  repeated string auth_tokens = 4;
+  repeated UserGame games = 5;
   int32 version = 100;
 }
 

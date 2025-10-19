@@ -11,6 +11,7 @@ RUN apt update && apt install -y \
     git \
     libasound2-dev \
     libboost1.88-dev \
+    libbotan-3-dev \
     libcatch2-dev \
     libdocopt-dev \
     libfmt-dev \
@@ -21,8 +22,8 @@ RUN apt update && apt install -y \
     libmsgsl-dev \
     libprotobuf-dev \
     librange-v3-dev \
-    libsodium-dev \
     libspdlog-dev \
+    libssl-dev \
     libwayland-dev \
     libx11-dev \
     libxcursor-dev \
@@ -30,6 +31,7 @@ RUN apt update && apt install -y \
     libxinerama-dev \
     libxkbcommon-dev \
     libxrandr-dev \
+    nginx \
     ninja-build \
     pkg-config \
     protobuf-compiler \

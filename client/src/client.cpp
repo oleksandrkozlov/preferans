@@ -11,7 +11,6 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <fmt/std.h>
-#include <picosha2.h>
 #include <range/v3/all.hpp>
 #define RAYGUI_TEXTSPLIT_MAX_ITEMS 128
 #define RAYGUI_TEXTSPLIT_MAX_TEXT_SIZE 8192
@@ -20,6 +19,8 @@
 #define RAYGUI_TEXTINPUTBOX_BUTTON_HEIGHT 80
 #define RAYGUI_TEXTINPUTBOX_HEIGHT 80
 #define RAYGUI_TEXTINPUTBOX_BUTTON_PADDING 20
+#define RAYGUI_MESSAGEBOX_BUTTON_HEIGHT 80
+#define RAYGUI_MESSAGEBOX_BUTTON_PADDING 40
 #define RAYGUI_IMPLEMENTATION
 #include <raygui.h>
 #include <raylib-cpp.hpp>
@@ -28,6 +29,7 @@
 #include <cassert>
 #include <cmath>
 #include <concepts>
+#include <cstring>
 #include <functional>
 #include <gsl/gsl>
 #include <list>
@@ -38,6 +40,10 @@ namespace pref {
 namespace {
 
 namespace r = raylib;
+
+constexpr auto PlayerIdStorageKey = "player_id";
+constexpr auto PlayerNameStorageKey = "player_name";
+constexpr auto AuthTokenStorageKey = "auth_token";
 
 [[nodiscard]] auto operator+(const r::Vector2& lhs, const float rhs) -> r::Vector2
 {
@@ -369,6 +375,10 @@ struct OverallScoreboard {
     Table table;
 };
 
+struct LogoutMessage {
+    bool isVisible{};
+};
+
 struct Ping {
     static constexpr auto IntervalInMs = 15'000; // 15s;
     static constexpr auto InvalidRtt = -1;
@@ -399,9 +409,11 @@ struct Context {
     };
     r::RenderTexture target{static_cast<int>(VirtualW), static_cast<int>(VirtualH)};
     PlayerId myPlayerId;
-    PlayerName enteredPlayerName;
-    std::string enteredPlayerSecret;
-    bool isLogin{};
+    PlayerName myPlayerName;
+    std::string password;
+    std::string authToken;
+    bool isLoggedIn{};
+    bool isLoginInProgress{};
     mutable std::map<PlayerId, Player> players;
     EMSCRIPTEN_WEBSOCKET_T ws{};
     int leftCardCount = 10;
@@ -420,7 +432,9 @@ struct Context {
     ScoreSheetMenu scoreSheet;
     SpeechBubbleMenu speechBubbleMenu;
     OverallScoreboard overallScoreboard;
+    LogoutMessage logoutMessage;
     Ping ping;
+    std::string url;
 
     auto clear() -> void
     {
@@ -523,7 +537,7 @@ struct Context {
 auto saveToLocalStorage(const std::string_view key, const std::string_view value) -> void
 {
     const auto js = fmt::format("localStorage.setItem('{}{}', '{}');", LocalStoragePrefix, key, value);
-    INFO_VAR(key, value, js);
+    INFO_VAR(key);
     emscripten_run_script(js.c_str());
 }
 
@@ -533,19 +547,44 @@ auto removeFromLocalStorage(const std::string_view key) -> void
     emscripten_run_script(js.c_str());
 }
 
-[[nodiscard]] auto loadPlayerIdFromLocalStorage() -> PlayerId
+auto loadFromLocalStoragePlayerId() -> void
 {
-    return loadFromLocalStorage("player_id");
+    ctx().myPlayerId = loadFromLocalStorage(PlayerIdStorageKey);
 }
 
-auto savePlayerIdToLocalStorage(const PlayerId& playerId) -> void
+auto saveToLocalStoragePlayerId() -> void
 {
-    saveToLocalStorage("player_id", playerId);
+    saveToLocalStorage(PlayerIdStorageKey, ctx().myPlayerId);
 }
 
-[[maybe_unused]] auto clearPlayerIdFromLocalStorage() -> void
+auto removeFromLocalStoragePlayerId() -> void
 {
-    removeFromLocalStorage("player_id");
+    removeFromLocalStorage(PlayerIdStorageKey);
+}
+
+auto loadFromLocalStoragePlayerName() -> void
+{
+    ctx().myPlayerName = loadFromLocalStorage(PlayerNameStorageKey);
+}
+
+auto saveToLocalStoragePlayerName() -> void
+{
+    saveToLocalStorage(PlayerNameStorageKey, ctx().myPlayerName);
+}
+
+auto loadFromLocalStorageAuthToken() -> void
+{
+    ctx().authToken = loadFromLocalStorage(AuthTokenStorageKey);
+}
+
+auto saveToLocalStorageAuthToken() -> void
+{
+    saveToLocalStorage(AuthTokenStorageKey, ctx().authToken);
+}
+
+auto removeFromLocalStorageAuthToken() -> void
+{
+    removeFromLocalStorage(AuthTokenStorageKey);
 }
 
 [[nodiscard]] auto isPlayerTurn(const PlayerId& playerId) -> bool
@@ -626,13 +665,27 @@ auto sendMessage(const EMSCRIPTEN_WEBSOCKET_T ws, const Message& msg) -> bool
     return {};
 }
 
-[[nodiscard]] auto makeJoinRequest(
-    const std::string& playerId, const std::string& playerName, const std::string& secret) -> JoinRequest
+[[nodiscard]] auto makeLoginRequest(const PlayerName& playerName, const std::string& password) -> LoginRequest
 {
-    auto result = JoinRequest{};
-    if (not std::empty(playerId)) { result.set_player_id(playerId); }
+    auto result = LoginRequest{};
     result.set_player_name(playerName);
-    result.set_secret(secret);
+    result.set_password(password);
+    return result;
+}
+
+[[nodiscard]] auto makeAuthRequest(const PlayerId& playerId, const std::string& authToken) -> AuthRequest
+{
+    auto result = AuthRequest{};
+    result.set_player_id(playerId);
+    result.set_auth_token(authToken);
+    return result;
+}
+
+[[nodiscard]] auto makeLogout(const PlayerId& playerId, const std::string& authToken) -> Logout
+{
+    auto result = Logout{};
+    result.set_player_id(playerId);
+    result.set_auth_token(authToken);
     return result;
 }
 
@@ -701,13 +754,25 @@ auto sendMessage(const EMSCRIPTEN_WEBSOCKET_T ws, const Message& msg) -> bool
     return result;
 }
 
-auto sendJoinRequest() -> void
+auto sendLoginRequest() -> void
 {
-    // TODO: Replace sha256 with transport-appropriate secure password handling
-    sendMessage(
-        ctx().ws,
-        makeMessage(makeJoinRequest(
-            ctx().myPlayerId, ctx().enteredPlayerName, picosha2::hash256_hex_string(ctx().enteredPlayerSecret))));
+    auto _ = gsl::finally([] { ctx().password.clear(); });
+    // The password is sent in plain text; that's why SSL (wss://) is required in production.
+    if (not sendMessage(ctx().ws, makeMessage(makeLoginRequest(ctx().myPlayerName, ctx().password)))) {
+        ctx().isLoginInProgress = false;
+    }
+}
+
+auto sendAuthRequest() -> void
+{
+    if (not sendMessage(ctx().ws, makeMessage(makeAuthRequest(ctx().myPlayerId, ctx().authToken)))) {
+        ctx().isLoginInProgress = false;
+    }
+}
+
+auto sendLogout() -> void
+{
+    sendMessage(ctx().ws, makeMessage(makeLogout(ctx().myPlayerId, ctx().authToken)));
 }
 
 auto sendBidding(const std::string& bid) -> void
@@ -769,22 +834,50 @@ auto repeatPingPong() -> void
     shedulePingPong();
 }
 
-auto handleJoinResponse(const Message& msg) -> void
+auto finishLogin(auto& response) -> void
 {
-    auto joinResponse = makeMethod<JoinResponse>(msg);
-    if (not joinResponse) { return; }
-    if (ctx().myPlayerId != joinResponse->player_id()) {
-        ctx().myPlayerId = joinResponse->player_id();
-        PREF_INFO("save myPlayerId: {}", ctx().myPlayerId);
-        savePlayerIdToLocalStorage(ctx().myPlayerId);
-    }
     ctx().players.clear();
-    for (auto& p : *(joinResponse->mutable_players())) {
+    for (auto& p : *(response.mutable_players())) {
         auto player = Player{*p.mutable_player_id(), std::move(*p.mutable_player_name())};
         ctx().players.insert_or_assign(std::move(*p.mutable_player_id()), std::move(player));
     }
     repeatPingPong();
-    ctx().isLogin = true;
+    ctx().isLoggedIn = true;
+    ctx().isLoginInProgress = false;
+}
+
+auto handleLoginResponse(const Message& msg) -> void
+{
+    auto loginResponse = makeMethod<LoginResponse>(msg);
+    if (not loginResponse) { return; }
+    if (const auto& error = loginResponse->error(); not std::empty(error)) {
+        WARN_VAR(error);
+        ctx().isLoginInProgress = false;
+        return;
+    }
+    ctx().myPlayerId = std::move(*loginResponse->mutable_player_id());
+    ctx().authToken = std::move(*loginResponse->mutable_auth_token());
+    saveToLocalStoragePlayerId();
+    saveToLocalStorageAuthToken();
+    finishLogin(*loginResponse);
+}
+
+auto handleAuthResponse(const Message& msg) -> void
+{
+    auto authResponse = makeMethod<AuthResponse>(msg);
+    if (not authResponse) { return; }
+    if (const auto& error = authResponse->error(); not std::empty(error)) {
+        WARN_VAR(error);
+        ctx().isLoginInProgress = false;
+        ctx().myPlayerId.clear();
+        ctx().authToken.clear();
+        removeFromLocalStoragePlayerId();
+        removeFromLocalStorageAuthToken();
+        return;
+    }
+    ctx().myPlayerName = std::move(*authResponse->mutable_player_name());
+    saveToLocalStoragePlayerName();
+    finishLogin(*authResponse);
 }
 
 auto handlePlayerJoined(const Message& msg) -> void
@@ -1072,7 +1165,8 @@ auto dispatchMessage(const std::optional<Message>& msg) -> void
 {
     if (not msg) { return; }
     const auto& method = msg->method();
-    if (method == "JoinResponse") { return handleJoinResponse(*msg); }
+    if (method == "LoginResponse") { return handleLoginResponse(*msg); }
+    if (method == "AuthResponse") { return handleAuthResponse(*msg); }
     if (method == "PlayerJoined") { return handlePlayerJoined(*msg); }
     if (method == "PlayerLeft") { return handlePlayerLeft(*msg); }
     if (method == "DealCards") { return handleDealCards(*msg); }
@@ -1090,12 +1184,23 @@ auto dispatchMessage(const std::optional<Message>& msg) -> void
     PREF_WARN("error: unknown {}", VAR(method));
 }
 
+auto setupWebsocket() -> void;
+
 auto onWsOpen(
     [[maybe_unused]] const int eventType,
     [[maybe_unused]] const EmscriptenWebSocketOpenEvent* event,
     [[maybe_unused]] void* ud) -> EM_BOOL
 {
-    assert(event);
+    if (not std::empty(ctx().myPlayerId) and not std::empty(ctx().authToken)) {
+        // TODO: Draw Enter Screen (no password) instead of Login Screen when auth token is in place and
+        // replace `ctx().password.clear()` with `assert(std::empty(ctx().password))`
+        ctx().password.clear();
+        sendAuthRequest();
+        return EM_TRUE;
+    }
+    assert(not std::empty(ctx().myPlayerName));
+    assert(not std::empty(ctx().password));
+    sendLoginRequest();
     return EM_TRUE;
 }
 
@@ -1117,37 +1222,40 @@ auto onWsError(
     return EM_TRUE;
 }
 
-auto onWsClosed(const int eventType, const EmscriptenWebSocketCloseEvent* e, [[maybe_unused]] void* ud) -> EM_BOOL
+auto onWsClosed([[maybe_unused]] const int eventType, const EmscriptenWebSocketCloseEvent* e, [[maybe_unused]] void* ud)
+    -> EM_BOOL
 {
-    PREF_INFO(
-        "{}, socket: {}, wasClean: {}, code: {}, reason: {}",
-        VAR(eventType),
-        e->socket,
-        e->wasClean,
-        getCloseReason(e->code),
-        e->reason);
-    emscripten_websocket_delete(e->socket);
-    // TODO: try to reconnect if not clean?
-    /*
-        emscripten_async_call(
-            [&](void*) {
-                setupWebsocket(); // try again
-            },
-            nullptr,
-            2000); // after 2 seconds
-    */
+    PREF_INFO("wasClean: {}, code: {}, reason: {}", e->wasClean, getCloseReason(e->code), e->reason);
+    emscripten_websocket_delete(ctx().ws);
+    ctx().ws = 0;
+    if (e->wasClean
+        and getCloseReason(e->code) == "Policy violation"
+        and std::strcmp(e->reason, "Another tab connected") == 0) {
+        ctx().isLoggedIn = false;
+        return EM_TRUE;
+    }
+    // TODO: Draw error message: e.g., server is down, etc.
+    if (not e->wasClean and ctx().isLoggedIn) {
+        emscripten_async_call([]([[maybe_unused]] void* ud) { setupWebsocket(); }, nullptr, 2000);
+        // TODO: give up at some point?
+    }
     return EM_TRUE;
 }
 
-auto setupWebsocket(const std::string& url) -> void
+auto setupWebsocket() -> void
 {
-    INFO_VAR(url);
+    PREF_INFO("url: {}", ctx().url);
+    if (ctx().ws != 0) {
+        PREF_INFO("ws is already connected");
+        onWsOpen(0, nullptr, nullptr);
+        return;
+    }
     if (not emscripten_websocket_is_supported()) {
-        PREF_WARN("WebSocket is not supported");
+        PREF_WARN("ws is not supported");
         return;
     }
     EmscriptenWebSocketCreateAttributes attr = {};
-    attr.url = url.c_str();
+    attr.url = ctx().url.c_str();
     attr.protocols = nullptr;
     attr.createOnMainThread = EM_TRUE;
     ctx().ws = emscripten_websocket_new(&attr);
@@ -1243,6 +1351,7 @@ auto drawSpeechBubbleText(const r::Vector2& p3, const std::string& text, const D
 
 auto drawGameplayScreen() -> void
 {
+    if (ctx().areAllPlayersJoined()) { return; }
     const auto title = ctx().localizeText(GameText::Preferans);
     const auto textSize = ctx().fontL.MeasureText(title, ctx().fontSizeL(), FontSpacing);
     const auto x = (VirtualW - textSize.x) * 0.5f;
@@ -1250,13 +1359,14 @@ auto drawGameplayScreen() -> void
     ctx().fontL.DrawText(title, {x, y}, ctx().fontSizeL(), FontSpacing, getGuiColor(LABEL, TEXT_COLOR_NORMAL));
 }
 
-auto drawEnterNameScreen() -> void
+auto drawLoginScreen() -> void
 {
+    if (ctx().isLoggedIn or ctx().isLoginInProgress) { return; }
     static constexpr auto boxWidth = VirtualW / 5.f;
     static constexpr auto boxHeight = RAYGUI_TEXTINPUTBOX_HEIGHT;
     static constexpr auto textInputBoxWidth = boxWidth + RAYGUI_TEXTINPUTBOX_BUTTON_PADDING * 2.f;
     static constexpr auto textInputBoxHeight = boxHeight * 4.5f;
-    static constexpr auto maxLengthSecret = 27;
+    static constexpr auto maxLengthPassword = 27;
     static constexpr auto maxLengthName = 11;
     static const auto screenCenter = r::Vector2{VirtualW, VirtualH} * 0.5f;
     static const auto textInputBox = r::Rectangle{
@@ -1265,9 +1375,9 @@ auto drawEnterNameScreen() -> void
         textInputBoxWidth,
         textInputBoxHeight};
 
-    static auto secretBuffer = loadFromLocalStorage("player_secret");
-    secretBuffer.resize(maxLengthSecret);
-    static bool secretViewActive = false;
+    static auto passwordBuffer = std::string{};
+    passwordBuffer.resize(maxLengthPassword);
+    static bool passwordViewActive = false;
 
     const auto clicked = withGuiFont(ctx().fontS, [&] {
         const auto loginText = ctx().localizeText(GameText::Login);
@@ -1277,15 +1387,15 @@ auto drawEnterNameScreen() -> void
             loginText.c_str(),
             "",
             enterText.c_str(),
-            std::data(secretBuffer),
-            maxLengthSecret,
-            &secretViewActive);
+            std::data(passwordBuffer),
+            maxLengthPassword,
+            &passwordViewActive);
     });
 
     static const auto loginBoxPos = r::Vector2{screenCenter.x - boxWidth * 0.5f, screenCenter.y - boxHeight * 1.5f};
     static const auto loginInputBox = r::Rectangle{loginBoxPos, {boxWidth, boxHeight}};
     static auto loginEditMode = true;
-    static auto loginBuffer = loadFromLocalStorage("player_login");
+    static auto loginBuffer = ctx().myPlayerName;
     loginBuffer.resize(maxLengthName);
     if (withGuiFont(ctx().fontS, [&] {
             return GuiTextBox(loginInputBox, std::data(loginBuffer), maxLengthName, loginEditMode);
@@ -1305,20 +1415,61 @@ auto drawEnterNameScreen() -> void
         loginEditMode = true;
     }
     if ((1 == clicked or r::Keyboard::IsKeyPressed(KEY_ENTER))
-        and std::strlen(loginBuffer.c_str()) != 0
-        and std::strlen(secretBuffer.c_str()) != 0) {
+                    and ((std::strlen(loginBuffer.c_str()) != 0 and std::strlen(passwordBuffer.c_str()) != 0)
+                        // TODO: remove allowing to login without password after implementing Enter Screen
+                or (std::strlen(loginBuffer.c_str()) != 0
+                    and not std::empty(ctx().authToken)
+                    and not std::empty(ctx().myPlayerId)))) {
         loginEditMode = false;
-        ctx().enteredPlayerName = loginBuffer.c_str();
-        ctx().enteredPlayerSecret = secretBuffer.c_str();
-        saveToLocalStorage("player_login", ctx().enteredPlayerName);
-        // FIXME: don't store a secret in the local storage
-        saveToLocalStorage("player_secret", ctx().enteredPlayerSecret);
-        sendJoinRequest();
+        ctx().myPlayerName = loginBuffer.c_str();
+        ctx().password = passwordBuffer.c_str();
+        passwordBuffer.clear();
+        saveToLocalStoragePlayerName();
+        setupWebsocket();
     }
+}
+
+auto drawLogoutMessage() -> void
+{
+    if (not ctx().logoutMessage.isVisible) { return; }
+    if (r::Keyboard::IsKeyPressed(KEY_ESCAPE)) {
+        ctx().logoutMessage.isVisible = false;
+        return;
+    }
+    assert(ctx().isLoggedIn);
+    static constexpr auto boxWidth = VirtualW / 5.f;
+    static constexpr auto boxHeight = RAYGUI_TEXTINPUTBOX_HEIGHT;
+    static constexpr auto messageBoxWidth = boxWidth + RAYGUI_TEXTINPUTBOX_BUTTON_PADDING * 2.f;
+    static constexpr auto messageBoxHeight = boxHeight * 4.5f;
+    static const auto messageBox = r::Rectangle{
+        VirtualW - CardBorderMargin - CardWidth - messageBoxWidth - 20,
+        BorderMargin + 170,
+        messageBoxWidth,
+        messageBoxHeight};
+    const auto clicked = withGuiFont(ctx().fontS, [&] {
+        const auto logoutText = ctx().localizeText(GameText::LogOut);
+        const auto areYouSureText = ctx().localizeText(GameText::AreYouSureYouWantToLogOut);
+        const auto yesNoText = std::format(
+            "{};{}", //
+            ctx().localizeText(GameText::Yes),
+            ctx().localizeText(GameText::No));
+        return GuiMessageBox(messageBox, logoutText.c_str(), areYouSureText.c_str(), yesNoText.c_str());
+    });
+    if (clicked == -1) { return; }
+    if (clicked == 1) {
+        sendLogout();
+        ctx().authToken.clear();
+        removeFromLocalStoragePlayerId();
+        removeFromLocalStorageAuthToken();
+        ctx().isLoggedIn = false;
+        emscripten_websocket_close(ctx().ws, 1000, "Logout");
+    }
+    ctx().logoutMessage.isVisible = false;
 }
 
 auto drawConnectedPlayersPanel() -> void
 {
+    if (not ctx().isLoggedIn or ctx().areAllPlayersJoined()) { return; }
     static constexpr auto pad = VirtualH / 108.f;
     static constexpr auto minWidth = VirtualW / 9.6f;
     static constexpr auto minHeight = VirtualH / 13.5f;
@@ -1843,7 +1994,13 @@ template<typename... Args>
 [[nodiscard]] auto makeAwesomeCodepoints() -> auto
 {
     return makeCodepoints(
-        ScoreSheetIcon, SettingsIcon, EnterFullScreenIcon, ExitFullScreenIcon, SpeechBubbleIcon, OverallScoreboardIcon);
+        ScoreSheetIcon,
+        SettingsIcon,
+        EnterFullScreenIcon,
+        ExitFullScreenIcon,
+        SpeechBubbleIcon,
+        OverallScoreboardIcon,
+        LogoutIcon);
 }
 
 auto loadFonts() -> void
@@ -1908,7 +2065,7 @@ auto loadLang(const std::string_view lang) -> void
     saveToLocalStorage("language", name);
 }
 
-auto drawToolbarButton(const int indexFromRight, const char* icon, const auto onClick) -> void
+auto drawToolbarButton(const int indexFromRight, const char* icon, const auto onClick, bool isButtom = true) -> void
 {
     assert(indexFromRight >= 1);
     static constexpr auto buttonW = VirtualW / 30.f;
@@ -1917,7 +2074,7 @@ auto drawToolbarButton(const int indexFromRight, const char* icon, const auto on
     const auto i = static_cast<float>(indexFromRight);
     const auto bounds = r::Rectangle{
         VirtualW - buttonW * i - BorderMargin - gapBetweenButtons * (i - 1),
-        VirtualH - buttonH - BorderMargin,
+        isButtom ? VirtualH - buttonH - BorderMargin : BorderMargin,
         buttonW,
         buttonH};
     withGuiFont(ctx().fontAwesome, [&] {
@@ -1957,6 +2114,21 @@ auto drawScoreSheetButton() -> void
 auto drawSpeechBubbleButton() -> void
 {
     drawMenuButton(ctx().speechBubbleMenu, 5, SpeechBubbleIcon);
+}
+
+auto drawLogoutButton() -> void
+{
+    if (not ctx().isLoggedIn) { return; }
+    withGuiState(STATE_PRESSED, ctx().logoutMessage.isVisible, [&] {
+        drawToolbarButton(
+            1,
+            LogoutIcon,
+            [&] { // TODO: don't close settingsMenu
+                ctx().settingsMenu.isVisible = false;
+                ctx().logoutMessage.isVisible = true;
+            },
+            false);
+    });
 }
 
 auto speechBubbleCooldown() -> void
@@ -2092,6 +2264,8 @@ auto drawSettingsMenu() -> void
              SettingsMenu::windowBoxW,
              windowBoxH},
             settingsText.c_str());
+        // TODO: don't close logoutMessage
+        if (ctx().settingsMenu.isVisible) { ctx().logoutMessage.isVisible = false; }
         GuiGroupBox({langGroupBox.x, langGroupBox.y, groupBoxW, langGroupBoxH}, languageText.c_str());
         GuiListView(
             {langListView.x, langListView.y, listViewW, langListViewH},
@@ -2477,7 +2651,6 @@ auto updateMenuPosition(Menu& menu) -> void
 
 auto updateDrawFrame([[maybe_unused]] void* ud) -> void
 {
-    if (std::empty(ctx().myPlayerId)) { ctx().myPlayerId = loadPlayerIdFromLocalStorage(); }
     if (GuiIsLocked()
         and not ctx().settingsMenu.moving
         and not ctx().speechBubbleMenu.moving
@@ -2491,20 +2664,13 @@ auto updateDrawFrame([[maybe_unused]] void* ud) -> void
 
     ctx().target.BeginMode();
     ctx().window.ClearBackground(getGuiColor(BACKGROUND_COLOR));
-    drawBiddingMenu();
-    drawWhistingOrMiserMenu();
-    drawHowToPlayMenu();
-    if (not ctx().isLogin) {
-        drawGameplayScreen();
-        drawEnterNameScreen();
-        drawSettingsButton();
-        drawFullScreenButton();
-        drawPingAndFps();
-        drawSettingsMenu();
-        ctx().target.EndMode();
-        goto end;
-    }
-    if (ctx().areAllPlayersJoined()) {
+    drawGameplayScreen();
+    drawLoginScreen();
+    drawLogoutButton();
+    if (ctx().areAllPlayersJoined() and ctx().isLoggedIn) {
+        drawWhistingOrMiserMenu();
+        drawHowToPlayMenu();
+        drawBiddingMenu();
         drawMyHand();
         drawRightHand();
         drawLeftHand();
@@ -2520,13 +2686,13 @@ auto updateDrawFrame([[maybe_unused]] void* ud) -> void
     drawSettingsButton();
     drawFullScreenButton();
     drawPingAndFps();
-    if (ctx().areAllPlayersJoined()) {
+    if (ctx().areAllPlayersJoined() and ctx().isLoggedIn) {
         drawOverallScoreboard();
         drawSpeechBubbleMenu();
     }
     drawSettingsMenu();
+    drawLogoutMessage();
     ctx().target.EndMode();
-end:
     ctx().window.BeginDrawing();
     ctx().window.ClearBackground(getGuiColor(BACKGROUND_COLOR));
     ctx().target.GetTexture().Draw(
@@ -2558,14 +2724,18 @@ int main(const int argc, const char* const argv[])
     auto& ctx = pref::ctx();
     pref::updateWindowSize();
     SetTextureFilter(ctx.target.texture, TEXTURE_FILTER_BILINEAR);
-    const auto lang = pref::loadFromLocalStorage("language");
-    const auto colorScheme = pref::loadFromLocalStorage("color_scheme");
+    pref::loadFromLocalStoragePlayerId();
+    pref::loadFromLocalStorageAuthToken();
+    pref::loadFromLocalStoragePlayerName();
     ctx.settingsMenu.showPingAndFps = not std::empty(pref::loadFromLocalStorage("show_ping_and_fps"));
     const auto args = docopt::docopt(pref::usage, {std::next(argv), std::next(argv, argc)});
+    ctx.url = args.at("--url").asString();
+    const auto lang = pref::loadFromLocalStorage("language");
     pref::loadLang(not std::empty(lang) ? lang : args.at("--language").asString());
     GuiLoadStyleDefault();
-    ctx.initialFont = GuiGetFont();
+    const auto colorScheme = pref::loadFromLocalStorage("color_scheme");
     pref::loadColorScheme(not std::empty(colorScheme) ? colorScheme : args.at("--color-scheme").asString());
+    ctx.initialFont = GuiGetFont();
     pref::loadFonts();
     emscripten_set_resize_callback(
         EMSCRIPTEN_EVENT_TARGET_WINDOW,
@@ -2585,8 +2755,12 @@ int main(const int argc, const char* const argv[])
             pref::updateWindowSize();
             return EM_FALSE;
         });
-    pref::setupWebsocket(args.at("--url").asString());
-    static constexpr auto fps = 60;
-    emscripten_set_main_loop_arg(pref::updateDrawFrame, nullptr, fps, true);
+
+    if (not std::empty(ctx.myPlayerId) and not std::empty(ctx.authToken)) {
+        ctx.isLoginInProgress = true;
+        pref::setupWebsocket();
+    }
+    emscripten_set_main_loop_arg(pref::updateDrawFrame, nullptr, 0, true);
+    emscripten_websocket_deinitialize();
     return 0;
 }

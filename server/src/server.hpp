@@ -6,6 +6,11 @@
 
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
+#ifdef PREF_SSL
+#include <boost/asio/ssl.hpp>
+#include <boost/asio/ssl/context.hpp>
+#include <boost/beast/websocket/ssl.hpp>
+#endif // PREF_SSL
 #include <fmt/core.h>
 #include <fmt/format.h>
 #include <fmt/std.h>
@@ -39,7 +44,11 @@ namespace boost::system {
 namespace pref {
 
 using SteadyTimer = net::steady_timer;
+#ifdef PREF_SSL
+using Stream = web::stream<net::ssl::stream<beast::tcp_stream>>;
+#else // PREF_SSL
 using Stream = web::stream<beast::tcp_stream>;
+#endif // PREF_SSL
 using Hand = std::set<CardName>;
 
 template<typename T = void>
@@ -197,7 +206,11 @@ struct Beat {
 [[nodiscard]] auto finishTrick(const std::vector<PlayedCard>& trick, std::string_view trump) -> Player::Id;
 [[nodiscard]] auto calculateDealScore(const Declarer& declarer, const std::vector<Whister>& whisters) -> DealScore;
 
-auto acceptConnectionAndLaunchSession(net::ip::tcp::endpoint endpoint) -> Awaitable<>;
+auto acceptConnectionAndLaunchSession(
+#ifdef PREF_SSL
+    net::ssl::context ssl,
+#endif // PREF_SSL
+    net::ip::tcp::endpoint endpoint) -> Awaitable<>;
 
 // NOLINTNEXTLINE
 [[maybe_unused]] auto inline format_as(const DealScoreEntry& entry) -> std::string

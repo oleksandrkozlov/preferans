@@ -5,11 +5,13 @@
 #include "proto/pref.pb.h"
 
 #include <fmt/format.h>
+#include <fmt/std.h>
 #include <range/v3/all.hpp>
 
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <optional>
 #include <string>
@@ -245,29 +247,41 @@ template<typename Range, typename Value, typename ProjIn = rng::identity, typena
         GameType_Name(game.game_type()));
 }
 
-// TODO: use C++26 Reflection
-// clang-format off
 template<typename T>
-           [[nodiscard]] constexpr auto methodName() noexcept -> std::string_view { return "Unknown"; }
-template<> [[nodiscard]] constexpr auto methodName<Bidding>() noexcept -> std::string_view { return "Bidding"; }
-template<> [[nodiscard]] constexpr auto methodName<DealCards>() noexcept -> std::string_view { return "DealCards"; }
-template<> [[nodiscard]] constexpr auto methodName<DiscardTalon>() noexcept -> std::string_view { return "DiscardTalon"; }
-template<> [[nodiscard]] constexpr auto methodName<JoinRequest>() noexcept -> std::string_view { return "JoinRequest"; }
-template<> [[nodiscard]] constexpr auto methodName<JoinResponse>() noexcept -> std::string_view { return "JoinResponse"; }
-template<> [[nodiscard]] constexpr auto methodName<PlayCard>() noexcept -> std::string_view { return "PlayCard"; }
-template<> [[nodiscard]] constexpr auto methodName<PlayerJoined>() noexcept -> std::string_view { return "PlayerJoined"; }
-template<> [[nodiscard]] constexpr auto methodName<PlayerLeft>() noexcept -> std::string_view { return "PlayerLeft"; }
-template<> [[nodiscard]] constexpr auto methodName<PlayerTurn>() noexcept -> std::string_view { return "PlayerTurn"; }
-template<> [[nodiscard]] constexpr auto methodName<DealFinished>() noexcept -> std::string_view { return "DealFinished"; }
-template<> [[nodiscard]] constexpr auto methodName<TrickFinished>() noexcept -> std::string_view { return "TrickFinished"; }
-template<> [[nodiscard]] constexpr auto methodName<Whisting>() noexcept -> std::string_view { return "Whisting"; }
-template<> [[nodiscard]] constexpr auto methodName<SpeechBubble>() noexcept -> std::string_view { return "SpeechBubble"; }
-template<> [[nodiscard]] constexpr auto methodName<Log>() noexcept -> std::string_view { return "Log"; }
-template<> [[nodiscard]] constexpr auto methodName<HowToPlay>() noexcept -> std::string_view { return "HowToPlay"; }
-template<> [[nodiscard]] constexpr auto methodName<PingPong>() noexcept -> std::string_view { return "PingPong"; }
-template<> [[nodiscard]] constexpr auto methodName<OpenWhistPlay>() noexcept -> std::string_view { return "OpenWhistPlay"; }
-template<> [[nodiscard]] constexpr auto methodName<UserGames>() noexcept -> std::string_view { return "UserGames"; }
-// clang-format on
+[[nodiscard]] constexpr auto methodName() noexcept -> std::string_view
+{
+    return "Unknown";
+}
+
+#define DEFINE_METHOD_NAME(Type)                                                                                       \
+    template<>                                                                                                         \
+    [[nodiscard]]                                                                                                      \
+    constexpr auto methodName<Type>() noexcept -> std::string_view                                                     \
+    {                                                                                                                  \
+        return #Type;                                                                                                  \
+    }
+
+DEFINE_METHOD_NAME(LoginRequest)
+DEFINE_METHOD_NAME(LoginResponse)
+DEFINE_METHOD_NAME(AuthRequest)
+DEFINE_METHOD_NAME(AuthResponse)
+DEFINE_METHOD_NAME(Logout)
+DEFINE_METHOD_NAME(Bidding)
+DEFINE_METHOD_NAME(DealCards)
+DEFINE_METHOD_NAME(DiscardTalon)
+DEFINE_METHOD_NAME(PlayCard)
+DEFINE_METHOD_NAME(PlayerJoined)
+DEFINE_METHOD_NAME(PlayerLeft)
+DEFINE_METHOD_NAME(PlayerTurn)
+DEFINE_METHOD_NAME(DealFinished)
+DEFINE_METHOD_NAME(TrickFinished)
+DEFINE_METHOD_NAME(Whisting)
+DEFINE_METHOD_NAME(SpeechBubble)
+DEFINE_METHOD_NAME(Log)
+DEFINE_METHOD_NAME(HowToPlay)
+DEFINE_METHOD_NAME(PingPong)
+DEFINE_METHOD_NAME(OpenWhistPlay)
+DEFINE_METHOD_NAME(UserGames)
 
 template<typename Method>
 [[nodiscard]] auto makeMessage(const Method& method) -> Message
@@ -288,6 +302,14 @@ template<typename Method>
         return {};
     }
     return result;
+}
+
+// TODO: remove if unused
+[[maybe_unused]] [[nodiscard]] inline auto readFile(const fs::path& path) -> std::string
+{
+    auto in = std::ifstream{path};
+    if (not in) { throw std::runtime_error{fmt::format("{}: {}, {}", __func__, std::strerror(errno), VAR(path))}; }
+    return std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
 }
 
 } // namespace pref
