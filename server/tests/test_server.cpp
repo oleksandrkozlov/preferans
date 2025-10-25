@@ -5,6 +5,10 @@
 #include <catch2/catch_all.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <string>
+#include <string_view>
+#include <vector>
+
 template<>
 struct Catch::StringMaker<pref::DealScoreEntry> {
     static auto convert(const pref::DealScoreEntry& entry) -> std::string
@@ -384,6 +388,25 @@ TEST_CASE("auth")
     {
         const auto password = "aboba";
         REQUIRE(verifyPassword(password, hashPassword(password)));
+    }
+
+    SECTION("toBytes")
+    {
+        const auto str = "aboba"s;
+        const auto view = "aboba"sv;
+        const auto vec = std::list<char>{'a', 'b', 'o', 'b', 'a', '\n'};
+        const auto spanFromStr = toBytes(str);
+        const auto spanFromView = toBytes(view);
+        const auto spanFromVec = toBytes(vec);
+
+        const auto strFromSpanStr = std::string{std::cbegin(spanFromStr), std::cend(spanFromStr)};
+        const auto strFromSpanView = std::string{std::cbegin(spanFromView), std::cend(spanFromView)};
+        const auto viewFromSpanView = std::string_view{std::cbegin(strFromSpanView), std::cend(strFromSpanView)};
+        const auto vecFromSpanVec = std::vector<char>{std::cbegin(spanFromVec), std::cend(spanFromVec)};
+
+        REQUIRE(str == strFromSpanStr);
+        REQUIRE(view == viewFromSpanView);
+        REQUIRE(vec == vecFromSpanVec);
     }
 }
 

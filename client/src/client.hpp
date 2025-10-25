@@ -25,6 +25,7 @@ inline constexpr auto CardWidth = CardHeight * CardAspectRatio;
 inline constexpr auto CardOverlapX = CardWidth * 0.54f;
 inline constexpr auto CardOverlapY = CardHeight * 0.26f;
 inline constexpr auto CardBorderMargin = VirtualW / 30.f;
+inline constexpr auto MyCardBorderMarginY = CardHeight / 10.8f;
 inline constexpr auto CardInnerMargin = VirtualW / 100.f;
 inline constexpr auto FontSpacing = 1.f;
 inline constexpr auto BorderMargin = VirtualW / 52.f;
@@ -72,7 +73,7 @@ inline constexpr auto PREF_ACE_OF_CLUBS = 0x1F0D1;
 inline constexpr auto PREF_ACE_OF_DIAMONDS = 0x1F0C1;
 inline constexpr auto PREF_ACE_OF_HEARTS = 0x1F0B1;
 
-[[nodiscard]] inline constexpr auto cardNameCodepoint(const std::string_view cardName) noexcept -> int
+[[nodiscard]] inline constexpr auto cardNameCodepoint(const CardNameView cardName) noexcept -> int
 {
     if (cardName == SEVEN PREF_OF_ SPADES) { return PREF_SEVEN_OF_SPADES; }
     if (cardName == SEVEN PREF_OF_ CLUBS) { return PREF_SEVEN_OF_CLUBS; }
@@ -197,7 +198,6 @@ enum class GameText : std::size_t {
     English,
     Ukrainian,
     Alternative,
-    Light,
     Bluish,
     Dark,
     Amber,
@@ -257,7 +257,6 @@ inline constexpr auto localization = std::
             "English",
             "Ukrainian",
             "Alternative",
-            "Light",
             "Bluish",
             "Dark",
             "Amber",
@@ -313,7 +312,6 @@ inline constexpr auto localization = std::
             "Англійська",
             "Українська",
             "Альтернативна",
-            "Світлий",
             "Блакитний",
             "Темний",
             "Бурштин",
@@ -369,7 +367,6 @@ inline constexpr auto localization = std::
             "Английский",
             "Украинский",
             "Альтернативный",
-            "Светлый",
             "Голубоватый",
             "Тёмный",
             "Янтарь",

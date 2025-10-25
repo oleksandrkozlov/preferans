@@ -31,6 +31,12 @@ namespace pref {
 #define CLUB "♣"
 #define HEART "♥"
 #define DIAMOND "♦"
+
+inline constexpr std::string_view SpadeSign = SPADE;
+inline constexpr std::string_view ClubSign = CLUB;
+inline constexpr std::string_view HeartSign = HEART;
+inline constexpr std::string_view DiamondSign = DIAMOND;
+
 #define ARROW_RIGHT "▶"
 
 #define SIX "6"
@@ -46,8 +52,9 @@ namespace pref {
 #define PREF_WT "WT" // without talon
 #define NINE_WT NINE " " PREF_WT
 #define TEN_WT TEN " " PREF_WT
-#define PREF_MISER "Misère"
-#define PREF_MISER_WT "Mis." PREF_WT
+#define PREF_MIS "Mis"
+#define PREF_MISER PREF_MIS "ère" // Misère
+#define PREF_MISER_WT PREF_MIS "." PREF_WT // Mis.WT
 #define PREF_PASS "Pass"
 
 #define PREF_WHIST "Whist"
@@ -69,6 +76,10 @@ namespace fs = std::filesystem;
 using CardName = std::string;
 using PlayerId = std::string;
 using PlayerName = std::string;
+
+using CardNameView = std::string_view;
+using PlayerIdView = std::string_view;
+using PlayerNameView = std::string_view;
 
 // TODO: Support 4 players
 inline constexpr auto NumberOfPlayers = 3uz;
@@ -127,7 +138,7 @@ using FinalResult = std::map<PlayerId, std::int32_t>;
 
 [[nodiscard]] constexpr auto getTrump(const std::string_view bid) noexcept -> std::string_view
 {
-    if (bid.contains(PREF_WT) or bid.contains(PREF_MISER) or bid.contains(PREF_PASS)) { return {}; }
+    if (bid.contains(PREF_WT) or bid.contains(PREF_MIS) or bid.contains(PREF_PASS)) { return {}; }
     if (bid.contains(SPADE)) { return SPADES; }
     if (bid.contains(CLUB)) { return CLUBS; }
     if (bid.contains(HEART)) { return HEARTS; }
@@ -136,7 +147,7 @@ using FinalResult = std::map<PlayerId, std::int32_t>;
 }
 
 template<typename Callable>
-[[maybe_unused]] [[nodiscard]] auto unpair(Callable&& callable)
+[[nodiscard]] auto unpair(Callable&& callable)
 {
     return [cb = std::forward<Callable>(callable)](const auto& pair) { return cb(pair.first, pair.second); };
 }
@@ -157,6 +168,13 @@ template<typename Range, typename Value, typename ProjIn = rng::identity, typena
 [[nodiscard]] auto find(Range&& range, const Value& value, ProjIn projIn = {}, ProjOut projOut = {})
 {
     const auto it = rng::find(range, value, projIn);
+    return it != rng::cend(range) ? std::optional{std::ref(std::invoke(projOut, *it))} : std::nullopt;
+}
+
+template<typename Range, typename Pred, typename ProjIn = rng::identity, typename ProjOut = rng::identity>
+[[nodiscard]] auto findIf(Range&& range, Pred pred, ProjIn projIn = {}, ProjOut projOut = {})
+{
+    const auto it = rng::find_if(range, std::move(pred), projIn);
     return it != rng::cend(range) ? std::optional{std::ref(std::invoke(projOut, *it))} : std::nullopt;
 }
 
@@ -232,21 +250,6 @@ template<typename Range, typename Value, typename ProjIn = rng::identity, typena
     })) | rng::to<FinalScore>; // clang-format on
 }
 
-[[nodiscard]] [[maybe_unused]] inline auto formatGame(const UserGame& game) -> std::string
-{
-    return fmt::format(
-        "{{ ID: {}, DATE: {}, TIME: {}, MMR: {}, P/D/W: {}/{}/{}, DURATION: {}, TYPE: {} }}",
-        game.id(),
-        formatDate(game.timestamp()),
-        formatTime(game.timestamp()),
-        game.mmr(),
-        game.pool(),
-        game.dump(),
-        game.whists(),
-        formatDuration(game.duration()),
-        GameType_Name(game.game_type()));
-}
-
 template<typename T>
 [[nodiscard]] constexpr auto methodName() noexcept -> std::string_view
 {
@@ -282,6 +285,7 @@ DEFINE_METHOD_NAME(HowToPlay)
 DEFINE_METHOD_NAME(PingPong)
 DEFINE_METHOD_NAME(OpenWhistPlay)
 DEFINE_METHOD_NAME(UserGames)
+DEFINE_METHOD_NAME(OpenTalon)
 
 template<typename Method>
 [[nodiscard]] auto makeMessage(const Method& method) -> Message
@@ -310,6 +314,50 @@ template<typename Method>
     auto in = std::ifstream{path};
     if (not in) { throw std::runtime_error{fmt::format("{}: {}, {}", __func__, std::strerror(errno), VAR(path))}; }
     return std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+}
+
+template<typename T>
+inline constexpr bool IsOptionalV = false;
+
+template<typename T>
+inline constexpr bool IsOptionalV<std::optional<T>> = true;
+
+template<typename T>
+concept Optional = IsOptionalV<std::remove_cvref_t<T>>;
+
+template<typename F, typename Opt>
+concept ValueAction = Optional<Opt> and requires(F&& f, typename std::remove_cvref_t<Opt>::value_type v) {
+    { std::invoke(std::forward<F>(f), v) } -> std::same_as<void>;
+};
+
+template<typename F, typename Opt>
+concept NoneAction = Optional<Opt> and requires(F&& f) {
+    { std::invoke(std::forward<F>(f)) } -> std::same_as<void>;
+};
+
+inline constexpr auto onValue = [](auto&& f) {
+    return [fn = std::forward<decltype(f)>(f)](auto&& opt) -> decltype(auto)
+               requires ValueAction<decltype(f), decltype(opt)>
+    {
+        if (opt) { fn(*opt); }
+        return std::forward<decltype(opt)>(opt);
+    };
+};
+
+inline constexpr auto onNone = [](auto&& f) {
+    return [fn = std::forward<decltype(f)>(f)](auto&& opt) -> decltype(auto)
+               requires NoneAction<decltype(f), decltype(opt)>
+    {
+        if (!opt) { fn(); }
+        return std::forward<decltype(opt)>(opt);
+    };
+};
+
+template<typename Opt, typename F>
+    requires IsOptionalV<std::decay_t<Opt>>
+auto operator|(Opt&& opt, F&& f)
+{
+    return std::invoke(std::forward<F>(f), std::forward<Opt>(opt));
 }
 
 } // namespace pref

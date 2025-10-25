@@ -1,3 +1,4 @@
+#include "game_data.hpp"
 #include "server.hpp"
 
 #include <boost/asio.hpp>

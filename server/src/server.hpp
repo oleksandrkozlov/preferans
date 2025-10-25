@@ -66,8 +66,8 @@ struct Player {
     using Id = PlayerId;
     using Name = PlayerName;
 
-    using IdView = std::string_view;
-    using NameView = std::string_view;
+    using IdView = PlayerIdView;
+    using NameView = PlayerNameView;
 
     Player() = default;
     Player(Id aId, Name aName, PlayerSession::Id aSessionId, const std::shared_ptr<Stream>& aWs);
@@ -129,9 +129,18 @@ struct Declarer {
     int tricksTaken{};
 };
 
-auto storeGameData(const fs::path& path, const GameData& gameData) -> void;
-[[nodiscard]] auto loadGameData(const fs::path& path) -> GameData;
-[[nodiscard]] auto lastGameId(const GameData& gameData) -> std::int32_t;
+struct Talon {
+    std::size_t open{};
+    CardName current;
+    std::vector<CardName> cards;
+
+    auto clear() -> void
+    {
+        current.clear();
+        cards.clear();
+        open = 0;
+    }
+};
 
 struct Context {
     using Players = std::map<Player::Id, Player>;
@@ -152,18 +161,22 @@ struct Context {
         talon.clear();
         trick.clear();
         trump.clear();
+        isPassGame = false;
+        isDeclarerFirstMiserTurn = false;
         for (auto&& [_, p] : players) { p.clear(); }
     }
 
     mutable Players players;
     Players::const_iterator whoseTurnIt;
-    std::vector<CardName> talon;
+    Talon talon;
     std::vector<PlayedCard> trick;
     std::string trump;
+    bool isPassGame{};
     Player::Id forehandId;
     ScoreSheet scoreSheet;
-    fs::path gameDataPath{};
+    fs::path gameDataPath;
     GameData gameData;
+    bool isDeclarerFirstMiserTurn{};
 
     std::int32_t gameId{};
     std::int64_t gameStarted{};

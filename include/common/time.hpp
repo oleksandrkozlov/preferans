@@ -1,27 +1,34 @@
 #pragma once
 
 #include <date/date.h>
+#include <date/tz.h>
 
 #include <chrono>
 #include <cstdint>
 
 namespace pref {
 
-// FIXME: consider time zone
-
-[[nodiscard]] inline auto timeSinceEpochInSec() -> std::int64_t
+[[nodiscard]] inline auto toDateSysSec(const std::int64_t sec) -> date::sys_seconds
 {
-    return date::floor<std::chrono::seconds>(std::chrono::system_clock::now()).time_since_epoch().count();
+    return date::sys_seconds{std::chrono::seconds{sec}};
+}
+
+[[nodiscard]] inline auto toLocalTime(const std::int64_t timeSinceEpochInSec) -> std::int64_t
+{
+    const auto sec = toDateSysSec(timeSinceEpochInSec);
+    return date::floor<std::chrono::seconds>(sec + date::current_zone()->get_info(sec).offset)
+        .time_since_epoch()
+        .count();
+}
+
+[[nodiscard]] inline auto localTimeSinceEpochInSec() -> std::int64_t
+{
+    return toLocalTime(date::floor<std::chrono::seconds>(std::chrono::system_clock::now()).time_since_epoch().count());
 }
 
 [[nodiscard]] inline auto durationInSec(const std::int64_t start) -> std::int32_t
 {
-    return static_cast<std::int32_t>(timeSinceEpochInSec() - start);
-}
-
-[[nodiscard]] inline auto toDateSysSec(const std::int64_t sec) -> date::sys_seconds
-{
-    return date::sys_seconds{std::chrono::seconds{sec}};
+    return static_cast<std::int32_t>(localTimeSinceEpochInSec() - start);
 }
 
 [[nodiscard]] inline auto formatDate(const std::int64_t sec) -> std::string

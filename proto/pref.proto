@@ -75,6 +75,10 @@ message Bidding {
     string bid = 2; // e.g., "8♠", "PASS", "MISER", etc.
 }
 
+message OpenTalon {
+    string card = 1;
+}
+
 message DiscardTalon {
     string player_id = 1;
     repeated string cards = 2; // queen_of_hearts, etc.

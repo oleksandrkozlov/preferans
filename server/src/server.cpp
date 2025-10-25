@@ -1,16 +1,16 @@
 #include "server.hpp"
 
 #include "auth.hpp"
+#include "common/common.hpp"
 #include "common/time.hpp"
+#include "game_data.hpp"
 
 #include <fmt/ranges.h>
 #include <range/v3/all.hpp>
 
 #include <array>
 #include <cassert>
-#include <expected>
 #include <functional>
-#include <gsl/assert>
 #include <gsl/gsl>
 #include <iterator>
 #include <utility>
@@ -39,13 +39,13 @@ auto setWhoseTurn(const auto& it) -> void
 {
     ctx().whoseTurnIt = it;
     const auto& [playerId, player] = *(ctx().whoseTurnIt);
-    INFO_VAR(playerId, player.name);
+    INFO_VAR(player.name, playerId);
 }
 
 auto setForehandId() -> void
 {
     ctx().forehandId = ctx().whoseTurnId();
-    INFO_VAR(ctx().forehandId);
+    PREF_INFO("playerId: {}", ctx().forehandId);
 }
 
 auto resetWhoseTurn() -> void
@@ -76,7 +76,7 @@ auto advanceWhoseTurn(const GameStage stage) -> void
 {
     PREF_INFO("stage: {}", GameStage_Name(stage));
     advanceWhoseTurn();
-    if (not rng::contains(std::initializer_list{GameStage::BIDDING, GameStage::TALON_PICKING}, stage)) { return; }
+    if (not rng::contains(std::array{GameStage::BIDDING, GameStage::TALON_PICKING}, stage)) { return; }
     while (ctx().player(ctx().whoseTurnId()).bid == PREF_PASS) { advanceWhoseTurn(); }
 }
 
@@ -94,7 +94,7 @@ auto setNextDealTurn() -> void
     const auto winnerId = finishTrick(ctx().trick, ctx().trump);
     const auto winnerName = ctx().playerName(winnerId);
     const auto tricksTaken = ++ctx().player(winnerId).tricksTaken;
-    INFO_VAR(winnerId, winnerName, tricksTaken);
+    INFO_VAR(winnerName, winnerId, tricksTaken);
     ctx().trick.clear();
     return winnerId;
 }
@@ -180,36 +180,16 @@ auto setNextDealTurn() -> void
     std::unreachable();
 }
 
-auto addOrUpdateUserGame(GameData& gameData, const Player::IdView playerId, const UserGame& newGame) -> void
+[[nodiscard]] auto findDeclarerId(const Context::Players& players)
 {
-    auto& users = *gameData.mutable_users();
-    const auto userIt = rng::find(users, playerId, &User::player_id);
-    if (userIt == rng::end(users)) {
-        PREF_WARN("error: {} not found", VAR(playerId));
-        return;
-    }
-    auto& user = *userIt;
-    auto& games = *user.mutable_games();
-    const auto gameIt = rng::find(games, newGame.id(), &UserGame::id);
-    if (gameIt != rng::end(games)) {
-        gameIt->MergeFrom(newGame);
-    } else {
-        user.add_games()->CopyFrom(newGame);
-    }
-}
-
-[[nodiscard]] auto findDeclarerId(const Context::Players& players) -> std::expected<Player::Id, std::string>
-{
-    for (const auto& [playerId, player] : players) {
-        if (player.bid != PREF_PASS) { return playerId; }
-    }
-    return std::unexpected{"could not find declarerId"};
+    const auto values = players | rv::values;
+    return pref::findIf(values, notEqualTo(PREF_PASS), &Player::bid, &Player::id);
 }
 
 [[nodiscard]] auto getDeclarer(Context::Players& players) -> Player&
 {
     const auto declarerId = findDeclarerId(players);
-    assert(declarerId.has_value() and players.contains(*declarerId) and "declarer exists");
+    assert(declarerId and players.contains(*declarerId) and "declarer exists");
     return players[*declarerId];
 }
 
@@ -371,37 +351,6 @@ auto addCardToHand(const Player::Id& playerId, const std::string& card) -> void
     return result;
 }
 
-[[nodiscard]] auto userByPlayerId(const Player::IdView playerId) -> User&
-{
-    return pref::find(*ctx().gameData.mutable_users(), playerId, &User::player_id).value().get();
-}
-
-// TODO: support token expiration
-auto addAuthToken(const Player::IdView playerId, std::string serverAuthToken) -> void
-{
-    auto& user = userByPlayerId(playerId);
-    user.add_auth_tokens(std::move(serverAuthToken));
-    const auto totalTokens = std::size(user.auth_tokens());
-    INFO_VAR(playerId, totalTokens);
-    storeGameData(ctx().gameDataPath, ctx().gameData);
-}
-
-auto revokeAuthToken(const Player::IdView playerId, const std::string_view serverAuthToken) -> void
-{
-    INFO_VAR(playerId);
-    pref::find(*ctx().gameData.mutable_users(), playerId, &User::player_id)
-        .transform([&](auto&& user) -> std::monostate {
-            auto& tokens = *user.get().mutable_auth_tokens();
-            const auto tokensCount = std::size(tokens);
-            tokens.erase(rng::remove(tokens, serverAuthToken), rng::end(tokens));
-            const auto tokensLeft = std::size(tokens);
-            const auto tokensRemoved = tokensCount - tokensLeft;
-            INFO_VAR(playerId, tokensRemoved, tokensLeft);
-            return {};
-        });
-    storeGameData(ctx().gameDataPath, ctx().gameData);
-}
-
 [[nodiscard]] auto makePlayerLeft(const Player::Id& playerId) -> PlayerLeft
 {
     INFO_VAR(playerId);
@@ -426,8 +375,8 @@ auto revokeAuthToken(const Player::IdView playerId, const std::string_view serve
     result.set_stage(stage);
     result.set_can_half_whist(false); // default
     if (stage == GameStage::TALON_PICKING) {
-        assert((std::size(ctx().talon) == 2) and "talon is two cards");
-        for (const auto& card : ctx().talon) {
+        assert((std::size(ctx().talon.cards) == 2) and "talon is two cards");
+        for (const auto& card : ctx().talon.cards) {
             addCardToHand(playerId, card);
             result.add_talon(card);
         }
@@ -437,8 +386,7 @@ auto revokeAuthToken(const Player::IdView playerId, const std::string_view serve
             const auto canHalfWhist = [&](const Player& self, const Player& other) {
                 return self.id == playerId and std::empty(self.whistingChoice) and other.whistingChoice == PREF_PASS;
             };
-            if (const auto& [w0, w1] = getWhisters(ctx().players);
-                canHalfWhist(w0.get(), w1.get()) or canHalfWhist(w1.get(), w0.get())) {
+            if (const auto& [w0, w1] = getWhisters(ctx().players); canHalfWhist(w0, w1) or canHalfWhist(w1, w0)) {
                 result.set_can_half_whist(true);
             }
         }
@@ -503,38 +451,11 @@ auto revokeAuthToken(const Player::IdView playerId, const std::string_view serve
     return result;
 }
 
-[[nodiscard]] auto makeUserGames(const Player::Id& playerId) -> UserGames
+[[nodiscard]] auto makeOpenTalon(const CardName& card) -> OpenTalon
 {
-    auto result = UserGames{};
-    for (const auto& game : userByPlayerId(playerId).games()) { *result.add_games() = game; }
-    return result;
-}
-
-[[nodiscard]] auto makeUserGame(
-    const std::int32_t gameId,
-    const std::int32_t duration,
-    const std::int32_t pool,
-    const std::int32_t dump,
-    const std::int32_t whists,
-    const std::int32_t mmr) -> UserGame
-{
-    auto result = UserGame{};
-    result.set_id(gameId);
-    result.set_duration(duration);
-    result.set_pool(pool);
-    result.set_dump(dump);
-    result.set_whists(whists);
-    result.set_mmr(mmr);
-    return result;
-}
-
-[[nodiscard]] [[maybe_unused]] auto makeUserGame(
-    const std::int32_t gameId, const GameType gameType, const std::int64_t timestamp) -> UserGame
-{
-    auto result = UserGame{};
-    result.set_id(gameId);
-    result.set_game_type(gameType);
-    result.set_timestamp(timestamp);
+    INFO_VAR(card);
+    auto result = OpenTalon{};
+    result.set_card(card);
     return result;
 }
 
@@ -617,10 +538,17 @@ auto sendPingPong(const Message& msg, const std::shared_ptr<Stream>& ws) -> Awai
 auto sendUserGames() -> Awaitable<>
 {
     for (const auto& player : ctx().players | rv::values) {
-        if (const auto error = co_await sendToOne(makeMessage(makeUserGames(player.id)), player.ws)) {
+        if (const auto error = co_await sendToOne(makeMessage(makeUserGames(ctx().gameData, player.id)), player.ws)) {
             PREF_WARN("{}: failed to send UserGames to {}", VAR(error), VAR(player.id));
         }
     }
+}
+
+auto sendOpenTalon() -> Awaitable<>
+{
+    assert(ctx().talon.open < std::size(ctx().talon.cards));
+    ctx().talon.current = ctx().talon.cards[ctx().talon.open];
+    return sendToAll(makeMessage(makeOpenTalon(ctx().talon.current)), ctx().players);
 }
 
 auto removeCardFromHand(const Player::Id& playerId, const std::string& card) -> void
@@ -644,13 +572,13 @@ auto dealCards() -> Awaitable<>
         | rng::actions::shuffle(std::mt19937{std::invoke(std::random_device{})});
     const auto chunks = deck | rv::chunk(10);
     const auto hands = chunks | rv::take(NumberOfPlayers) | rng::to_vector;
-    ctx().talon = chunks | rv::drop(NumberOfPlayers) | rv::join | rng::to_vector;
-    assert((std::size(ctx().talon) == 2) and "talon is two cards");
+    ctx().talon.cards = chunks | rv::drop(NumberOfPlayers) | rv::join | rng::to_vector;
+    assert((std::size(ctx().talon.cards) == 2) and "talon is two cards");
     assert((std::size(ctx().players) == NumberOfPlayers) and (std::size(hands) == NumberOfPlayers));
     for (const auto& [playerId, hand] : rv::zip(ctx().players | rv::keys, hands)) {
         ctx().player(playerId).hand = hand | rng::to<Hand>;
     }
-    INFO_VAR(ctx().talon, hands);
+    PREF_INFO("talon: {}, {}", ctx().talon.cards, VAR(hands));
     const auto wss = ctx().players
         | rv::values
         | rv::transform([](const Player& player) { return std::pair{player.id, player.ws}; })
@@ -684,53 +612,38 @@ auto disconnected(Player::Id playerId) -> Awaitable<>
 }
 
 auto updateScoreSheetForDeal() -> void
-{ // clang-format off
-  // NOLINTNEXTLINE(bugprone-unused-return-value)
-    auto _ = findDeclarerId(ctx().players).transform([&](const Player::Id& declarerId) {
+{
+    findDeclarerId(ctx().players) | onValue([&](const Player::Id& declarerId) {
         const auto& declarerPlayer = ctx().players.at(declarerId);
-        const auto declarer
-            = Declarer{.id = declarerId, .contractLevel = makeContractLevel(declarerPlayer.bid), .tricksTaken = declarerPlayer.tricksTaken};
+        const auto declarer = Declarer{
+            .id = declarerId,
+            .contractLevel = makeContractLevel(declarerPlayer.bid),
+            .tricksTaken = declarerPlayer.tricksTaken};
         auto whisters = std::vector<Whister>{};
         for (const auto& whisterPlayer : getWhisters(ctx().players)) {
-            whisters.emplace_back(whisterPlayer.get().id, makeWhistingChoice(whisterPlayer.get().whistingChoice), whisterPlayer.get().tricksTaken);
+            whisters.emplace_back(
+                whisterPlayer.get().id,
+                makeWhistingChoice(whisterPlayer.get().whistingChoice),
+                whisterPlayer.get().tricksTaken);
         }
         for (const auto& [id, entry] : calculateDealScore(declarer, whisters)) {
             ctx().scoreSheet[id].dump.push_back(entry.dump);
             ctx().scoreSheet[id].pool.push_back(entry.pool);
             if (id != declarerId) { ctx().scoreSheet[id].whists[declarerId].push_back(entry.whist); }
         }
-    }).or_else([](const std::string& error) {
-        WARN_VAR(error);
-        return std::expected<void, std::string>(std::unexpect, error);
+    }) | onNone([] {
+        const auto players = ctx().players | rv::values;
+        const auto minTricksTaken = rng::min(players | rv::transform(&Player::tricksTaken));
+        for (const auto& player : players) {
+            // TODO: consider the level of pass game
+            if (const auto price = contractPrice(ContractLevel::Six); player.tricksTaken == 0) {
+                ctx().scoreSheet[player.id].pool.push_back(price);
+                return;
+            } else {
+                ctx().scoreSheet[player.id].dump.push_back((player.tricksTaken - minTricksTaken) * price);
+            }
+        }
     });
-} // clang-format on
-
-[[nodiscard]] [[maybe_unused]] auto formatUser(const User& user) -> std::string
-{
-    const auto games = user.games()
-        | rv::transform([](const auto& game) { return fmt::format("      {}", formatGame(game)); })
-        | rng::to_vector;
-    return fmt::format(
-        "  USER {{\n"
-        "    NAME: {}\n"
-        "    ID: {}\n"
-        "    GAMES:\n"
-        "{}\n"
-        "  }}",
-        user.player_name(),
-        user.player_id(),
-        fmt::join(games, "\n"));
-}
-
-[[nodiscard]] [[maybe_unused]] auto formatGameData(const GameData& data) -> std::string
-{
-    const auto users = data.users() | rv::transform(&formatUser) | rng::to_vector;
-    return fmt::format(
-        "\n"
-        "{{\n"
-        "{}\n"
-        "}}",
-        fmt::join(users, "\n"));
 }
 
 auto dealFinished() -> Awaitable<>
@@ -772,53 +685,30 @@ auto dealFinished() -> Awaitable<>
 {
     const auto bids = ctx().players | rv::values | rv::transform(&Player::bid);
     const auto passCount = rng::count(bids, PREF_PASS);
-    const auto activeCount = rng::count_if(bids, notEqualTo(PREF_PASS));
+    const auto activeCount = rng::count_if(bids, [](auto&& bid) { return not std::empty(bid) and bid != PREF_PASS; });
+    INFO_VAR(passCount, activeCount);
     if (passCount == WhistersCount and activeCount == DeclarerCount) {
         const auto& contract = *rng::find_if(bids, notEqualTo(PREF_PASS));
         return contract.contains(PREF_WT) ? GameStage::WHISTING : GameStage::TALON_PICKING;
     }
-    // TODO: implement Pass Game
-    return passCount == NumberOfPlayers ? GameStage::PLAYING : GameStage::BIDDING;
-}
-
-[[nodiscard]] auto userPlayerId(const Player::NameView playerName) -> Player::IdView
-{
-    return pref::find(ctx().gameData.users(), playerName, &User::player_name, &User::player_id).value().get();
-}
-
-[[nodiscard]] auto verifyPlayerIdAndAuthToken(const Player::IdView playerId, const std::string_view authToken) -> bool
-{
-    INFO_VAR(playerId);
-    return pref::find(ctx().gameData.users(), playerId, &User::player_id)
-        .transform([&](auto&& user) { return rng::contains(user.get().auth_tokens(), authToken); })
-        .value_or(false);
-}
-
-[[nodiscard]] auto playerPasswordHash(const Player::NameView playerName) -> std::string_view
-{
-    static const auto empty = std::string{};
-    return pref::find(ctx().gameData.users(), playerName, &User::player_name, &User::password)
-        .value_or(std::ref(empty))
-        .get();
-}
-
-[[nodiscard]] auto verifyPlayerNameAndPassword(const Player::NameView playerName, const std::string_view password)
-    -> bool
-{
-    INFO_VAR(playerName);
-    const auto passwordHash = playerPasswordHash(playerName);
-    return not std::empty(passwordHash) and verifyPassword(password, passwordHash);
+    if (passCount == NumberOfPlayers) {
+        ctx().isPassGame = true;
+        return GameStage::PLAYING;
+    }
+    return GameStage::BIDDING;
 }
 
 auto maybeStartGame() -> Awaitable<>
 {
     if (std::size(ctx().players) != NumberOfPlayers) { co_return; }
-    ctx().gameStarted = timeSinceEpochInSec();
+    // TODO: use UTC on the server and local time zone on the client
+    ctx().gameStarted = localTimeSinceEpochInSec();
     ++ctx().gameId;
     PREF_INFO("gameId: {} started: {} {}", ctx().gameId, formatDate(ctx().gameStarted), formatTime(ctx().gameStarted));
     for (const auto& id : ctx().players | rv::keys) {
         addOrUpdateUserGame(ctx().gameData, id, makeUserGame(ctx().gameId, GameType::RANKED, ctx().gameStarted));
     }
+    storeGameData(ctx().gameDataPath, ctx().gameData);
     PREF_INFO("gameData: {}", formatGameData(ctx().gameData));
     co_await sendUserGames();
     co_await dealCards();
@@ -844,15 +734,17 @@ auto handleLoginRequest(const Message msg, const std::shared_ptr<Stream>& ws) ->
     auto session = PlayerSession{};
     const auto& playerName = loginRequest->player_name();
     const auto& password = loginRequest->password();
-    if (not verifyPlayerNameAndPassword(playerName, password)) {
+    if (not verifyPlayerNameAndPassword(ctx().gameData, playerName, password)) {
         const auto error = fmt::format("unknown {} or wrong password", VAR(playerName));
         WARN_VAR(error);
         co_await sendLoginResponse(ws, error);
         co_return session;
     }
-    const auto playerId = std::string{userPlayerId(playerName)};
+    assert(userPlayerId(ctx().gameData, playerName));
+    const auto& playerId = userPlayerId(ctx().gameData, playerName)->get();
     const auto authToken = generateClientAuthToken();
-    addAuthToken(playerId, toServerAuthToken(authToken));
+    addAuthToken(ctx().gameData, playerId, toServerAuthToken(authToken));
+    storeGameData(ctx().gameDataPath, ctx().gameData);
     INFO_VAR(playerName, playerId);
     session.playerName = playerName;
     if (isNewPlayer(playerId, ctx().players)) {
@@ -874,13 +766,14 @@ auto handleAuthRequest(const Message msg, const std::shared_ptr<Stream>& ws) -> 
     if (not authRequest) { co_return PlayerSession{}; }
     auto session = PlayerSession{};
     const auto& playerId = authRequest->player_id();
-    if (not verifyPlayerIdAndAuthToken(playerId, toServerAuthToken(authRequest->auth_token()))) {
+    if (not verifyPlayerIdAndAuthToken(ctx().gameData, playerId, toServerAuthToken(authRequest->auth_token()))) {
         const auto error = fmt::format("unknown {} or wrong auth token", VAR(playerId));
         WARN_VAR(error);
         co_await sendAuthResponse(ws, error);
         co_return session;
     }
-    const auto& playerName = userByPlayerId(playerId).player_name();
+    assert(userByPlayerId(ctx().gameData, playerId).has_value());
+    const auto& playerName = userByPlayerId(ctx().gameData, playerId)->get().player_name();
     INFO_VAR(playerName, playerId);
     session.playerName = playerName;
     if (isNewPlayer(playerId, ctx().players)) {
@@ -900,7 +793,8 @@ auto handleLogout(const Message& msg) -> Awaitable<>
 {
     auto logout = makeMethod<Logout>(msg);
     if (not logout) { co_return; }
-    revokeAuthToken(logout->player_id(), toServerAuthToken(logout->auth_token()));
+    revokeAuthToken(ctx().gameData, logout->player_id(), toServerAuthToken(logout->auth_token()));
+    storeGameData(ctx().gameDataPath, ctx().gameData);
     co_await removePlayer(std::move(*logout->mutable_player_id()));
 }
 
@@ -915,6 +809,7 @@ auto handleBidding(Message msg) -> Awaitable<>
     ctx().player(playerId).bid = bid;
     co_await forwardToAllExcept(std::move(msg), playerId);
     const auto stage = stageGame();
+    if (ctx().isPassGame) { co_await sendOpenTalon(); }
     advanceWhoseTurn(stage);
     co_await sendPlayerTurn(stage);
 }
@@ -925,6 +820,7 @@ auto handleDiscardTalon(const Message& msg) -> Awaitable<>
     if (not discardTalon) { co_return; }
     const auto& playerId = discardTalon->player_id();
     const auto& bid = discardTalon->bid();
+    ctx().player(playerId).bid = bid;
     const auto& discardedCards = discardTalon->cards();
     for (const auto& card : discardedCards) { removeCardFromHand(playerId, card); }
     const auto playerName = ctx().playerName(playerId);
@@ -975,6 +871,28 @@ auto updateDeclarerTakenTricks() -> void
     return playerItByWhistingChoice(players, choice)->second;
 }
 
+auto openCardsAndLetAnotherWhisterPlay() -> Awaitable<>
+{
+    const auto& activeWhister = playerByWhistingChoice(ctx().players, WhistingChoice::Whist);
+    const auto& passiveWhister = playerByWhistingChoice(ctx().players, WhistingChoice::Pass);
+    co_await sendOpenWhistPlay(activeWhister.id, passiveWhister.id);
+    co_await sendDealCards(activeWhister.id, activeWhister.hand);
+    co_await sendDealCards(passiveWhister.id, passiveWhister.hand);
+}
+
+auto openCards() -> Awaitable<>
+{
+    const auto& [w0, w1] = getWhisters(ctx().players);
+    co_await sendDealCards(w0.get().id, w0.get().hand);
+    co_await sendDealCards(w1.get().id, w1.get().hand);
+}
+
+auto startPlayingFromForehand() -> Awaitable<>
+{
+    forehandsTurn();
+    co_await sendPlayerTurn(GameStage::PLAYING);
+}
+
 auto handleWhisting(Message msg) -> Awaitable<>
 {
     using enum WhistingChoice;
@@ -1014,11 +932,24 @@ auto handleWhisting(Message msg) -> Awaitable<>
         updateDeclarerTakenTricks();
         co_return co_await finishDeal();
     }
-    if (ctx().areWhistersWhist()) {
-        forehandsTurn();
-        co_return co_await sendPlayerTurn(PLAYING);
+    const auto& declarer = getDeclarer(ctx().players);
+    const bool isMiser = declarer.bid.contains(PREF_MIS);
+    const auto oneWhist = ctx().areWhistersPassAndWhist();
+    const auto bothWhist = ctx().areWhistersWhist();
+    const bool whist = oneWhist or bothWhist;
+    if (isMiser and whist) {
+        if (ctx().forehandId == declarer.id) {
+            ctx().isDeclarerFirstMiserTurn = true;
+        } else if (ctx().areWhistersWhist()) {
+            co_await openCards();
+        } else {
+            assert(ctx().areWhistersPassAndWhist());
+            co_await openCardsAndLetAnotherWhisterPlay();
+        }
+        co_return co_await startPlayingFromForehand();
     }
-    if (ctx().areWhistersPassAndWhist()) {
+    if (bothWhist) { co_return co_await startPlayingFromForehand(); }
+    if (oneWhist) {
         if (choice != PREF_WHIST) { setWhoseTurn(playerItByWhistingChoice(ctx().players, Whist)); }
         co_return co_await sendPlayerTurn(HOW_TO_PLAY);
     }
@@ -1037,15 +968,8 @@ auto handleHowToPlay(Message msg) -> Awaitable<>
     auto& player = ctx().player(playerId);
     player.howToPlayChoice = choice;
     co_await forwardToAllExcept(std::move(msg), playerId);
-    if (choice == "Openly") {
-        const auto& activeWhister = playerByWhistingChoice(ctx().players, WhistingChoice::Whist);
-        const auto& passiveWhister = playerByWhistingChoice(ctx().players, WhistingChoice::Pass);
-        co_await sendOpenWhistPlay(activeWhister.id, passiveWhister.id);
-        co_await sendDealCards(activeWhister.id, activeWhister.hand);
-        co_await sendDealCards(passiveWhister.id, passiveWhister.hand);
-    }
-    forehandsTurn();
-    co_return co_await sendPlayerTurn(GameStage::PLAYING);
+    if (choice == "Openly") { co_await openCardsAndLetAnotherWhisterPlay(); }
+    co_await startPlayingFromForehand();
 }
 
 auto handlePlayCard(Message msg) -> Awaitable<>
@@ -1059,18 +983,36 @@ auto handlePlayCard(Message msg) -> Awaitable<>
     ctx().trick.emplace_back(playerId, card);
     INFO_VAR(playerName, playerId, card);
     co_await forwardToAll(std::move(msg));
-    if (const auto isTrickFinished = (std::size(ctx().trick) == 3); isTrickFinished) {
-        const auto winnerId = finishTrick();
-        const auto winnerName = ctx().playerName(winnerId);
-        INFO_VAR(winnerId, winnerName);
+    if (ctx().isDeclarerFirstMiserTurn) {
+        ctx().isDeclarerFirstMiserTurn = false;
+        if (ctx().areWhistersWhist()) {
+            co_await openCards();
+        } else {
+            assert(ctx().areWhistersPassAndWhist());
+            co_await openCardsAndLetAnotherWhisterPlay();
+        }
+    }
+    if (const auto isNotTrickFinished = (std::size(ctx().trick) != 3); isNotTrickFinished) {
+        advanceWhoseTurn();
+    } else {
         co_await sendTrickFinished(ctx().players);
         if (const auto isDealFinished = rng::all_of(ctx().players | rv::values, &Hand::empty, &Player::hand);
             isDealFinished) {
             co_return co_await finishDeal();
         }
-        setWhoseTurn(ctx().players.find(winnerId));
-    } else {
-        advanceWhoseTurn();
+        if (const auto winnerId = finishTrick(); not ctx().isPassGame) {
+            setWhoseTurn(ctx().players.find(winnerId));
+        } else {
+            ++ctx().talon.open;
+            if (ctx().talon.open == 1) {
+                co_await sendOpenTalon();
+                forehandsTurn();
+            } else if (ctx().talon.open == 2) {
+                forehandsTurn();
+            } else {
+                setWhoseTurn(ctx().players.find(winnerId));
+            }
+        }
     }
     co_await sendPlayerTurn(GameStage::PLAYING);
 }
@@ -1165,45 +1107,6 @@ auto launchSession(const std::shared_ptr<Stream> ws) -> Awaitable<>
 // NOLINTEND(performance-unnecessary-value-param, cppcoreguidelines-avoid-reference-coroutine-parameters)
 } // namespace
 
-auto storeGameData(const fs::path& path, const GameData& gameData) -> void
-{
-    auto out = std::ofstream{path, std::ios::binary};
-    if (not out) {
-        PREF_WARN("error: {}, {}", std::strerror(errno), VAR(path));
-        return;
-    }
-    if (not gameData.SerializeToOstream(&out)) {
-        PREF_WARN("error: failed to serialize GameData, {}", VAR(path));
-        return;
-    }
-    INFO_VAR(path);
-}
-
-[[nodiscard]] auto loadGameData(const fs::path& path) -> GameData
-{
-    auto in = std::ifstream{path, std::ios::binary};
-    if (not in) {
-        PREF_WARN("error: {}, {}", std::strerror(errno), VAR(path));
-        return {};
-    }
-    auto result = GameData{};
-    if (not result.ParseFromIstream(&in)) {
-        PREF_WARN("error: failed to parse GameData, {}", VAR(path));
-        return {};
-    }
-    INFO_VAR(path);
-    return result;
-}
-
-[[nodiscard]] auto lastGameId(const GameData& gameData) -> std::int32_t
-{
-    auto result = std::int32_t{};
-    for (const auto& user : gameData.users()) {
-        for (const auto& game : user.games()) { result = std::max(result, game.id()); }
-    }
-    return result;
-}
-
 Player::Player(Id aId, Name aName, PlayerSession::Id aSessionId, const std::shared_ptr<Stream>& aWs)
     : id{std::move(aId)}
     , name{std::move(aName)}
@@ -1286,10 +1189,11 @@ auto Context::countWhistingChoice(const WhistingChoice choice) const -> std::ptr
 {
     assert(std::size(trick) == NumberOfPlayers and "all players played cards");
     const auto& firstCard = trick.front();
-    const auto leadSuit = cardSuit(firstCard.name); // clang-format off
-        return rng::accumulate(trick, firstCard, [&](const PlayedCard& best, const PlayedCard& candidate) {
-            return beats({candidate.name, best.name, leadSuit, trump}) ? candidate : best; // NOLINT(modernize-use-designated-initializers)
-        }).playerId; // clang-format on
+    const auto& leadSuit = cardSuit(not std::empty(ctx().talon.current) ? ctx().talon.current : firstCard.name);
+    ctx().talon.current.clear(); // clang-format off
+    return rng::accumulate(trick, firstCard, [&](const PlayedCard& best, const PlayedCard& candidate) {
+        return beats({candidate.name, best.name, leadSuit, trump}) ? candidate : best; // NOLINT(modernize-use-designated-initializers)
+    }).playerId; // clang-format on
 }
 
 // NOLINTBEGIN(readability-function-cognitive-complexity, hicpp-uppercase-literal-suffix)

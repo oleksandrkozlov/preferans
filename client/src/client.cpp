@@ -1,5 +1,6 @@
 #include "client.hpp"
 
+#include "common/common.hpp"
 #include "common/logger.hpp"
 #include "common/time.hpp"
 #include "proto/pref.pb.h"
@@ -33,6 +34,7 @@
 #include <functional>
 #include <gsl/gsl>
 #include <list>
+#include <mdspan>
 #include <numbers>
 #include <vector>
 
@@ -48,6 +50,11 @@ constexpr auto AuthTokenStorageKey = "auth_token";
 [[nodiscard]] auto operator+(const r::Vector2& lhs, const float rhs) -> r::Vector2
 {
     return Vector2AddValue(lhs, rhs);
+}
+
+[[maybe_unused]] [[nodiscard]] auto operator-(const r::Vector2& lhs, const float rhs) -> r::Vector2
+{
+    return Vector2SubtractValue(lhs, rhs);
 }
 
 enum class Shift : std::uint8_t {
@@ -94,18 +101,15 @@ template<typename... Args>
 }
 
 struct Card {
-    Card(CardName n, r::Vector2 pos)
-        : name{std::move(n)}
-        , position{pos}
+    Card(CardNameView n)
+        : name{n}
         , image{r::Image{resources("cards", fmt::format("{}.png", name))}}
     {
         image.Resize(static_cast<int>(CardWidth), static_cast<int>(CardHeight));
-        // TODO: Cache all card textures to avoid repeated load/unload operations
         texture = image.LoadTexture();
     }
 
-    CardName name;
-    r::Vector2 position;
+    CardNameView name;
     r::Image image;
     r::Texture texture{};
 };
@@ -153,7 +157,7 @@ struct Player {
 
     PlayerId id;
     PlayerName name;
-    std::list<Card> hand;
+    std::list<const Card*> hand;
     std::string bid;
     std::string whistingChoice;
     std::string howToPlayChoice;
@@ -379,12 +383,64 @@ struct LogoutMessage {
     bool isVisible{};
 };
 
+struct MiserCardsPanel {
+    bool isVisible{};
+
+    auto clear() -> void
+    {
+        isVisible = false;
+    }
+};
+
 struct Ping {
     static constexpr auto IntervalInMs = 15'000; // 15s;
     static constexpr auto InvalidRtt = -1;
     std::unordered_map<std::int32_t, double> sentAt;
     double rtt = static_cast<double>(InvalidRtt);
 };
+
+[[nodiscard]] auto getCard(const CardNameView name) -> const Card*
+{
+    static auto allCards = std::invoke([&] {
+        auto result = std::map<CardNameView, Card>{};
+        const auto add = [&](const CardNameView name) { result.emplace(name, Card{name}); };
+        add("10_of_clubs");
+        add("10_of_diamonds");
+        add("10_of_hearts");
+        add("10_of_spades");
+        add("7_of_clubs");
+        add("7_of_diamonds");
+        add("7_of_hearts");
+        add("7_of_spades");
+        add("8_of_clubs");
+        add("8_of_diamonds");
+        add("8_of_hearts");
+        add("8_of_spades");
+        add("9_of_clubs");
+        add("9_of_diamonds");
+        add("9_of_hearts");
+        add("9_of_spades");
+        add("ace_of_clubs");
+        add("ace_of_diamonds");
+        add("ace_of_hearts");
+        add("ace_of_spades");
+        add("jack_of_clubs");
+        add("jack_of_diamonds");
+        add("jack_of_hearts");
+        add("jack_of_spades");
+        add("king_of_clubs");
+        add("king_of_diamonds");
+        add("king_of_hearts");
+        add("king_of_spades");
+        add("queen_of_clubs");
+        add("queen_of_diamonds");
+        add("queen_of_hearts");
+        add("queen_of_spades");
+        return result;
+    });
+    const auto& card = allCards.at(name);
+    return &card;
+}
 
 struct Context {
     // TODO: Figure out how to use one font with different sizes
@@ -418,23 +474,26 @@ struct Context {
     EMSCRIPTEN_WEBSOCKET_T ws{};
     int leftCardCount = 10;
     int rightCardCount = 10;
-    std::map<PlayerId, Card> cardsOnTable;
-    std::vector<CardName> lastTrick;
+    std::map<PlayerId, const Card*> cardsOnTable;
+    std::vector<CardNameView> lastTrick;
     PlayerId turnPlayerId;
     BiddingMenu bidding;
     WhistingMenu whisting;
     HowToPlayMenu howToPlay;
     GameStage stage = GameStage::UNKNOWN;
-    std::vector<CardName> discardedTalon;
+    std::vector<CardNameView> discardedTalon;
     std::string leadSuit;
+    const Card* talonCard = nullptr;
     GameLang lang{};
     SettingsMenu settingsMenu;
     ScoreSheetMenu scoreSheet;
     SpeechBubbleMenu speechBubbleMenu;
     OverallScoreboard overallScoreboard;
+    MiserCardsPanel miserCardsPanel;
     LogoutMessage logoutMessage;
     Ping ping;
     std::string url;
+    std::map<CardNameView, r::Vector2> cardPositions;
 
     auto clear() -> void
     {
@@ -449,6 +508,9 @@ struct Context {
         stage = GameStage::UNKNOWN;
         discardedTalon.clear();
         leadSuit.clear();
+        talonCard = nullptr;
+        miserCardsPanel.clear();
+        cardPositions.clear();
         for (auto& p : players | rv::values) { p.clear(); }
     }
 
@@ -698,12 +760,13 @@ auto sendMessage(const EMSCRIPTEN_WEBSOCKET_T ws, const Message& msg) -> bool
 }
 
 [[nodiscard]] auto makeDiscardTalon(
-    const std::string& playerId, const std::string& bid, const std::vector<CardName>& discardedTalon) -> DiscardTalon
+    const std::string& playerId, const std::string& bid, const std::vector<CardNameView>& discardedTalon)
+    -> DiscardTalon
 {
     auto result = DiscardTalon{};
     result.set_player_id(playerId);
     result.set_bid(bid);
-    for (const auto& card : discardedTalon) { result.add_cards(card); }
+    for (const auto card : discardedTalon) { result.add_cards(std::string{card}); }
     return result;
 }
 
@@ -723,11 +786,11 @@ auto sendMessage(const EMSCRIPTEN_WEBSOCKET_T ws, const Message& msg) -> bool
     return result;
 }
 
-[[nodiscard]] auto makePlayCard(const std::string& playerId, const CardName& cardName) -> PlayCard
+[[nodiscard]] auto makePlayCard(const std::string& playerId, const CardNameView cardName) -> PlayCard
 {
     auto result = PlayCard{};
     result.set_player_id(playerId);
-    result.set_card(cardName);
+    result.set_card(std::string{cardName});
     return result;
 }
 
@@ -795,7 +858,7 @@ auto sendHowToPlay(const std::string& choice) -> void
     sendMessage(ctx().ws, makeMessage(makeHowToPlay(ctx().myPlayerId, choice)));
 }
 
-auto sendPlayCard(const PlayerId& playerId, const CardName& cardName) -> void
+auto sendPlayCard(const PlayerId& playerId, const CardNameView cardName) -> void
 {
     sendMessage(ctx().ws, makeMessage(makePlayCard(playerId, cardName)));
 }
@@ -898,6 +961,12 @@ auto handlePlayerLeft(const Message& msg) -> void
     ctx().players.erase(playerLeft->player_id());
 }
 
+[[nodiscard]] auto isMiser() -> bool
+{
+    return rng::any_of(
+        ctx().players | rv::values, [](const std::string_view bid) { return bid.contains(PREF_MIS); }, &Player::bid);
+}
+
 auto handleDealCards(const Message& msg) -> void
 {
     auto dealCards = makeMethod<DealCards>(msg);
@@ -905,12 +974,14 @@ auto handleDealCards(const Message& msg) -> void
     const auto& playerId = dealCards->player_id();
     assert(std::size(dealCards->cards()) == 10);
     auto& player = std::invoke([&] -> Player& {
-        if (playerId == ctx().myPlayerId) { ctx().clear(); }
+        if (playerId == ctx().myPlayerId) {
+            ctx().clear();
+        } else if (isMiser()) {
+            ctx().miserCardsPanel.isVisible = true;
+        }
         return ctx().player(playerId);
     });
-    for (auto&& cardName : *(dealCards->mutable_cards())) {
-        player.hand.emplace_back(std::move(cardName), r::Vector2{});
-    }
+    for (const auto& cardName : dealCards->cards()) { player.hand.emplace_back(getCard(cardName)); }
     player.sortCards();
 }
 
@@ -918,14 +989,6 @@ auto handlePlayerTurn(const Message& msg) -> void
 {
     auto playerTurn = makeMethod<PlayerTurn>(msg);
     if (not playerTurn) { return; }
-    if (std::size(ctx().cardsOnTable) >= 3) {
-        // TODO: remove sleep
-        // std::this_thread::sleep_for(1s);
-
-        ctx().lastTrick = ctx().cardsOnTable | rv::values | rv::transform(&Card::name) | rng::to_vector;
-        rng::sort(ctx().lastTrick, cardLess());
-        ctx().cardsOnTable.clear();
-    }
     ctx().turnPlayerId = playerTurn->player_id();
     ctx().stage = playerTurn->stage();
     PREF_INFO("turnPlayerId: {}, stage: {}", ctx().turnPlayerId, GameStage_Name(ctx().stage));
@@ -935,9 +998,7 @@ auto handlePlayerTurn(const Message& msg) -> void
         return;
     }
     if (ctx().stage == GameStage::TALON_PICKING) {
-        for (auto&& card : *(playerTurn->mutable_talon())) {
-            ctx().myPlayer().hand.emplace_back(std::move(card), r::Vector2{});
-        }
+        for (const auto& card : playerTurn->talon()) { ctx().myPlayer().hand.emplace_back(getCard(card)); }
         ctx().myPlayer().sortCards();
         return;
     }
@@ -1011,8 +1072,8 @@ auto handlePlayCard(const Message& msg) -> void
     }
 
     ctx().player(playerId).hand |= rng::actions::remove_if(equalTo(cardName), &Card::name);
-    if (std::empty(ctx().cardsOnTable)) { ctx().leadSuit = cardSuit(cardName); }
-    ctx().cardsOnTable.emplace(std::move(playerId), Card{std::move(cardName), r::Vector2{}});
+    if (std::empty(ctx().cardsOnTable) and ctx().talonCard == nullptr) { ctx().leadSuit = cardSuit(cardName); }
+    ctx().cardsOnTable.emplace(std::move(playerId), getCard(cardName));
 }
 
 auto handleTrickFinished(const Message& msg) -> void
@@ -1025,6 +1086,16 @@ auto handleTrickFinished(const Message& msg) -> void
         INFO_VAR(playerId, tricksTaken);
         ctx().player(playerId).tricksTaken = tricksTaken;
     }
+    assert(std::size(ctx().cardsOnTable) == 3);
+    // TODO: remove sleep
+    // std::this_thread::sleep_for(1s);
+    ctx().lastTrick = ctx().cardsOnTable | rv::values | rv::transform(&Card::name) | rng::to_vector;
+    if (ctx().talonCard != nullptr) {
+        ctx().lastTrick.push_back(ctx().talonCard->name);
+        ctx().talonCard = nullptr;
+    }
+    rng::sort(ctx().lastTrick, cardLess());
+    ctx().cardsOnTable.clear();
 }
 
 auto handleDealFinished(const Message& msg) -> void
@@ -1113,6 +1184,15 @@ auto handleUserGames(const Message& msg) -> void
     updateOverallScoreboardTable();
 }
 
+auto handleOpenTalon(const Message& msg) -> void
+{
+    auto openTalon = makeMethod<OpenTalon>(msg);
+    if (not openTalon) { return; }
+    auto& cardName = *openTalon->mutable_card();
+    ctx().leadSuit = cardSuit(cardName);
+    ctx().talonCard = getCard(cardName);
+}
+
 auto updateWindowSize() -> void
 {
     EmscriptenFullscreenChangeEvent f;
@@ -1181,6 +1261,7 @@ auto dispatchMessage(const std::optional<Message>& msg) -> void
     if (method == "SpeechBubble") { return handleSpeechBubble(*msg); }
     if (method == "PingPong") { return handlePingPong(*msg); }
     if (method == "UserGames") { return handleUserGames(*msg); }
+    if (method == "OpenTalon") { return handleOpenTalon(*msg); }
     PREF_WARN("error: unknown {}", VAR(method));
 }
 
@@ -1429,13 +1510,15 @@ auto drawLoginScreen() -> void
     }
 }
 
+[[nodiscard]] auto isVisible(auto& widget) -> bool
+{
+    if (r::Keyboard::IsKeyPressed(KEY_ESCAPE)) { widget.isVisible = false; }
+    return widget.isVisible;
+}
+
 auto drawLogoutMessage() -> void
 {
-    if (not ctx().logoutMessage.isVisible) { return; }
-    if (r::Keyboard::IsKeyPressed(KEY_ESCAPE)) {
-        ctx().logoutMessage.isVisible = false;
-        return;
-    }
+    if (not isVisible(ctx().logoutMessage)) { return; }
     assert(ctx().isLoggedIn);
     static constexpr auto boxWidth = VirtualW / 5.f;
     static constexpr auto boxHeight = RAYGUI_TEXTINPUTBOX_HEIGHT;
@@ -1500,14 +1583,15 @@ auto drawConnectedPlayersPanel() -> void
     }
 }
 
-[[nodiscard]] auto isCardPlayable(const std::list<Card>& hand, const Card& clickedCard) -> bool
+[[nodiscard]] auto isCardPlayable(const std::list<const Card*>& hand, const CardNameView clickedCardName) -> bool
 {
-    const auto clickedSuit = cardSuit(clickedCard.name);
+    const auto clickedSuit = cardSuit(clickedCardName);
     const auto trump = getTrump(ctx().bidding.bid);
     const auto hasSuit = [&](const std::string_view suit) {
-        return rng::any_of(hand, [&](const CardName& name) { return cardSuit(name) == suit; }, &Card::name);
+        return rng::any_of(hand, [&](const CardNameView name) { return cardSuit(name) == suit; }, &Card::name);
     };
-    if (std::empty(ctx().cardsOnTable)) { return true; } // first card in the trick: any card is allowed
+    // first card in the trick: any card is allowed
+    if (std::empty(ctx().cardsOnTable) and ctx().talonCard == nullptr) { return true; }
     if (clickedSuit == ctx().leadSuit) { return true; } // follows lead suit
     if (hasSuit(ctx().leadSuit)) { return false; } // must follow lead suit
     if (clickedSuit == trump) { return true; } //  no lead suit cards, playing trump
@@ -1515,13 +1599,13 @@ auto drawConnectedPlayersPanel() -> void
     return true; // no lead or trump suit cards, free to play
 }
 
-[[nodiscard]] auto tintForCard(const std::list<Card>& hand, const Card& card) -> r::Color
+[[nodiscard]] auto tintForCard(const std::list<const Card*>& hand, const CardNameView cardName) -> r::Color
 {
     const auto lightGray = r::Color{150, 150, 150, 255};
-    return isCardPlayable(hand, card) ? r::Color::White() : lightGray;
+    return isCardPlayable(hand, cardName) ? r::Color::White() : lightGray;
 }
 
-auto drawCardShineEffect(const bool isHovered, const Card& card) -> void
+auto drawCardShineEffect(const bool isHovered, const r::Vector2& cardPosition) -> void
 {
     if (not isHovered) { return; }
     static constexpr auto speed = 90.f;
@@ -1533,9 +1617,9 @@ auto drawCardShineEffect(const bool isHovered, const Card& card) -> void
     const auto time = static_cast<float>(ctx().window.GetTime());
     const auto x = std::fmod(time * speed, CardWidth - stripeWidth);
     const auto rect
-        = r::Rectangle{card.position.x + x, card.position.y + marginY * 0.5f, stripeWidth, CardHeight - marginY};
-    const auto cardCenterX = card.position.x + CardWidth * 0.5f;
-    const auto stripeCenterX = card.position.x + x + stripeWidth * 0.5f;
+        = r::Rectangle{cardPosition.x + x, cardPosition.y + marginY * 0.5f, stripeWidth, CardHeight - marginY};
+    const auto cardCenterX = cardPosition.x + CardWidth * 0.5f;
+    const auto stripeCenterX = cardPosition.x + x + stripeWidth * 0.5f;
     const auto distanceToCenter = std::abs(stripeCenterX - cardCenterX);
     const auto overallIntensity = std::invoke([&] { // clang-format off
         return std::clamp((distanceToCenter >= fadeEdge)
@@ -1574,13 +1658,14 @@ auto drawCards(const r::Vector2 pos, Player& player, const Shift shift) -> void
                                 or (isTheyHand and isMyTurnOnBehalfOfSomeone()))
             and (ctx().stage == GameStage::PLAYING or ctx().stage == GameStage::TALON_PICKING)
             and not ctx().bidding.isVisible
-            and isCardPlayable(player.hand, card)
+            and isCardPlayable(player.hand, card->name)
             and static_cast<int>(i) == hoveredIndex;
         static constexpr auto Offset = CardHeight / 10.f;
         const auto offset = isHovered ? (hasShift(shift, Positive) ? Offset : -Offset) : 0.f;
-        card.position = toPos(i, offset);
-        card.texture.Draw(card.position, tintForCard(player.hand, card));
-        drawCardShineEffect(isHovered, card);
+        const auto cardPosition = toPos(i, offset);
+        ctx().cardPositions[card->name] = cardPosition;
+        card->texture.Draw(cardPosition, tintForCard(player.hand, card->name));
+        drawCardShineEffect(isHovered, cardPosition);
     }
 }
 
@@ -1699,7 +1784,7 @@ auto drawMyHand() -> void
     if (cardCount == 0) { return; }
     const auto totalWidth = (static_cast<float>(cardCount) - 1.f) * CardOverlapX + CardWidth;
     const auto cardFirstLeftTopPos
-        = r::Vector2{(VirtualW - totalWidth) * 0.5f, VirtualH - CardHeight - CardHeight / 10.8f};
+        = r::Vector2{(VirtualW - totalWidth) * 0.5f, VirtualH - CardHeight - MyCardBorderMarginY};
     const auto cardCenterY = cardFirstLeftTopPos.y + CardHeight * 0.5f;
     const auto cardFirstLeftCenterPos = r::Vector2{cardFirstLeftTopPos.x, cardCenterY};
     const auto cardLastRightCenterPos = r::Vector2{cardFirstLeftTopPos.x + totalWidth, cardCenterY};
@@ -1762,22 +1847,25 @@ auto drawLeftHand() -> void
 
 auto drawPlayedCards() -> void
 {
-    if (std::empty(ctx().cardsOnTable)) { return; }
-    const auto cardSpacing = CardWidth * 0.1f;
-    const auto yOffset = CardHeight / 4.f;
-    const auto centerPos = r::Vector2{VirtualW * 0.5f - CardWidth * 0.5f, VirtualH * 0.5f - CardHeight * 0.5f};
-    const auto leftPlayPos = r::Vector2{centerPos.x - CardWidth - cardSpacing, centerPos.y - yOffset};
-    const auto middlePlayPos = r::Vector2{centerPos.x, centerPos.y + yOffset};
-    const auto rightPlayPos = r::Vector2{centerPos.x + CardWidth + cardSpacing, centerPos.y - yOffset};
+    static constexpr auto cardSpacing = CardWidth * 0.1f;
+    static const auto centerPos = r::Vector2{VirtualW * 0.5f, (VirtualH - MyCardBorderMarginY - CardHeight) * 0.5f};
+    static const auto topBottomX = centerPos.x - CardWidth * 0.5f;
+    static const auto leftRightY = centerPos.y - CardHeight * 0.5f;
+    static const auto topPlayPos = r::Vector2{topBottomX, centerPos.y - cardSpacing - CardHeight};
+    static const auto bottomPlayPos = r::Vector2{topBottomX, centerPos.y + cardSpacing};
+    static const auto leftPlayPos = r::Vector2{centerPos.x - CardWidth * 0.5f - cardSpacing - CardWidth, leftRightY};
+    static const auto rightPlayPos = r::Vector2{centerPos.x + cardSpacing + CardWidth * 0.5f, leftRightY};
     const auto [leftOpponentId, rightOpponentId] = getOpponentIds();
+    if (ctx().talonCard != nullptr) { ctx().talonCard->texture.Draw(topPlayPos); }
+    if (std::empty(ctx().cardsOnTable)) { return; }
     if (ctx().cardsOnTable.contains(leftOpponentId)) {
-        ctx().cardsOnTable.at(leftOpponentId).texture.Draw(leftPlayPos);
+        ctx().cardsOnTable.at(leftOpponentId)->texture.Draw(leftPlayPos);
     }
     if (ctx().cardsOnTable.contains(rightOpponentId)) {
-        ctx().cardsOnTable.at(rightOpponentId).texture.Draw(rightPlayPos);
+        ctx().cardsOnTable.at(rightOpponentId)->texture.Draw(rightPlayPos);
     }
     if (ctx().cardsOnTable.contains(ctx().myPlayerId)) {
-        ctx().cardsOnTable.at(ctx().myPlayerId).texture.Draw(middlePlayPos);
+        ctx().cardsOnTable.at(ctx().myPlayerId)->texture.Draw(bottomPlayPos);
     }
 }
 
@@ -1921,6 +2009,65 @@ auto drawMenu(
     }
 }
 
+auto drawMiserCards() -> void
+{
+    // TODO: show only when cards are open
+    if (not isVisible(ctx().miserCardsPanel)) { return; }
+    static const auto screenCenter = r::Vector2{VirtualW, VirtualH} * 0.5f;
+    static const auto maxCellSize = ctx().fontM.MeasureText("10", ctx().fontSizeM(), FontSpacing);
+    static const auto cellSize = maxCellSize.x * 1.1f;
+    static const auto gap = cellSize * 0.2f;
+    static constexpr auto cols = 9.f;
+    static constexpr auto rows = 4.f;
+    static const auto panelWidth = gap * (cols + 1.f) + cellSize * cols;
+    static const auto panelHeight = gap * (rows + 1.f) + cellSize * rows;
+    static const auto startX = screenCenter.x - (panelWidth * 0.5f);
+    static const auto startY = BorderMargin;
+    static const auto panel = r::Rectangle{startX, startY, panelWidth, panelHeight};
+    // TODO: don't hardcode values
+    static constexpr auto cards = std::array{
+        SpadeSign,   "7"sv, "8"sv, "9"sv, ""sv, "J"sv, ""sv,  ""sv,  ""sv, //
+        ClubSign,    "7"sv, ""sv,  "9"sv, ""sv, ""sv,  ""sv,  ""sv,  "A"sv, //
+        DiamondSign, ""sv,  "8"sv, ""sv,  ""sv, ""sv,  ""sv,  ""sv,  ""sv, //
+        HeartSign,   "7"sv, ""sv,  "9"sv, ""sv, ""sv,  "Q"sv, "K"sv, ""sv, //
+    };
+    const constexpr auto cardsView
+        = std::mdspan{std::data(cards), static_cast<std::size_t>(rows), static_cast<std::size_t>(cols)};
+    static constexpr auto segments = 64;
+    const auto thick = getGuiButtonBorderWidth();
+    panel.DrawRoundedLines(0.1f, segments, getGuiColor(BUTTON, BORDER_COLOR_NORMAL));
+    for (auto j = 0uz; j < cardsView.extent(0); ++j) {
+        for (auto i = 0uz; i < cardsView.extent(1); ++i) {
+            const auto pos = r::Vector2{
+                startX + gap + ((cellSize + gap) * static_cast<float>(i)),
+                startY + gap + ((cellSize + gap) * static_cast<float>(j))};
+            const auto cell = r::Rectangle{pos, {cellSize, cellSize}};
+
+            const auto textCell = std::string{cardsView[static_cast<std::size_t>(j), static_cast<std::size_t>(i)]};
+            const auto state = std::empty(textCell) ? GuiState{STATE_DISABLED} : GuiState{STATE_NORMAL};
+
+            if (i != 0) {
+                const auto cellColor = getGuiColor(BUTTON, GUI_PROPERTY(BASE, state));
+                const auto borderColor = getGuiColor(BUTTON, GUI_PROPERTY(BORDER, state));
+                constexpr const auto roundness = 0.2f;
+                r::Rectangle{cell.x - thick * 0.5f, cell.y - thick * 0.5f, cell.width + thick, cell.height + thick}
+                    .DrawRounded(roundness, segments, cellColor);
+                cell.DrawRoundedLines(roundness, segments, thick, borderColor);
+            }
+            if (not std::empty(textCell)) {
+                const auto textSize = ctx().fontM.MeasureText(textCell, ctx().fontSizeM(), FontSpacing);
+                const auto textPos = r::Vector2{
+                    pos.x + (cellSize - textSize.x) * 0.5f, //
+                    pos.y + (cellSize - textSize.y) * 0.5f};
+                const auto textColor = (textCell == DiamondSign or textCell == HeartSign)
+                    ? r::Color::Red()
+                    : getGuiColor(BUTTON, GUI_PROPERTY(TEXT, state));
+                ctx().fontM.DrawText(textCell, textPos, ctx().fontSizeM(), FontSpacing, textColor);
+            }
+        }
+    }
+}
+
 auto drawWhistingOrMiserMenu() -> void
 {
     const auto checkHalfWhist
@@ -1931,7 +2078,7 @@ auto drawWhistingOrMiserMenu() -> void
         ctx().myPlayer().whistingChoice = ctx().whisting.choice;
         sendWhisting(ctx().whisting.choice);
     };
-    if (ctx().bidding.bid == PREF_MISER_WT or ctx().bidding.bid == PREF_MISER) {
+    if (isMiser()) {
         drawMenu(MiserButtons, ctx().whisting.isVisible, click, checkHalfWhist);
     } else {
         drawMenu(WhistingButtons, ctx().whisting.isVisible, click, checkHalfWhist);
@@ -1953,20 +2100,26 @@ auto drawHowToPlayMenu() -> void
         []([[maybe_unused]] const GameText _) { return true; });
 }
 
-auto handleCardClick(std::list<Card>& hand, std::invocable<Card&&> auto act) -> void
+auto handleCardClick(std::list<const Card*>& hand, std::invocable<const Card&> auto act) -> void
 {
     if (not r::Mouse::IsButtonPressed(MOUSE_LEFT_BUTTON)) { return; }
     const auto mousePos = r::Mouse::GetPosition();
-    const auto hit = [&](Card& c) { return r::Rectangle{c.position, c.texture.GetSize()}.CheckCollision(mousePos); };
+    const auto hit = [&](const Card* c) {
+        return r::Rectangle{ctx().cardPositions[c->name], c->texture.GetSize()}.CheckCollision(mousePos);
+    };
     const auto reversed = hand | rv::reverse;
     if (const auto rit = rng::find_if(reversed, hit); rit != rng::cend(reversed)) {
         const auto it = std::next(rit).base();
-        if (not isCardPlayable(hand, *it)) {
-            PREF_WARN("Can't play this card: {}", it->name);
+        const auto& cardName = (*it)->name;
+        if (not isCardPlayable(hand, cardName)) {
+            PREF_WARN("Can't play {}", VAR(cardName));
             return;
         }
-        const auto _ = gsl::finally([&] { hand.erase(it); });
-        act(std::move(*it));
+        const auto _ = gsl::finally([&] {
+            ctx().cardPositions.erase(cardName);
+            hand.erase(it);
+        });
+        act(**it);
     }
 }
 
@@ -2027,14 +2180,8 @@ auto loadFonts() -> void
 auto loadColorScheme(const std::string_view style) -> void
 {
     const auto name = style | ToLower | ToString;
-    if (name == "light" and not std::empty(name)) {
-        // So that raygui doesn't unload the font
-        GuiSetFont(ctx().initialFont);
-        GuiLoadStyleDefault();
-    } else {
-        const auto stylePath = resources("styles", fmt::format("style_{}.rgs", name));
-        GuiLoadStyle(stylePath.c_str());
-    }
+    const auto stylePath = resources("styles", fmt::format("style_{}.rgs", name));
+    GuiLoadStyle(stylePath.c_str());
     GuiSetStyle(LISTVIEW, SCROLLBAR_WIDTH, ScrollBarWidth);
     ctx().settingsMenu.loadedColorScheme = name;
     saveToLocalStorage("color_scheme", name);
@@ -2149,11 +2296,7 @@ auto speechBubbleCooldown() -> void
 
 auto drawSpeechBubbleMenu() -> void
 {
-    if (not ctx().speechBubbleMenu.isVisible) { return; }
-    if (r::Keyboard::IsKeyPressed(KEY_ESCAPE)) {
-        ctx().speechBubbleMenu.isVisible = false;
-        return;
-    }
+    if (not isVisible(ctx().speechBubbleMenu)) { return; }
     static const auto phrases = pref::phrases()
         | rv::split('\n')
         | rv::transform([](auto&& rng) { return rng | ToString; })
@@ -2208,11 +2351,7 @@ auto drawSpeechBubbleMenu() -> void
 
 auto drawSettingsMenu() -> void
 {
-    if (not ctx().settingsMenu.isVisible) { return; }
-    if (r::Keyboard::IsKeyPressed(KEY_ESCAPE)) {
-        ctx().settingsMenu.isVisible = false;
-        return;
-    }
+    if (not isVisible(ctx().settingsMenu)) { return; }
     const auto lang = std::vector{
         ctx().localizeText(GameText::English),
         ctx().localizeText(GameText::Ukrainian),
@@ -2226,7 +2365,6 @@ auto drawSettingsMenu() -> void
         ctx().localizeText(GameText::Jungle),
         ctx().localizeText(GameText::Lavanda),
         ctx().localizeText(GameText::Bluish),
-        ctx().localizeText(GameText::Light),
     };
     const auto joinedLangs = lang | rv::intersperse(";") | rv::join | ToString;
     const auto joinedColorScheme = colorScheme | rv::intersperse(";") | rv::join | ToString;
@@ -2313,11 +2451,7 @@ auto drawSettingsMenu() -> void
 
 auto drawScoreSheet() -> void
 {
-    if (not ctx().scoreSheet.isVisible) { return; }
-    if (r::Keyboard::IsKeyPressed(KEY_ESCAPE)) {
-        ctx().scoreSheet.isVisible = false;
-        return;
-    }
+    if (not isVisible(ctx().scoreSheet)) { return; }
     static constexpr auto fSpace = FontSpacing;
     static constexpr auto rotateL = 90.f;
     static constexpr auto rotateR = 270.f;
@@ -2453,11 +2587,7 @@ auto drawScoreSheet() -> void
 
 auto drawOverallScoreboard() -> void
 {
-    if (not ctx().overallScoreboard.isVisible or std::size(ctx().overallScoreboard.table) < 3) { return; }
-    if (r::Keyboard::IsKeyPressed(KEY_ESCAPE)) {
-        ctx().overallScoreboard.isVisible = false;
-        return;
-    }
+    if (not isVisible(ctx().overallScoreboard) or std::size(ctx().overallScoreboard.table) < 3) { return; }
     static constexpr auto maxVisibleRowCount = 13.f;
     static const auto cellSize = r::Vector2{VirtualW / 10.f, RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT};
     static auto panelView = r::Rectangle{};
@@ -2468,7 +2598,7 @@ auto drawOverallScoreboard() -> void
         * r::Vector2{
             static_cast<float>(std::size(ctx().overallScoreboard.table[0])), std::min(maxVisibleRowCount, rowCount)};
     const auto windowBoxSize = panel + r::Vector2{cellSize.y * 2.f, cellSize.y * 5.f};
-    if (RVector2::Zero() == ctx().overallScoreboard.windowBoxPos) {
+    if (r::Vector2::Zero() == ctx().overallScoreboard.windowBoxPos) {
         ctx().overallScoreboard.windowBoxPos = (r::Vector2{VirtualW, VirtualH} - windowBoxSize) * 0.5f;
     }
     const auto windowBox = r::Rectangle{ctx().overallScoreboard.windowBoxPos, windowBoxSize};
@@ -2494,22 +2624,19 @@ auto drawOverallScoreboard() -> void
                     if (cell.starts_with('+')
                         or cell.starts_with(ctx().localizeText(GameText::Win))
                         or (cell.contains('%') and std::stoi(cell) >= GoodWinrate)) {
-                        return rng::contains(std::array{"light", "bluish"}, scheme) ? r::Color::DarkGreen()
-                                                                                    : r::Color::Lime();
+                        return scheme == "bluish" ? r::Color::DarkGreen() : r::Color::Lime();
                     }
                     if ((cell.starts_with('-') and "-" != cell)
                         or cell.starts_with(ctx().localizeText(GameText::Lost))
                         or (cell.contains('%') and std::stoi(cell) <= BadWinrate)) {
-                        if (rng::contains(std::array{"light", "bluish"}, scheme)) { return r::Color::Maroon(); }
-                        if ("lavanda" == scheme) { return r::Color::Pink(); }
+                        if (scheme == "bluish") { return r::Color::Maroon(); }
+                        if (scheme == "lavanda") { return r::Color::Pink(); }
                         return r::Color::Red();
                     }
                     if ("0" == cell
                         or cell.starts_with(ctx().localizeText(GameText::Draw))
                         or (cell.contains('%') and std::stoi(cell) < GoodWinrate and std::stoi(cell) > BadWinrate)) {
-                        return rng::contains(std::array{"light", "bluish"}, scheme)
-                            ? r::Color::Orange()
-                            : r::Color::Orange(); // TODO: replace with Yellow or remove ternary
+                        return r::Color::Orange();
                     }
                     return getGuiColor(LABEL, TEXT_COLOR_NORMAL);
                 });
@@ -2542,7 +2669,7 @@ auto drawLastTrick() -> void
 {
     if (std::empty(ctx().lastTrick)) { return; }
     const auto lastTricks = ctx().lastTrick | rv::transform(&cardNameCodepoint) | rng::to_vector;
-    const auto fontSize = ctx().fontSizeL();
+    const auto fontSize = 100; // TODO: make relative
     ctx().fontL.DrawText(
         std::data(lastTricks),
         std::ssize(lastTricks),
@@ -2604,18 +2731,17 @@ auto handleMousePress() -> void
         const auto& playerId
             = std::invoke([&] { return isMyTurn() ? ctx().myPlayerId : ctx().myPlayer().playsOnBehalfOf; });
 
-        handleCardClick(ctx().player(playerId).hand, [&](Card&& card) {
-            const auto name = card.name; // copy before move `card`
-            if (std::empty(ctx().cardsOnTable)) { ctx().leadSuit = cardSuit(name); }
-            ctx().cardsOnTable.insert_or_assign(playerId, std::move(card));
-            sendPlayCard(playerId, name);
+        handleCardClick(ctx().player(playerId).hand, [&](const Card& card) {
+            if (std::empty(ctx().cardsOnTable) and ctx().talonCard == nullptr) { ctx().leadSuit = cardSuit(card.name); }
+            ctx().cardsOnTable.insert_or_assign(playerId, getCard(card.name));
+            sendPlayCard(playerId, card.name);
         });
         return;
     } else {
         if (not isMyTurn()) { return; }
     }
     if ((ctx().stage != GameStage::TALON_PICKING) or (std::size(ctx().discardedTalon) >= 2)) { return; }
-    handleCardClick(ctx().myPlayer().hand, [&](Card&& card) { ctx().discardedTalon.push_back(card.name); });
+    handleCardClick(ctx().myPlayer().hand, [&](const Card& card) { ctx().discardedTalon.push_back(card.name); });
     if (std::size(ctx().discardedTalon) != 2) { return; }
     if (const auto isSixSpade = ctx().bidding.rank == 0; isSixSpade) {
         ctx().bidding.rank = AllRanks;
@@ -2677,6 +2803,7 @@ auto updateDrawFrame([[maybe_unused]] void* ud) -> void
         drawPlayedCards();
         drawScoreSheetButton();
         drawScoreSheet();
+        drawMiserCards();
         drawLastTrick();
         drawSpeechBubbleButton();
         drawOverallScoreboardButton();
@@ -2714,7 +2841,7 @@ Options:
     --url=<url>             WebSocket URL [default: ws://0.0.0.0:8080]
     --language=<name>       Language to use [default: english]. Options: english, ukrainian, alternative
     --color-scheme=<name>   Color scheme to use [default: genesis]
-                            Options: genesis, amber, dark, cyber, jungle, lavanda, bluish, light)";
+                            Options: genesis, amber, dark, cyber, jungle, lavanda, bluish)";
 } // namespace
 } // namespace pref
 

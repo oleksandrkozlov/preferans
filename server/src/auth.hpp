@@ -18,10 +18,14 @@
 namespace pref {
 
 template<typename T>
-concept StringLike
-    = std::same_as<std::remove_cvref_t<T>, std::string_view> or std::same_as<std::remove_cvref_t<T>, std::string>;
+concept CompatibleCharByte = std::is_same_v<T, char> or std::is_same_v<T, unsigned char>;
 
-[[nodiscard]] inline auto toBytes(StringLike auto&& s) noexcept
+template<typename T>
+concept CharSequence = CompatibleCharByte<std::uint8_t>
+    and std::ranges::contiguous_range<T>
+    and std::same_as<std::remove_cv_t<std::ranges::range_value_t<T>>, char>;
+
+[[nodiscard]] inline auto toBytes(CharSequence auto&& s) noexcept
 {
     using T = std::remove_reference_t<decltype(s)>;
     using R = std::conditional_t<std::is_const_v<T>, const std::uint8_t, std::uint8_t>;
