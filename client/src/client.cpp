@@ -57,6 +57,24 @@ constexpr auto AuthTokenStorageKey = "auth_token";
     return Vector2SubtractValue(lhs, rhs);
 }
 
+[[nodiscard]] constexpr auto operator+(r::Rectangle lhs, const float value) noexcept -> r::Rectangle
+{
+    lhs.x -= value * 0.5f;
+    lhs.y -= value * 0.5f;
+    lhs.width += value;
+    lhs.height += value;
+    return lhs;
+}
+
+[[maybe_unused]] [[nodiscard]] constexpr auto operator-(r::Rectangle lhs, const float value) noexcept -> r::Rectangle
+{
+    lhs.x += value * 0.5f;
+    lhs.y += value * 0.5f;
+    lhs.width -= value;
+    lhs.height -= value;
+    return lhs;
+}
+
 enum class Shift : std::uint8_t {
     Horizont = 1 << 0,
     Vertical = 1 << 1,
@@ -1241,27 +1259,33 @@ auto updateWindowSize() -> void
     r::Mouse::SetScale(1.f / ctx().scale, 1.f / ctx().scale);
 }
 
+#define PREF_METHODS                                                                                                   \
+    X(LoginResponse)                                                                                                   \
+    X(AuthResponse)                                                                                                    \
+    X(PlayerJoined)                                                                                                    \
+    X(PlayerLeft)                                                                                                      \
+    X(DealCards)                                                                                                       \
+    X(PlayerTurn)                                                                                                      \
+    X(Bidding)                                                                                                         \
+    X(Whisting)                                                                                                        \
+    X(OpenWhistPlay)                                                                                                   \
+    X(HowToPlay)                                                                                                       \
+    X(PlayCard)                                                                                                        \
+    X(TrickFinished)                                                                                                   \
+    X(DealFinished)                                                                                                    \
+    X(SpeechBubble)                                                                                                    \
+    X(PingPong)                                                                                                        \
+    X(UserGames)                                                                                                       \
+    X(OpenTalon)
+
 auto dispatchMessage(const std::optional<Message>& msg) -> void
 {
     if (not msg) { return; }
     const auto& method = msg->method();
-    if (method == "LoginResponse") { return handleLoginResponse(*msg); }
-    if (method == "AuthResponse") { return handleAuthResponse(*msg); }
-    if (method == "PlayerJoined") { return handlePlayerJoined(*msg); }
-    if (method == "PlayerLeft") { return handlePlayerLeft(*msg); }
-    if (method == "DealCards") { return handleDealCards(*msg); }
-    if (method == "PlayerTurn") { return handlePlayerTurn(*msg); }
-    if (method == "Bidding") { return handleBidding(*msg); }
-    if (method == "Whisting") { return handleWhisting(*msg); }
-    if (method == "OpenWhistPlay") { return handleOpenWhistPlay(*msg); }
-    if (method == "HowToPlay") { return handleHowToPlay(*msg); }
-    if (method == "PlayCard") { return handlePlayCard(*msg); }
-    if (method == "TrickFinished") { return handleTrickFinished(*msg); }
-    if (method == "DealFinished") { return handleDealFinished(*msg); }
-    if (method == "SpeechBubble") { return handleSpeechBubble(*msg); }
-    if (method == "PingPong") { return handlePingPong(*msg); }
-    if (method == "UserGames") { return handleUserGames(*msg); }
-    if (method == "OpenTalon") { return handleOpenTalon(*msg); }
+#define X(MSGNAME)                                                                                                     \
+    if (method == std::string_view{#MSGNAME}) { return handle##MSGNAME(*msg); }
+    PREF_METHODS;
+#undef X
     PREF_WARN("error: unknown {}", VAR(method));
 }
 
@@ -1399,6 +1423,25 @@ auto drawGuiLabelCentered(const std::string& text, const r::Vector2& anchor) -> 
     GuiLabel(bounds, text.c_str());
 }
 
+auto drawRectangleWithBorder(const r::Rectangle& rect, const r::Color& fillColor, const r::Color& borderColor) -> void
+{
+    rect.Draw(fillColor);
+    rect.DrawLines(borderColor, getGuiButtonBorderWidth());
+}
+
+auto drawRectangleRoundedWithBorder(
+    const r::Rectangle& rect,
+    const float roundness,
+    const float thick = getGuiButtonBorderWidth(),
+    const r::Color& fillColor = getGuiColor(BASE_COLOR_NORMAL),
+    const r::Color& borderColor = getGuiColor(BORDER_COLOR_NORMAL)) -> void
+{
+    static constexpr int segments = 64;
+    const auto fillRect = rect + thick;
+    fillRect.DrawRounded(roundness, segments, fillColor);
+    rect.DrawRoundedLines(roundness, segments, thick, borderColor);
+}
+
 auto drawSpeechBubbleText(const r::Vector2& p3, const std::string& text, const DrawPosition drawPosition) -> void
 {
     using enum DrawPosition;
@@ -1419,11 +1462,8 @@ auto drawSpeechBubbleText(const r::Vector2& p3, const std::string& text, const D
     const auto colorBorder = getGuiColor(BORDER_COLOR_NORMAL);
     const auto colorBackground = getGuiColor(BASE_COLOR_NORMAL);
     const auto colorText = getGuiColor(TEXT_COLOR_NORMAL);
-    const auto thick = getGuiButtonBorderWidth(); // * 2;
-    static constexpr auto segments = 64;
-    r::Rectangle{rect.x - thick * 0.5f, rect.y - thick * 0.5f, rect.width + thick, rect.height + thick}.DrawRounded(
-        roundness, segments, colorBackground);
-    rect.DrawRoundedLines(roundness, segments, thick, colorBorder);
+    const auto thick = getGuiButtonBorderWidth();
+    drawRectangleRoundedWithBorder(rect, roundness);
     isRight(drawPosition) ? DrawTriangle(p3, p2, p1, colorBackground) : DrawTriangle(p1, p2, p3, colorBackground);
     p3.DrawLine(p1, thick, colorBorder);
     p3.DrawLine(p2, thick, colorBorder);
@@ -1919,21 +1959,19 @@ auto drawBiddingMenu() -> void
             const auto pos = r::Vector2{
                 BidOriginX + static_cast<float>(c) * (BidCellW + BidGap), //
                 BidOriginY + static_cast<float>(r) * (BidCellH + BidGap)};
-            const auto rect = r::Rectangle{pos, {BidCellW, BidCellH}};
+            const auto cell = r::Rectangle{pos, {BidCellW, BidCellH}};
             const auto clicked = std::invoke([&] {
-                if ((state == STATE_DISABLED) or not r::Mouse::GetPosition().CheckCollision(rect)) { return false; }
+                if ((state == STATE_DISABLED) or not r::Mouse::GetPosition().CheckCollision(cell)) { return false; }
                 state = r::Mouse::IsButtonDown(MOUSE_LEFT_BUTTON) ? STATE_PRESSED : STATE_FOCUSED;
                 return r::Mouse::IsButtonReleased(MOUSE_LEFT_BUTTON);
             });
-            const auto borderColor = getGuiColor(BUTTON, GUI_PROPERTY(BORDER, state));
-            const auto bgColor = getGuiColor(BUTTON, GUI_PROPERTY(BASE, state));
             const auto textColor = getGuiColor(BUTTON, GUI_PROPERTY(TEXT, state));
-            rect.Draw(bgColor);
-            rect.DrawLines(borderColor, getGuiButtonBorderWidth());
+            drawRectangleWithBorder(
+                cell, getGuiColor(BUTTON, GUI_PROPERTY(BASE, state)), getGuiColor(BUTTON, GUI_PROPERTY(BORDER, state)));
             auto text = std::string{ctx().localizeBid(bid)};
             auto textSize = ctx().fontM.MeasureText(text, ctx().fontSizeM(), FontSpacing);
-            const auto textX = rect.x + (rect.width - textSize.x) * 0.5f;
-            const auto textY = rect.y + (rect.height - textSize.y) * 0.5f;
+            const auto textX = cell.x + (cell.width - textSize.x) * 0.5f;
+            const auto textY = cell.y + (cell.height - textSize.y) * 0.5f;
             if (isRedSuit(text)) {
                 auto count = 0;
                 auto codepoints = LoadCodepoints(text.c_str(), &count);
@@ -2011,8 +2049,7 @@ auto drawMenu(
 
 auto drawMiserCards() -> void
 {
-    // TODO: show only when cards are open
-    if (not isVisible(ctx().miserCardsPanel)) { return; }
+    if (not ctx().miserCardsPanel.isVisible) { return; }
     static const auto screenCenter = r::Vector2{VirtualW, VirtualH} * 0.5f;
     static const auto maxCellSize = ctx().fontM.MeasureText("10", ctx().fontSizeM(), FontSpacing);
     static const auto cellSize = maxCellSize.x * 1.1f;
@@ -2033,9 +2070,7 @@ auto drawMiserCards() -> void
     };
     const constexpr auto cardsView
         = std::mdspan{std::data(cards), static_cast<std::size_t>(rows), static_cast<std::size_t>(cols)};
-    static constexpr auto segments = 64;
-    const auto thick = getGuiButtonBorderWidth();
-    panel.DrawRoundedLines(0.1f, segments, getGuiColor(BUTTON, BORDER_COLOR_NORMAL));
+    drawRectangleWithBorder(panel, getGuiColor(BACKGROUND_COLOR), getGuiColor(BUTTON, BORDER_COLOR_NORMAL));
     for (auto j = 0uz; j < cardsView.extent(0); ++j) {
         for (auto i = 0uz; i < cardsView.extent(1); ++i) {
             const auto pos = r::Vector2{
@@ -2045,14 +2080,11 @@ auto drawMiserCards() -> void
 
             const auto textCell = std::string{cardsView[static_cast<std::size_t>(j), static_cast<std::size_t>(i)]};
             const auto state = std::empty(textCell) ? GuiState{STATE_DISABLED} : GuiState{STATE_NORMAL};
-
             if (i != 0) {
-                const auto cellColor = getGuiColor(BUTTON, GUI_PROPERTY(BASE, state));
-                const auto borderColor = getGuiColor(BUTTON, GUI_PROPERTY(BORDER, state));
-                constexpr const auto roundness = 0.2f;
-                r::Rectangle{cell.x - thick * 0.5f, cell.y - thick * 0.5f, cell.width + thick, cell.height + thick}
-                    .DrawRounded(roundness, segments, cellColor);
-                cell.DrawRoundedLines(roundness, segments, thick, borderColor);
+                drawRectangleWithBorder(
+                    cell,
+                    getGuiColor(BUTTON, GUI_PROPERTY(BASE, state)),
+                    getGuiColor(BUTTON, GUI_PROPERTY(BORDER, state)));
             }
             if (not std::empty(textCell)) {
                 const auto textSize = ctx().fontM.MeasureText(textCell, ctx().fontSizeM(), FontSpacing);
@@ -2797,13 +2829,13 @@ auto updateDrawFrame([[maybe_unused]] void* ud) -> void
         drawWhistingOrMiserMenu();
         drawHowToPlayMenu();
         drawBiddingMenu();
+        drawMiserCards();
         drawMyHand();
         drawRightHand();
         drawLeftHand();
         drawPlayedCards();
         drawScoreSheetButton();
         drawScoreSheet();
-        drawMiserCards();
         drawLastTrick();
         drawSpeechBubbleButton();
         drawOverallScoreboardButton();
