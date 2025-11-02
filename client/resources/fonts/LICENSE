@@ -1,14 +1,13 @@
 This project includes the following third-party fonts:
 
 - DejaVuSans.ttf
-- Font-Awesome-7-Brands-Regular-400.otf
-- Font-Awesome-7-Free-Regular-400.otf
 - Font-Awesome-7-Free-Solid-900.otf
 
 ===============================================================================
 1. DejaVu Sans
 
 Applies to: DejaVuSans.ttf
+
 License: DejaVu Fonts License
 
 ===============================================================================
@@ -204,10 +203,7 @@ $Id$
 ===============================================================================
 2. Font Awesome Free Fonts
 
-Applies to:
-- Font-Awesome-7-Brands-Regular-400.otf
-- Font-Awesome-7-Free-Regular-400.otf
-- Font-Awesome-7-Free-Solid-900.otf
+Applies to: Font-Awesome-7-Free-Solid-900.otf
 
 License: SIL Open Font License 1.1 (OFL)
 

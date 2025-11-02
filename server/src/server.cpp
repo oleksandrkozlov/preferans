@@ -31,7 +31,7 @@ auto dealFinished() -> Awaitable<>;
     if (auto result = Message{}; result.ParseFromArray(buffer.data().data(), gsl::narrow<int>(buffer.size()))) {
         return result;
     }
-    PREF_WARN("error: failed to make Message from array");
+    PREF_W("error: failed to make Message from array");
     return {};
 }
 
@@ -39,13 +39,13 @@ auto setWhoseTurn(const auto& it) -> void
 {
     ctx().whoseTurnIt = it;
     const auto& [playerId, player] = *(ctx().whoseTurnIt);
-    INFO_VAR(player.name, playerId);
+    PREF_DI(player.name, playerId);
 }
 
 auto setForehandId() -> void
 {
     ctx().forehandId = ctx().whoseTurnId();
-    PREF_INFO("playerId: {}", ctx().forehandId);
+    PREF_I("playerId: {}", ctx().forehandId);
 }
 
 auto resetWhoseTurn() -> void
@@ -56,7 +56,7 @@ auto resetWhoseTurn() -> void
 
 auto advanceWhoseTurn() -> void
 {
-    PREF_INFO();
+    PREF_I();
     assert((std::size(ctx().players) == NumberOfPlayers) and "all players joined");
     if (const auto nextTurnIt = std::next(ctx().whoseTurnIt); nextTurnIt != std::cend(ctx().players)) {
         setWhoseTurn(nextTurnIt);
@@ -67,14 +67,14 @@ auto advanceWhoseTurn() -> void
 
 auto forehandsTurn() -> void
 {
-    PREF_INFO();
+    PREF_I();
     assert(ctx().players.contains(ctx().forehandId) and "forehand player exists");
     setWhoseTurn(ctx().players.find(ctx().forehandId));
 }
 
 auto advanceWhoseTurn(const GameStage stage) -> void
 {
-    PREF_INFO("stage: {}", GameStage_Name(stage));
+    PREF_I("stage: {}", GameStage_Name(stage));
     advanceWhoseTurn();
     if (not rng::contains(std::array{GameStage::BIDDING, GameStage::TALON_PICKING}, stage)) { return; }
     while (ctx().player(ctx().whoseTurnId()).bid == PREF_PASS) { advanceWhoseTurn(); }
@@ -94,7 +94,7 @@ auto setNextDealTurn() -> void
     const auto winnerId = finishTrick(ctx().trick, ctx().trump);
     const auto winnerName = ctx().playerName(winnerId);
     const auto tricksTaken = ++ctx().player(winnerId).tricksTaken;
-    INFO_VAR(winnerName, winnerId, tricksTaken);
+    PREF_DI(winnerName, winnerId, tricksTaken);
     ctx().trick.clear();
     return winnerId;
 }
@@ -224,13 +224,13 @@ auto joinPlayer(
     session.playerId = playerId;
     ++session.id;
     assert(session.id == 1);
-    INFO_VAR(session.playerId, session.playerName, session.id);
+    PREF_DI(session.playerId, session.playerName, session.id);
     players.emplace(session.playerId, Player{session.playerId, session.playerName, session.id, ws});
 }
 
 auto prepareNewSession(const Player::Id& playerId, Context::Players& players, PlayerSession& session) -> Awaitable<>
 {
-    PREF_INFO("{}, {}, {}{}", VAR(playerId), VAR(session.playerName), VAR(session.id), VAR_MB(session.playerId));
+    PREF_I("{}, {}, {}{}", PREF_V(playerId), PREF_V(session.playerName), PREF_V(session.id), PREF_M(session.playerId));
     assert(players.contains(playerId) and "player exists");
     auto& player = players[playerId];
     session.id = ++player.sessionId;
@@ -241,7 +241,7 @@ auto prepareNewSession(const Player::Id& playerId, Context::Players& players, Pl
     if (const auto [error] = co_await player.ws->async_close(
             web::close_reason(web::close_code::policy_error, "Another tab connected"), net::as_tuple);
         error) {
-        PREF_WARN("{}: failed to close ws", VAR(error));
+        PREF_W("{}: failed to close ws", PREF_V(error));
     }
 }
 
@@ -256,7 +256,7 @@ auto reconnectPlayer(
 {
     co_await prepareNewSession(playerId, players, session);
     replaceStream(playerId, ws);
-    INFO_VAR(session.playerName, session.playerId, session.id);
+    PREF_DI(session.playerName, session.playerId, session.id);
 }
 
 auto sendToOne(const Message& msg, const std::shared_ptr<Stream>& ws) -> Awaitable<sys::error_code>
@@ -270,7 +270,7 @@ auto sendToOne(const Message& msg, const std::shared_ptr<Stream>& ws) -> Awaitab
 auto sendToMany(const Message msg, const std::vector<std::shared_ptr<Stream>>& wss) -> Awaitable<>
 {
     for (const auto& ws : wss) {
-        if (const auto error = co_await sendToOne(msg, ws)) { PREF_WARN("{}: failed to send message", VAR(error)); }
+        if (const auto error = co_await sendToOne(msg, ws)) { PREF_W("{}: failed to send message", PREF_V(error)); }
     }
 }
 
@@ -303,14 +303,14 @@ auto forwardToAllExcept(Message msg, const Player::Id& excludedId) -> Awaitable<
 
 auto addCardToHand(const Player::Id& playerId, const std::string& card) -> void
 {
-    INFO_VAR(playerId, card);
+    PREF_DI(playerId, card);
     assert(not ctx().player(playerId).hand.contains(card) and "card doesn't exists");
     ctx().player(playerId).hand.insert(card);
 }
 
 [[nodiscard]] auto makePlayerJoined(const PlayerSession& session) -> PlayerJoined
 {
-    INFO_VAR(session.playerId, session.playerName);
+    PREF_DI(session.playerId, session.playerName);
     auto result = PlayerJoined{};
     result.set_player_id(session.playerId);
     result.set_player_name(session.playerName);
@@ -353,7 +353,7 @@ auto addCardToHand(const Player::Id& playerId, const std::string& card) -> void
 
 [[nodiscard]] auto makePlayerLeft(const Player::Id& playerId) -> PlayerLeft
 {
-    INFO_VAR(playerId);
+    PREF_DI(playerId);
     auto result = PlayerLeft{};
     result.set_player_id(playerId);
     return result;
@@ -392,7 +392,7 @@ auto addCardToHand(const Player::Id& playerId, const std::string& card) -> void
         }
     }
     const auto playerName = ctx().playerName(playerId);
-    PREF_INFO("{}, {}, stage: {}", VAR(playerId), VAR(playerName), GameStage_Name(stage));
+    PREF_I("{}, {}, stage: {}", PREF_V(playerId), PREF_V(playerName), GameStage_Name(stage));
     return result;
 }
 
@@ -403,7 +403,7 @@ auto addCardToHand(const Player::Id& playerId, const std::string& card) -> void
     result.set_bid(bid);
     ctx().trump = std::string{getTrump(bid)};
     const auto playerName = ctx().playerName(playerId);
-    INFO_VAR(playerName, playerId, bid, ctx().trump);
+    PREF_DI(playerName, playerId, bid, ctx().trump);
     return result;
 }
 
@@ -418,7 +418,7 @@ auto addCardToHand(const Player::Id& playerId, const std::string& card) -> void
 [[nodiscard]] auto makeOpenWhistPlay(const Player::Id& activeWhisterId, const Player::Id& passiveWhisterId)
     -> OpenWhistPlay
 {
-    INFO_VAR(activeWhisterId, passiveWhisterId);
+    PREF_DI(activeWhisterId, passiveWhisterId);
     auto result = OpenWhistPlay{};
     result.set_active_whister_id(activeWhisterId);
     result.set_passive_whister_id(passiveWhisterId);
@@ -427,7 +427,7 @@ auto addCardToHand(const Player::Id& playerId, const std::string& card) -> void
 
 [[nodiscard]] auto makeTrickFinished(const Context::Players& players) -> TrickFinished
 {
-    PREF_INFO();
+    PREF_I();
     auto result = TrickFinished{};
     for (const auto& [playerId, player] : players) {
         auto tricks = result.add_tricks();
@@ -453,9 +453,26 @@ auto addCardToHand(const Player::Id& playerId, const std::string& card) -> void
 
 [[nodiscard]] auto makeOpenTalon(const CardName& card) -> OpenTalon
 {
-    INFO_VAR(card);
+    PREF_DI(card);
     auto result = OpenTalon{};
     result.set_card(card);
+    return result;
+}
+
+template<std::convertible_to<std::string> T, typename MutRepeatedField>
+auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> void
+{
+    output.Reserve(static_cast<int>(std::size(input)));
+    for (auto& value : input) { output.Add(std::move(value)); }
+}
+
+[[nodiscard]] auto makeMiserCards(std::vector<CardName>& remainingCards, std::vector<CardName>& playedCards)
+    -> MiserCards
+{
+    PREF_DI(remainingCards, playedCards);
+    auto result = MiserCards{};
+    moveVectorToRepeated(remainingCards, *result.mutable_remaining_cards());
+    moveVectorToRepeated(playedCards, *result.mutable_played_cards());
     return result;
 }
 
@@ -471,7 +488,7 @@ auto sendLoginResponse(
     const std::string& authToken = {}) -> Awaitable<>
 {
     if (const auto error = co_await sendToOne(makeMessage(makeLoginResponse(errorMsg, playerId, authToken)), ws)) {
-        PREF_WARN("{}: failed to send LoginResponse", VAR(error));
+        PREF_W("{}: failed to send LoginResponse", PREF_V(error));
     }
 }
 
@@ -479,7 +496,7 @@ auto sendAuthResponse(
     const std::shared_ptr<Stream>& ws, const std::string& errorMsg, const Player::Name& playerName = {}) -> Awaitable<>
 {
     if (const auto error = co_await sendToOne(makeMessage(makeAuthResponse(errorMsg, playerName)), ws)) {
-        PREF_WARN("{}: failed to send AuthResponse", VAR(error));
+        PREF_W("{}: failed to send AuthResponse", PREF_V(error));
     }
 }
 
@@ -496,7 +513,7 @@ auto sendDealCards(const Player::Id& playerId, const Hand& hand) -> Awaitable<>
 auto sendDealCards(const std::shared_ptr<Stream>& ws, const Player::Id& playerId, const Hand& hand) -> Awaitable<>
 {
     if (const auto error = co_await sendToOne(makeMessage(makeDealCards(playerId, hand)), ws)) {
-        PREF_WARN("{}: failed to send DealCards to {}", VAR(error), VAR(playerId));
+        PREF_W("{}: failed to send DealCards to {}", PREF_V(error), PREF_V(playerId));
     }
 }
 
@@ -532,14 +549,14 @@ auto sendDealFinished() -> Awaitable<>
 
 auto sendPingPong(const Message& msg, const std::shared_ptr<Stream>& ws) -> Awaitable<>
 {
-    if (const auto error = co_await sendToOne(msg, ws)) { PREF_WARN("{}: failed to send PingPong", VAR(error)); }
+    if (const auto error = co_await sendToOne(msg, ws)) { PREF_W("{}: failed to send PingPong", PREF_V(error)); }
 }
 
 auto sendUserGames() -> Awaitable<>
 {
     for (const auto& player : ctx().players | rv::values) {
         if (const auto error = co_await sendToOne(makeMessage(makeUserGames(ctx().gameData, player.id)), player.ws)) {
-            PREF_WARN("{}: failed to send UserGames to {}", VAR(error), VAR(player.id));
+            PREF_W("{}: failed to send UserGames to {}", PREF_V(error), PREF_V(player.id));
         }
     }
 }
@@ -551,10 +568,25 @@ auto sendOpenTalon() -> Awaitable<>
     return sendToAll(makeMessage(makeOpenTalon(ctx().talon.current)), ctx().players);
 }
 
+auto sendMiserCards() -> Awaitable<>
+{
+    const auto& declarer = getDeclarer(ctx().players);
+    auto played = declarer.playedCards
+        | rv::remove_if([&](const CardNameView card) { return rng::contains(ctx().talon.discardedCards, card); })
+        | rng::to_vector;
+
+    auto remaining = rv::concat(declarer.hand, ctx().talon.discardedCards)
+        | rv::remove_if([&](const CardNameView card) { return rng::contains(played, card); })
+        | rng::to_vector;
+
+    return sendToAll(makeMessage(makeMiserCards(remaining, played)), ctx().players);
+}
+
 auto removeCardFromHand(const Player::Id& playerId, const std::string& card) -> void
 {
-    INFO_VAR(playerId, card);
+    PREF_DI(playerId, card);
     assert(ctx().player(playerId).hand.contains(card) and "card exists");
+    ctx().player(playerId).playedCards.push_back(card);
     ctx().player(playerId).hand.erase(card);
 }
 
@@ -578,7 +610,7 @@ auto dealCards() -> Awaitable<>
     for (const auto& [playerId, hand] : rv::zip(ctx().players | rv::keys, hands)) {
         ctx().player(playerId).hand = hand | rng::to<Hand>;
     }
-    PREF_INFO("talon: {}, {}", ctx().talon.cards, VAR(hands));
+    PREF_I("talon: {}, {}", ctx().talon.cards, PREF_V(hands));
     const auto wss = ctx().players
         | rv::values
         | rv::transform([](const Player& player) { return std::pair{player.id, player.ws}; })
@@ -593,19 +625,19 @@ auto dealCards() -> Awaitable<>
 auto removePlayer(const Player::Id playerId) -> Awaitable<>
 {
     assert(ctx().players.contains(playerId) and "player exists");
-    INFO_VAR(playerId);
+    PREF_DI(playerId);
     ctx().players.erase(playerId);
     co_await sendPlayerLeft(playerId);
 }
 
 auto disconnected(Player::Id playerId) -> Awaitable<>
 {
-    INFO_VAR(playerId);
+    PREF_DI(playerId);
     auto& player = ctx().player(playerId);
     if (not player.reconnectTimer) { player.reconnectTimer.emplace(co_await net::this_coro::executor); }
     player.reconnectTimer->expires_after(10s);
     if (const auto [error] = co_await player.reconnectTimer->async_wait(net::as_tuple); error) {
-        if (error != net::error::operation_aborted) { WARN_VAR(error); }
+        if (error != net::error::operation_aborted) { PREF_DW(error); }
         co_return;
     }
     co_await removePlayer(std::move(playerId));
@@ -649,7 +681,7 @@ auto updateScoreSheetForDeal() -> void
 auto dealFinished() -> Awaitable<>
 {
     ctx().gameDuration = pref::durationInSec(ctx().gameStarted);
-    PREF_INFO(
+    PREF_I(
         "Game duration: {}, duration: {}, started: {}",
         formatDuration(ctx().gameDuration),
         ctx().gameDuration,
@@ -657,10 +689,10 @@ auto dealFinished() -> Awaitable<>
     updateScoreSheetForDeal();
     const auto finalResult = calculateFinalResult(makeFinalScore(ctx().scoreSheet));
     for (const auto& [playerId, score] : ctx().scoreSheet) {
-        INFO_VAR(playerId, score.dump, score.pool);
+        PREF_DI(playerId, score.dump, score.pool);
         auto totalWhists = 0;
         for (const auto& [id, whists] : score.whists) {
-            PREF_INFO("whists: {} -> {}", whists, id);
+            PREF_I("whists: {} -> {}", whists, id);
             totalWhists += rng::accumulate(whists, 0);
         }
         addOrUpdateUserGame(
@@ -674,7 +706,7 @@ auto dealFinished() -> Awaitable<>
                 totalWhists,
                 finalResult.at(playerId)));
     }
-    PREF_INFO("gameData: {}", formatGameData(ctx().gameData));
+    PREF_I("gameData: {}", formatGameData(ctx().gameData));
     storeGameData(ctx().gameDataPath, ctx().gameData);
     co_await sendUserGames();
     co_await sendDealFinished();
@@ -686,7 +718,7 @@ auto dealFinished() -> Awaitable<>
     const auto bids = ctx().players | rv::values | rv::transform(&Player::bid);
     const auto passCount = rng::count(bids, PREF_PASS);
     const auto activeCount = rng::count_if(bids, [](auto&& bid) { return not std::empty(bid) and bid != PREF_PASS; });
-    INFO_VAR(passCount, activeCount);
+    PREF_DI(passCount, activeCount);
     if (passCount == WhistersCount and activeCount == DeclarerCount) {
         const auto& contract = *rng::find_if(bids, notEqualTo(PREF_PASS));
         return contract.contains(PREF_WT) ? GameStage::WHISTING : GameStage::TALON_PICKING;
@@ -704,12 +736,12 @@ auto maybeStartGame() -> Awaitable<>
     // TODO: use UTC on the server and local time zone on the client
     ctx().gameStarted = localTimeSinceEpochInSec();
     ++ctx().gameId;
-    PREF_INFO("gameId: {} started: {} {}", ctx().gameId, formatDate(ctx().gameStarted), formatTime(ctx().gameStarted));
+    PREF_I("gameId: {} started: {} {}", ctx().gameId, formatDate(ctx().gameStarted), formatTime(ctx().gameStarted));
     for (const auto& id : ctx().players | rv::keys) {
         addOrUpdateUserGame(ctx().gameData, id, makeUserGame(ctx().gameId, GameType::RANKED, ctx().gameStarted));
     }
     storeGameData(ctx().gameDataPath, ctx().gameData);
-    PREF_INFO("gameData: {}", formatGameData(ctx().gameData));
+    PREF_I("gameData: {}", formatGameData(ctx().gameData));
     co_await sendUserGames();
     co_await dealCards();
     resetWhoseTurn();
@@ -735,8 +767,8 @@ auto handleLoginRequest(const Message msg, const std::shared_ptr<Stream>& ws) ->
     const auto& playerName = loginRequest->player_name();
     const auto& password = loginRequest->password();
     if (not verifyPlayerNameAndPassword(ctx().gameData, playerName, password)) {
-        const auto error = fmt::format("unknown {} or wrong password", VAR(playerName));
-        WARN_VAR(error);
+        const auto error = fmt::format("unknown {} or wrong password", PREF_V(playerName));
+        PREF_DW(error);
         co_await sendLoginResponse(ws, error);
         co_return session;
     }
@@ -745,7 +777,7 @@ auto handleLoginRequest(const Message msg, const std::shared_ptr<Stream>& ws) ->
     const auto authToken = generateClientAuthToken();
     addAuthToken(ctx().gameData, playerId, toServerAuthToken(authToken));
     storeGameData(ctx().gameDataPath, ctx().gameData);
-    INFO_VAR(playerName, playerId);
+    PREF_DI(playerName, playerId);
     session.playerName = playerName;
     if (isNewPlayer(playerId, ctx().players)) {
         joinPlayer(playerId, ws, ctx().players, session);
@@ -767,14 +799,14 @@ auto handleAuthRequest(const Message msg, const std::shared_ptr<Stream>& ws) -> 
     auto session = PlayerSession{};
     const auto& playerId = authRequest->player_id();
     if (not verifyPlayerIdAndAuthToken(ctx().gameData, playerId, toServerAuthToken(authRequest->auth_token()))) {
-        const auto error = fmt::format("unknown {} or wrong auth token", VAR(playerId));
-        WARN_VAR(error);
+        const auto error = fmt::format("unknown {} or wrong auth token", PREF_V(playerId));
+        PREF_DW(error);
         co_await sendAuthResponse(ws, error);
         co_return session;
     }
     assert(userByPlayerId(ctx().gameData, playerId).has_value());
     const auto& playerName = userByPlayerId(ctx().gameData, playerId)->get().player_name();
-    INFO_VAR(playerName, playerId);
+    PREF_DI(playerName, playerId);
     session.playerName = playerName;
     if (isNewPlayer(playerId, ctx().players)) {
         joinPlayer(playerId, ws, ctx().players, session);
@@ -805,7 +837,7 @@ auto handleBidding(Message msg) -> Awaitable<>
     const auto& playerId = bidding->player_id();
     const auto& bid = bidding->bid();
     const auto& playerName = ctx().playerName(playerId);
-    INFO_VAR(playerName, playerId, bid);
+    PREF_DI(playerName, playerId, bid);
     ctx().player(playerId).bid = bid;
     co_await forwardToAllExcept(std::move(msg), playerId);
     const auto stage = stageGame();
@@ -822,9 +854,12 @@ auto handleDiscardTalon(const Message& msg) -> Awaitable<>
     const auto& bid = discardTalon->bid();
     ctx().player(playerId).bid = bid;
     const auto& discardedCards = discardTalon->cards();
-    for (const auto& card : discardedCards) { removeCardFromHand(playerId, card); }
+    for (const auto& card : discardedCards) {
+        ctx().talon.discardedCards.push_back(card);
+        removeCardFromHand(playerId, card);
+    }
     const auto playerName = ctx().playerName(playerId);
-    INFO_VAR(playerName, playerId, discardedCards, bid);
+    PREF_DI(playerName, playerId, discardedCards, bid);
     co_await sendBidding(playerId, bid); // final bid
     const auto gameStage = bid.contains(SIX) and bid.contains(SPADE) ? GameStage::PLAYING : GameStage::WHISTING;
     if (gameStage == GameStage::PLAYING) { // Stalingrad
@@ -902,7 +937,7 @@ auto handleWhisting(Message msg) -> Awaitable<>
     const auto& playerId = whisting->player_id();
     const auto& choice = whisting->choice();
     const auto playerName = ctx().playerName(playerId);
-    INFO_VAR(playerName, playerId, choice);
+    PREF_DI(playerName, playerId, choice);
     ctx().player(playerId).whistingChoice += choice; // Pass + Whist, Pass + Pass, etc.
     co_await forwardToAllExcept(std::move(msg), playerId);
     if (ctx().isHalfWhistAfterPass()) {
@@ -933,10 +968,10 @@ auto handleWhisting(Message msg) -> Awaitable<>
         co_return co_await finishDeal();
     }
     const auto& declarer = getDeclarer(ctx().players);
-    const bool isMiser = declarer.bid.contains(PREF_MIS);
+    const auto isMiser = declarer.bid.contains(PREF_MIS);
     const auto oneWhist = ctx().areWhistersPassAndWhist();
     const auto bothWhist = ctx().areWhistersWhist();
-    const bool whist = oneWhist or bothWhist;
+    const auto whist = oneWhist or bothWhist;
     if (isMiser and whist) {
         if (ctx().forehandId == declarer.id) {
             ctx().isDeclarerFirstMiserTurn = true;
@@ -946,6 +981,7 @@ auto handleWhisting(Message msg) -> Awaitable<>
             assert(ctx().areWhistersPassAndWhist());
             co_await openCardsAndLetAnotherWhisterPlay();
         }
+        co_await sendMiserCards();
         co_return co_await startPlayingFromForehand();
     }
     if (bothWhist) { co_return co_await startPlayingFromForehand(); }
@@ -964,7 +1000,7 @@ auto handleHowToPlay(Message msg) -> Awaitable<>
     const auto& playerId = howToPlay->player_id();
     const auto& choice = howToPlay->choice();
     const auto playerName = ctx().playerName(playerId);
-    INFO_VAR(playerName, playerId, choice);
+    PREF_DI(playerName, playerId, choice);
     auto& player = ctx().player(playerId);
     player.howToPlayChoice = choice;
     co_await forwardToAllExcept(std::move(msg), playerId);
@@ -981,7 +1017,7 @@ auto handlePlayCard(Message msg) -> Awaitable<>
     const auto playerName = ctx().playerName(playerId);
     removeCardFromHand(playerId, card);
     ctx().trick.emplace_back(playerId, card);
-    INFO_VAR(playerName, playerId, card);
+    PREF_DI(playerName, playerId, card);
     co_await forwardToAll(std::move(msg));
     if (ctx().isDeclarerFirstMiserTurn) {
         ctx().isDeclarerFirstMiserTurn = false;
@@ -1014,6 +1050,10 @@ auto handlePlayCard(Message msg) -> Awaitable<>
             }
         }
     }
+    if (const auto declarerId = findDeclarerId(ctx().players); declarerId) {
+        const auto isMiser = ctx().player(*declarerId).bid.contains(PREF_MIS);
+        if (isMiser and *declarerId == playerId) { co_await sendMiserCards(); }
+    }
     co_await sendPlayerTurn(GameStage::PLAYING);
 }
 
@@ -1021,7 +1061,7 @@ auto handleLog(const Message& msg) -> void
 {
     const auto log = makeMethod<Log>(msg);
     if (not log) { return; }
-    PREF_INFO("[client] {}, playerId: {}", log->text(), log->player_id());
+    PREF_I("[client] {}, playerId: {}", log->text(), log->player_id());
 }
 
 auto handleSpeechBubble(Message msg) -> Awaitable<>
@@ -1048,12 +1088,12 @@ auto dispatchMessage(PlayerSession& session, const std::shared_ptr<Stream>& ws, 
     if (method == "SpeechBubble") { co_await handleSpeechBubble(std::move(*msg)); co_return; }
     if (method == "PingPong") { co_await handlePingPong(std::move(*msg), ws); co_return; }
     if (method == "Log") { handleLog(*msg); co_return; }
-    PREF_WARN("error: unknown {}", VAR(method));
+    PREF_W("error: unknown {}", PREF_V(method));
 } // clang-format on
 
 auto launchSession(const std::shared_ptr<Stream> ws) -> Awaitable<>
 {
-    PREF_INFO();
+    PREF_I();
     ws->binary(true);
     ws->set_option(web::stream_base::timeout::suggested(beast::role_type::server));
     ws->set_option(web::stream_base::decorator([](web::response_type& res) {
@@ -1064,7 +1104,7 @@ auto launchSession(const std::shared_ptr<Stream> ws) -> Awaitable<>
         auto error = sys::error_code{};
         co_await ws->next_layer().async_handshake(net::ssl::stream_base::server, net::redirect_error(error));
         if (error) {
-            PREF_WARN("{} (handshake)", VAR(error));
+            PREF_W("{} (handshake)", PREF_V(error));
             co_return;
         }
     }
@@ -1073,7 +1113,7 @@ auto launchSession(const std::shared_ptr<Stream> ws) -> Awaitable<>
         auto error = sys::error_code{};
         co_await ws->async_accept(net::redirect_error(error));
         if (error) {
-            PREF_WARN("{} (accept)", VAR(error));
+            PREF_W("{} (accept)", PREF_V(error));
             co_return;
         }
     }
@@ -1082,25 +1122,25 @@ auto launchSession(const std::shared_ptr<Stream> ws) -> Awaitable<>
     while (true) {
         auto buffer = beast::flat_buffer{};
         if (const auto [error, _] = co_await ws->async_read(buffer, net::as_tuple); error) {
-            PREF_INFO("{} (read){}{}", error, VAR_MB(session.playerId), VAR_MB(session.playerName));
+            PREF_I("{} (read){}{}", error, PREF_M(session.playerId), PREF_M(session.playerName));
             break;
         }
         co_await dispatchMessage(session, ws, makeMessage(buffer));
     }
     if (std::empty(session.playerId)) {
-        PREF_WARN("error: playerId is empty");
+        PREF_W("error: playerId is empty");
         co_return;
     }
     if (not ctx().players.contains(session.playerId)) {
-        PREF_INFO("{} already left", VAR(session.playerId));
+        PREF_I("{} already left", PREF_V(session.playerId));
         co_return;
     }
     if (auto& player = ctx().player(session.playerId); session.id != player.sessionId) {
-        PREF_INFO("{} reconnected with {} => {}", VAR(session.playerId), VAR(session.id), player.sessionId);
+        PREF_I("{} reconnected with {} => {}", PREF_V(session.playerId), PREF_V(session.id), player.sessionId);
         // TODO: send the game state to the reconnected player
         co_return;
     }
-    PREF_INFO("disconnected {}, waiting for reconnection", VAR(session.playerId));
+    PREF_I("disconnected {}, waiting for reconnection", PREF_V(session.playerId));
     net::co_spawn(co_await net::this_coro::executor, disconnected(session.playerId), Detached("disconnected"));
 }
 
@@ -1271,7 +1311,7 @@ auto acceptConnectionAndLaunchSession(
 #endif // PREF_SSL
     const tcp::endpoint endpoint) -> Awaitable<>
 {
-    PREF_INFO();
+    PREF_I();
     const auto ex = co_await net::this_coro::executor;
     auto acceptor = tcp::acceptor{ex, endpoint};
     while (true) {

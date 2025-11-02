@@ -78,6 +78,7 @@ struct Player {
     std::shared_ptr<Stream> ws;
     std::optional<SteadyTimer> reconnectTimer;
     Hand hand;
+    std::vector<CardName> playedCards;
     std::string bid;
     std::string whistingChoice;
     std::string howToPlayChoice;
@@ -86,6 +87,7 @@ struct Player {
     auto clear() -> void
     {
         hand.clear();
+        playedCards.clear();
         bid.clear();
         whistingChoice.clear();
         howToPlayChoice.clear();
@@ -133,11 +135,13 @@ struct Talon {
     std::size_t open{};
     CardName current;
     std::vector<CardName> cards;
+    std::vector<CardName> discardedCards;
 
     auto clear() -> void
     {
         current.clear();
         cards.clear();
+        discardedCards.clear();
         open = 0;
     }
 };
@@ -198,11 +202,11 @@ constexpr auto Detached = [](const std::string_view func) { // NOLINT(fuchsia-st
         try {
             std::rethrow_exception(eptr);
         } catch (const sys::system_error& error) {
-            if (error.code() != net::error::operation_aborted) { PREF_WARN("[{}][Detached] error: {}", func, error); }
+            if (error.code() != net::error::operation_aborted) { PREF_W("[{}][Detached] error: {}", func, error); }
         } catch (const std::exception& error) {
-            PREF_WARN("[{}][Detached] error: {}", func, error);
+            PREF_W("[{}][Detached] error: {}", func, error);
         } catch (...) {
-            PREF_WARN("[{}][Detached] error: unknown", func);
+            PREF_W("[{}][Detached] error: unknown", func);
         }
     };
 };

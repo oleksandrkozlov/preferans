@@ -403,10 +403,14 @@ struct LogoutMessage {
 
 struct MiserCardsPanel {
     bool isVisible{};
+    std::vector<CardName> remaining;
+    std::vector<CardName> played;
 
     auto clear() -> void
     {
         isVisible = false;
+        remaining.clear();
+        played.clear();
     }
 };
 
@@ -617,7 +621,7 @@ struct Context {
 auto saveToLocalStorage(const std::string_view key, const std::string_view value) -> void
 {
     const auto js = fmt::format("localStorage.setItem('{}{}', '{}');", LocalStoragePrefix, key, value);
-    INFO_VAR(key);
+    PREF_DI(key);
     emscripten_run_script(js.c_str());
 }
 
@@ -716,19 +720,19 @@ auto removeFromLocalStorageAuthToken() -> void
 auto sendMessage(const EMSCRIPTEN_WEBSOCKET_T ws, const Message& msg) -> bool
 {
     if (ws == 0) {
-        PREF_WARN("error: ws is not open");
+        PREF_W("error: ws is not open");
         return false;
     }
     // unsigned short readyState = 0;
     // if (const auto result = emscripten_websocket_get_ready_state(ws, &readyState);
     //     result != EMSCRIPTEN_RESULT_SUCCESS and readyState != 1) {
-    //     PREF_WARN("error: {}, method: {}, {}", emResult(result), msg.method(), VAR(readyState));
+    //     PREF_W("error: {}, method: {}, {}", emResult(result), msg.method(), PREF_V(readyState));
     //     return false;
     // }
     auto data = msg.SerializeAsString();
     if (const auto result = emscripten_websocket_send_binary(ws, data.data(), std::size(data));
         result != EMSCRIPTEN_RESULT_SUCCESS) {
-        PREF_WARN("error: {}, method: {}", emResult(result), msg.method());
+        PREF_W("error: {}, method: {}", emResult(result), msg.method());
         return false;
     }
     return true;
@@ -737,11 +741,11 @@ auto sendMessage(const EMSCRIPTEN_WEBSOCKET_T ws, const Message& msg) -> bool
 [[nodiscard]] auto makeMessage(const EmscriptenWebSocketMessageEvent& event) -> std::optional<Message>
 {
     if (event.isText) {
-        PREF_WARN("error: expect binary data");
+        PREF_W("error: expect binary data");
         return {};
     }
     if (auto result = Message{}; result.ParseFromArray(event.data, static_cast<int>(event.numBytes))) { return result; }
-    PREF_WARN("error: failed to make Message from array");
+    PREF_W("error: failed to make Message from array");
     return {};
 }
 
@@ -932,7 +936,7 @@ auto handleLoginResponse(const Message& msg) -> void
     auto loginResponse = makeMethod<LoginResponse>(msg);
     if (not loginResponse) { return; }
     if (const auto& error = loginResponse->error(); not std::empty(error)) {
-        WARN_VAR(error);
+        PREF_DW(error);
         ctx().isLoginInProgress = false;
         return;
     }
@@ -948,7 +952,7 @@ auto handleAuthResponse(const Message& msg) -> void
     auto authResponse = makeMethod<AuthResponse>(msg);
     if (not authResponse) { return; }
     if (const auto& error = authResponse->error(); not std::empty(error)) {
-        WARN_VAR(error);
+        PREF_DW(error);
         ctx().isLoginInProgress = false;
         ctx().myPlayerId.clear();
         ctx().authToken.clear();
@@ -967,7 +971,7 @@ auto handlePlayerJoined(const Message& msg) -> void
     if (not playerJoined) { return; }
     auto& playerJoinedId = *playerJoined->mutable_player_id();
     auto& playerJoinedName = *playerJoined->mutable_player_name();
-    PREF_INFO("New player playerJoined: {} ({})", playerJoinedName, playerJoinedId);
+    PREF_I("New player playerJoined: {} ({})", playerJoinedName, playerJoinedId);
     auto player = Player{playerJoinedId, std::move(playerJoinedName)};
     ctx().players.insert_or_assign(std::move(playerJoinedId), std::move(player));
 }
@@ -1009,7 +1013,7 @@ auto handlePlayerTurn(const Message& msg) -> void
     if (not playerTurn) { return; }
     ctx().turnPlayerId = playerTurn->player_id();
     ctx().stage = playerTurn->stage();
-    PREF_INFO("turnPlayerId: {}, stage: {}", ctx().turnPlayerId, GameStage_Name(ctx().stage));
+    PREF_I("turnPlayerId: {}, stage: {}", ctx().turnPlayerId, GameStage_Name(ctx().stage));
     if (not isMyTurn()) { return; }
     if (ctx().stage == GameStage::BIDDING) {
         ctx().bidding.isVisible = true;
@@ -1041,7 +1045,7 @@ auto handleBidding(const Message& msg) -> void
     if (bid != PREF_PASS) { ctx().bidding.rank = rank; }
     ctx().bidding.bid = bid;
     ctx().player(playerId).bid = bid;
-    INFO_VAR(playerId, bid, rank);
+    PREF_DI(playerId, bid, rank);
 }
 
 auto handleWhisting(const Message& msg) -> void
@@ -1051,7 +1055,7 @@ auto handleWhisting(const Message& msg) -> void
     const auto& playerId = whisting->player_id();
     const auto& choice = whisting->choice();
     ctx().player(playerId).whistingChoice = choice;
-    INFO_VAR(playerId, choice);
+    PREF_DI(playerId, choice);
 }
 
 auto handleOpenWhistPlay(const Message& msg) -> void
@@ -1060,7 +1064,7 @@ auto handleOpenWhistPlay(const Message& msg) -> void
     if (not openWhistPlay) { return; }
     const auto& activeWhisterId = openWhistPlay->active_whister_id();
     auto& passiveWhisterId = *(openWhistPlay->mutable_passive_whister_id());
-    INFO_VAR(activeWhisterId, passiveWhisterId);
+    PREF_DI(activeWhisterId, passiveWhisterId);
     ctx().player(activeWhisterId).playsOnBehalfOf = std::move(passiveWhisterId);
 }
 
@@ -1071,7 +1075,7 @@ auto handleHowToPlay(const Message& msg) -> void
     const auto& playerId = howToPlay->player_id();
     const auto& choice = howToPlay->choice();
     ctx().player(playerId).howToPlayChoice = choice;
-    INFO_VAR(playerId, choice);
+    PREF_DI(playerId, choice);
 }
 
 auto handlePlayCard(const Message& msg) -> void
@@ -1081,7 +1085,7 @@ auto handlePlayCard(const Message& msg) -> void
     auto [leftOpponentId, rightOpponentId] = getOpponentIds();
     auto& playerId = *(playCard->mutable_player_id());
     auto& cardName = *(playCard->mutable_card());
-    INFO_VAR(playerId, cardName);
+    PREF_DI(playerId, cardName);
 
     if (playerId == leftOpponentId) {
         if (ctx().leftCardCount > 0) { --ctx().leftCardCount; }
@@ -1101,7 +1105,7 @@ auto handleTrickFinished(const Message& msg) -> void
     for (auto&& tricks : trickFinished->tricks()) {
         auto&& playerId = tricks.player_id();
         auto&& tricksTaken = tricks.taken();
-        INFO_VAR(playerId, tricksTaken);
+        PREF_DI(playerId, tricksTaken);
         ctx().player(playerId).tricksTaken = tricksTaken;
     }
     assert(std::size(ctx().cardsOnTable) == 3);
@@ -1211,6 +1215,15 @@ auto handleOpenTalon(const Message& msg) -> void
     ctx().talonCard = getCard(cardName);
 }
 
+auto handleMiserCards(const Message& msg) -> void
+{
+    auto miserCards = makeMethod<MiserCards>(msg);
+    if (not miserCards) { return; }
+    ctx().miserCardsPanel.played = miserCards->played_cards() | rng::to_vector;
+    ctx().miserCardsPanel.remaining = miserCards->remaining_cards() | rng::to_vector;
+    PREF_DI(ctx().miserCardsPanel.played, ctx().miserCardsPanel.remaining);
+}
+
 auto updateWindowSize() -> void
 {
     EmscriptenFullscreenChangeEvent f;
@@ -1226,7 +1239,7 @@ auto updateWindowSize() -> void
         f.elementHeight,
         f.screenWidth,
         f.screenHeight);
-    PREF_INFO("{}", t);
+    PREF_I("{}", t);
 
     auto canvasCssW = 0.0;
     auto canvasCssH = 0.0;
@@ -1254,7 +1267,7 @@ auto updateWindowSize() -> void
         ctx().scale,
         ctx().offsetX,
         ctx().offsetY);
-    PREF_INFO("{}", text);
+    PREF_I("{}", text);
     r::Mouse::SetOffset(static_cast<int>(-ctx().offsetX), static_cast<int>(-ctx().offsetY));
     r::Mouse::SetScale(1.f / ctx().scale, 1.f / ctx().scale);
 }
@@ -1276,7 +1289,8 @@ auto updateWindowSize() -> void
     X(SpeechBubble)                                                                                                    \
     X(PingPong)                                                                                                        \
     X(UserGames)                                                                                                       \
-    X(OpenTalon)
+    X(OpenTalon)                                                                                                       \
+    X(MiserCards)
 
 auto dispatchMessage(const std::optional<Message>& msg) -> void
 {
@@ -1286,7 +1300,7 @@ auto dispatchMessage(const std::optional<Message>& msg) -> void
     if (method == std::string_view{#MSGNAME}) { return handle##MSGNAME(*msg); }
     PREF_METHODS;
 #undef X
-    PREF_WARN("error: unknown {}", VAR(method));
+    PREF_W("error: unknown {}", PREF_V(method));
 }
 
 auto setupWebsocket() -> void;
@@ -1330,7 +1344,7 @@ auto onWsError(
 auto onWsClosed([[maybe_unused]] const int eventType, const EmscriptenWebSocketCloseEvent* e, [[maybe_unused]] void* ud)
     -> EM_BOOL
 {
-    PREF_INFO("wasClean: {}, code: {}, reason: {}", e->wasClean, getCloseReason(e->code), e->reason);
+    PREF_I("wasClean: {}, code: {}, reason: {}", e->wasClean, getCloseReason(e->code), e->reason);
     emscripten_websocket_delete(ctx().ws);
     ctx().ws = 0;
     if (e->wasClean
@@ -1349,14 +1363,14 @@ auto onWsClosed([[maybe_unused]] const int eventType, const EmscriptenWebSocketC
 
 auto setupWebsocket() -> void
 {
-    PREF_INFO("url: {}", ctx().url);
+    PREF_I("url: {}", ctx().url);
     if (ctx().ws != 0) {
-        PREF_INFO("ws is already connected");
+        PREF_I("ws is already connected");
         onWsOpen(0, nullptr, nullptr);
         return;
     }
     if (not emscripten_websocket_is_supported()) {
-        PREF_WARN("ws is not supported");
+        PREF_W("ws is not supported");
         return;
     }
     EmscriptenWebSocketCreateAttributes attr = {};
@@ -1365,7 +1379,7 @@ auto setupWebsocket() -> void
     attr.createOnMainThread = EM_TRUE;
     ctx().ws = emscripten_websocket_new(&attr);
     if (ctx().ws <= 0) {
-        PREF_WARN("Failed to create WebSocket");
+        PREF_W("Failed to create WebSocket");
         return;
     }
     emscripten_websocket_set_onopen_callback(ctx().ws, nullptr, onWsOpen);
@@ -2047,6 +2061,31 @@ auto drawMenu(
     }
 }
 
+[[nodiscard]] auto buildMiserCards(const std::vector<CardName>& remaining, const std::vector<CardName>& played)
+    -> std::array<std::string, 36>
+{
+    static constexpr auto ranksShort = std::array<std::string_view, 8>{SEVEN, EIGHT, NINE, TEN, "J", "Q", "K", "A"};
+    static constexpr auto ranksLong = std::array<std::string_view, 8>{SEVEN, EIGHT, NINE, TEN, JACK, QUEEN, KING, ACE};
+    static constexpr auto suitsShort = std::array<std::string_view, 4>{SpadeSign, ClubSign, DiamondSign, HeartSign};
+    static constexpr auto suitsLong = std::array<std::string_view, 4>{SPADES, CLUBS, DIAMONDS, HEARTS};
+    auto result = std::array<std::string, std::size(suitsLong) * (1 + std::size(ranksShort))>{};
+    auto idx = 0uz;
+    for (auto&& [shortSuit, longSuit] : rv::zip(suitsShort, suitsLong)) {
+        result[idx++] = shortSuit;
+        for (auto&& [shortRank, longRank] : rv::zip(ranksShort, ranksLong)) {
+            const auto card = fmt::format("{}{}{}", longRank, PREF_OF_, longSuit);
+            if (rng::contains(remaining, card)) {
+                result[idx++] = shortRank;
+            } else if (rng::contains(played, card)) {
+                result[idx++] = fmt::format("{}*", shortRank);
+            } else {
+                idx++;
+            }
+        }
+    }
+    return result;
+}
+
 auto drawMiserCards() -> void
 {
     if (not ctx().miserCardsPanel.isVisible) { return; }
@@ -2061,14 +2100,8 @@ auto drawMiserCards() -> void
     static const auto startX = screenCenter.x - (panelWidth * 0.5f);
     static const auto startY = BorderMargin;
     static const auto panel = r::Rectangle{startX, startY, panelWidth, panelHeight};
-    // TODO: don't hardcode values
-    static constexpr auto cards = std::array{
-        SpadeSign,   "7"sv, "8"sv, "9"sv, ""sv, "J"sv, ""sv,  ""sv,  ""sv, //
-        ClubSign,    "7"sv, ""sv,  "9"sv, ""sv, ""sv,  ""sv,  ""sv,  "A"sv, //
-        DiamondSign, ""sv,  "8"sv, ""sv,  ""sv, ""sv,  ""sv,  ""sv,  ""sv, //
-        HeartSign,   "7"sv, ""sv,  "9"sv, ""sv, ""sv,  "Q"sv, "K"sv, ""sv, //
-    };
-    const constexpr auto cardsView
+    const auto cards = buildMiserCards(ctx().miserCardsPanel.remaining, ctx().miserCardsPanel.played);
+    const auto cardsView
         = std::mdspan{std::data(cards), static_cast<std::size_t>(rows), static_cast<std::size_t>(cols)};
     drawRectangleWithBorder(panel, getGuiColor(BACKGROUND_COLOR), getGuiColor(BUTTON, BORDER_COLOR_NORMAL));
     for (auto j = 0uz; j < cardsView.extent(0); ++j) {
@@ -2077,9 +2110,10 @@ auto drawMiserCards() -> void
                 startX + gap + ((cellSize + gap) * static_cast<float>(i)),
                 startY + gap + ((cellSize + gap) * static_cast<float>(j))};
             const auto cell = r::Rectangle{pos, {cellSize, cellSize}};
-
-            const auto textCell = std::string{cardsView[static_cast<std::size_t>(j), static_cast<std::size_t>(i)]};
-            const auto state = std::empty(textCell) ? GuiState{STATE_DISABLED} : GuiState{STATE_NORMAL};
+            auto textCell = cardsView[static_cast<std::size_t>(j), static_cast<std::size_t>(i)];
+            const auto isPlayed = textCell.ends_with('*');
+            if (isPlayed) { textCell.pop_back(); }
+            const auto state = std::empty(textCell) or isPlayed ? GuiState{STATE_DISABLED} : GuiState{STATE_NORMAL};
             if (i != 0) {
                 drawRectangleWithBorder(
                     cell,
@@ -2144,7 +2178,7 @@ auto handleCardClick(std::list<const Card*>& hand, std::invocable<const Card&> a
         const auto it = std::next(rit).base();
         const auto& cardName = (*it)->name;
         if (not isCardPlayable(hand, cardName)) {
-            PREF_WARN("Can't play {}", VAR(cardName));
+            PREF_W("Can't play {}", PREF_V(cardName));
             return;
         }
         const auto _ = gsl::finally([&] {
@@ -2901,7 +2935,7 @@ int main(const int argc, const char* const argv[])
         nullptr,
         true,
         [](const int eventType, [[maybe_unused]] const EmscriptenUiEvent* e, [[maybe_unused]] void* ud) {
-            PREF_INFO("{}", pref::htmlEvent(eventType));
+            PREF_I("{}", pref::htmlEvent(eventType));
             pref::updateWindowSize();
             return EM_TRUE;
         });
@@ -2910,7 +2944,7 @@ int main(const int argc, const char* const argv[])
         nullptr,
         true,
         [](const int eventType, [[maybe_unused]] const EmscriptenFullscreenChangeEvent* e, [[maybe_unused]] void* ud) {
-            PREF_INFO("{}", pref::htmlEvent(eventType));
+            PREF_I("{}", pref::htmlEvent(eventType));
             pref::updateWindowSize();
             return EM_FALSE;
         });

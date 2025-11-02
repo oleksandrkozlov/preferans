@@ -137,6 +137,11 @@ message PingPong {
   int32 id = 1;
 }
 
+message MiserCards {
+  repeated string remaining_cards = 1;
+  repeated string played_cards = 2;
+}
+
 enum GameType {
   NORMAL = 0;
   RANKED = 1;

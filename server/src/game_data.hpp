@@ -83,7 +83,7 @@ template<typename GameDataT>
 [[nodiscard]] inline auto verifyPlayerIdAndAuthToken(
     const GameData& data, const PlayerIdView playerId, const std::string_view authToken) -> bool
 {
-    INFO_VAR(playerId);
+    PREF_DI(playerId);
     return userByPlayerId(data, playerId)
         .transform([&](const User& user) { return rng::contains(user.auth_tokens(), authToken); })
         .value_or(false);
@@ -92,7 +92,7 @@ template<typename GameDataT>
 [[nodiscard]] inline auto verifyPlayerNameAndPassword(
     const GameData& data, const PlayerNameView playerName, const std::string_view password) -> bool
 {
-    INFO_VAR(playerName);
+    PREF_DI(playerName);
     return playerPasswordHash(data, playerName)
         .transform([&](const std::string& hash) { return verifyPassword(password, hash); })
         .value_or(false);
@@ -103,7 +103,7 @@ inline auto addOrUpdateUserGame(GameData& gameData, const PlayerIdView playerId,
     auto& users = *gameData.mutable_users();
     const auto userIt = rng::find(users, playerId, &User::player_id);
     if (userIt == rng::end(users)) {
-        PREF_WARN("error: {} not found", VAR(playerId));
+        PREF_W("error: {} not found", PREF_V(playerId));
         return;
     }
     auto& user = *userIt;
@@ -122,20 +122,20 @@ inline auto addAuthToken(GameData& data, const PlayerIdView playerId, std::strin
     userByPlayerId(data, playerId) | onValue([&](User& user) {
         user.add_auth_tokens(std::move(serverAuthToken));
         const auto totalTokens = std::size(user.auth_tokens());
-        INFO_VAR(playerId, totalTokens);
+        PREF_DI(playerId, totalTokens);
     });
 }
 
 inline auto revokeAuthToken(GameData& data, const PlayerIdView playerId, const std::string_view serverAuthToken) -> void
 {
-    INFO_VAR(playerId);
+    PREF_DI(playerId);
     userByPlayerId(data, playerId) | onValue([&](User& user) {
         auto& tokens = *user.mutable_auth_tokens();
         const auto tokensCount = std::size(tokens);
         tokens.erase(rng::remove(tokens, serverAuthToken), rng::end(tokens));
         const auto tokensLeft = std::size(tokens);
         const auto tokensRemoved = tokensCount - tokensLeft;
-        INFO_VAR(playerId, tokensRemoved, tokensLeft);
+        PREF_DI(playerId, tokensRemoved, tokensLeft);
     });
 }
 
@@ -182,11 +182,11 @@ inline auto storeGameData(const fs::path& path, const GameData& gameData) -> voi
 {
     auto out = std::ofstream{path, std::ios::binary};
     if (not out) {
-        PREF_WARN("error: {}, {}", std::strerror(errno), VAR(path));
+        PREF_W("error: {}, {}", std::strerror(errno), PREF_V(path));
         return;
     }
     if (not gameData.SerializeToOstream(&out)) {
-        PREF_WARN("error: failed to serialize GameData, {}", VAR(path));
+        PREF_W("error: failed to serialize GameData, {}", PREF_V(path));
         return;
     }
 }
@@ -195,12 +195,12 @@ inline auto storeGameData(const fs::path& path, const GameData& gameData) -> voi
 {
     auto in = std::ifstream{path, std::ios::binary};
     if (not in) {
-        PREF_WARN("error: {}, {}", std::strerror(errno), VAR(path));
+        PREF_W("error: {}, {}", std::strerror(errno), PREF_V(path));
         return {};
     }
     auto result = GameData{};
     if (not result.ParseFromIstream(&in)) {
-        PREF_WARN("error: failed to parse GameData, {}", VAR(path));
+        PREF_W("error: failed to parse GameData, {}", PREF_V(path));
         return {};
     }
     return result;

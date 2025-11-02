@@ -52,7 +52,6 @@ target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/gsl/inc
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/docopt.cpp)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/date/include)
 target_include_directories(client PRIVATE ${PROJECT_SOURCE_DIR}/..)
-target_include_directories(client PRIVATE ${PROJECT_SOURCE_DIR}/../include)
 
 set_target_properties(client PROPERTIES SUFFIX ".html")
 set_target_properties(client PROPERTIES OUTPUT_NAME "index")

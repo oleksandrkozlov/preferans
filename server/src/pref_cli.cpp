@@ -31,7 +31,7 @@ Usage:
 )";
 
 constexpr auto logOnNone
-    = [](const PlayerIdView playerId) { return onNone([playerId] { PREF_WARN("{} not found", VAR(playerId)); }); };
+    = [](const PlayerIdView playerId) { return onNone([playerId] { PREF_W("{} not found", PREF_V(playerId)); }); };
 
 auto listUsers(const GameData& data) -> void
 {
@@ -81,16 +81,16 @@ auto removeTokens(GameData& data, const PlayerIdView playerId, const std::option
     userByPlayerId(data, playerId) | logOnNone(playerId) | onValue([&authToken, playerId](User& user) {
         authToken | onNone([&user, playerId] {
             user.clear_auth_tokens();
-            PREF_INFO("Removed all tokens for {}", VAR(playerId));
+            PREF_I("Removed all tokens for {}", PREF_V(playerId));
         }) | onValue([&user, playerId](const std::string& token) {
             auto& tokens = *user.mutable_auth_tokens();
             const auto it = rng::remove(tokens, token);
             if (it == rng::end(tokens)) {
-                PREF_WARN("{} not found for {}", VAR(token), VAR(playerId));
+                PREF_W("{} not found for {}", PREF_V(token), PREF_V(playerId));
                 return;
             }
             tokens.erase(it, rng::end(tokens));
-            PREF_INFO("Removed {} from {}", VAR(token), VAR(playerId));
+            PREF_I("Removed {} from {}", PREF_V(token), PREF_V(playerId));
         });
     });
 }
@@ -102,7 +102,7 @@ auto addUser(GameData& data, const PlayerName& name, const std::string& password
     newUser.set_player_name(name);
     newUser.set_password(hashPassword(password));
     newUser.set_version(1);
-    PREF_INFO("Added profileId: {}", newUser.player_id());
+    PREF_I("Added profileId: {}", newUser.player_id());
 }
 
 auto removeUser(GameData& data, const PlayerNameView playerId) -> void
@@ -110,17 +110,17 @@ auto removeUser(GameData& data, const PlayerNameView playerId) -> void
     auto& users = *data.mutable_users();
     const auto it = rng::remove(users, playerId, &User::player_id);
     if (it == rng::end(users)) {
-        PREF_WARN("{} not found", VAR(playerId));
+        PREF_W("{} not found", PREF_V(playerId));
         return;
     }
     users.erase(it, rng::end(users));
-    PREF_INFO("Removed {}", VAR(playerId));
+    PREF_I("Removed {}", PREF_V(playerId));
 }
 
 auto removeGames(GameData& data, const PlayerNameView playerId) -> void
 {
     userByPlayerId(data, playerId) | logOnNone(playerId) | onValue([](User& user) {
-        PREF_INFO("Removed {} games", user.games_size());
+        PREF_I("Removed {} games", user.games_size());
         user.clear_games();
     });
 }

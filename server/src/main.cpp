@@ -35,7 +35,7 @@ auto handleSignals() -> Awaitable<>
     const auto ex = co_await net::this_coro::executor;
     auto signals = net::signal_set{ex, SIGINT, SIGTERM};
     const auto signal = co_await signals.async_wait();
-    INFO_VAR(signal);
+    PREF_DI(signal);
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
     static_cast<net::io_context&>(ex.context()).stop();
 }
@@ -78,9 +78,9 @@ int main(const int argc, const char* const argv[])
         loop.run();
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
-        ERROR_VAR(error);
+        PREF_DE(error);
     } catch (...) {
-        PREF_ERROR("error: uknown");
+        PREF_E("error: uknown");
     }
     return EXIT_FAILURE;
 }

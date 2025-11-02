@@ -286,6 +286,7 @@ DEFINE_METHOD_NAME(PingPong)
 DEFINE_METHOD_NAME(OpenWhistPlay)
 DEFINE_METHOD_NAME(UserGames)
 DEFINE_METHOD_NAME(OpenTalon)
+DEFINE_METHOD_NAME(MiserCards)
 
 template<typename Method>
 [[nodiscard]] auto makeMessage(const Method& method) -> Message
@@ -302,7 +303,7 @@ template<typename Method>
     auto result = Method{};
     if (not result.ParseFromString(msg.payload())) {
         const auto error = fmt::format("failed to make {} from string", methodName<Method>());
-        WARN_VAR(error);
+        PREF_DW(error);
         return {};
     }
     return result;
@@ -312,7 +313,7 @@ template<typename Method>
 [[maybe_unused]] [[nodiscard]] inline auto readFile(const fs::path& path) -> std::string
 {
     auto in = std::ifstream{path};
-    if (not in) { throw std::runtime_error{fmt::format("{}: {}, {}", __func__, std::strerror(errno), VAR(path))}; }
+    if (not in) { throw std::runtime_error{fmt::format("{}: {}, {}", __func__, std::strerror(errno), PREF_V(path))}; }
     return std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
 }
 

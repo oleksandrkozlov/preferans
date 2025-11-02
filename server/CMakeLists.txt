@@ -34,7 +34,14 @@ endif()
 add_library(serverlib STATIC src/server.cpp ${PREF_PROTO_CPP_SOURCES})
 add_dependencies(serverlib pref_proto_py_files)
 target_link_libraries(
-    serverlib PUBLIC Boost::headers protobuf::libprotobuf spdlog::spdlog docopt date::date date::date-tz PkgConfig::botan-3
+    serverlib
+    PUBLIC Boost::headers
+           protobuf::libprotobuf
+           spdlog::spdlog
+           docopt
+           date::date
+           date::date-tz
+           PkgConfig::botan-3
 )
 if(PREF_SSL)
     find_package(OpenSSL REQUIRED)
@@ -45,7 +52,6 @@ endif()
 
 target_include_directories(serverlib PUBLIC ${PROJECT_SOURCE_DIR}/..)
 target_include_directories(serverlib PUBLIC ${PROJECT_SOURCE_DIR}/src)
-target_include_directories(serverlib PUBLIC ${PROJECT_SOURCE_DIR}/../include)
 
 add_executable(server src/main.cpp)
 target_link_libraries(server serverlib)
