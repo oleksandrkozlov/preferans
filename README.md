@@ -14,10 +14,22 @@ client use `Protobuf` for message serialization.
 
 ```
 git submodule update --init --recursive
-xhost +local:docker
-sudo DOCKER_BUILDKIT=0 docker build --tag preferans .
-sudo docker run --privileged -ti -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix \
+xhost +local:docker # requires x11-xserver-utils
+DOCKER_BUILDKIT=0 docker build --tag preferans .
+```
+
+#### Linux
+
+```
+docker run --privileged -ti -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix \
     -v $HOME:$HOME -w $PWD --network host --name preferans preferans
+```
+
+#### macOS
+
+```
+docker run --privileged -ti -e DISPLAY=host.docker.internal:0 -v /tmp/.X11-unix:/tmp/.X11-unix \
+    -v $HOME:$HOME -w $PWD -p 8000:8000 -p 8080:8080 --name preferans preferans
 ```
 
 ### Build
@@ -47,10 +59,18 @@ cmake --build build-client --target docopt fmt libprotobuf libprotobuf-lite rayl
 cmake --build build-client --target client
 ```
 
+### Add User
+
+```
+cmake --build build-server --target pref-cli
+./build-server/bin/pref-cli ./server/data/game.dat add --user <name> <password>
+```
+
 ### Run
 
 ```
-./run.sh [<ip-address>] [<http-port>] [<ws-port>] [--cert=<fullchain.pem> --key=<privkey.pem> --dh=<ssl-dhparams.pem>]
+./run.sh [<ip-address>] [<http-port>] [<ws-port>] \
+    [--cert=<fullchain.pem> --key=<privkey.pem> --dh=<ssl-dhparams.pem>]
 ```
 Example:
 ```
@@ -96,8 +116,14 @@ cmake --build build-server --target test_server
 
 ### License
 
-- **Code**: [MIT](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+
+The main source code of this project is licensed under AGPL-3.0-only.
+Bundled assets keep their original licenses and are **not** covered by AGPL.
+
 - **Cards**: [Public Domain](client/resources/cards/LICENSE)
 - **Fonts**: [DejaVu / Font Awesome Free (OFL)](client/resources/fonts/LICENSE)
 - **Styles**: [zlib](client/resources/styles/LICENSE)
-- **Shells**: [zlib / MIT / NCSA](client/resources/shells/LICENSE)
+- **Shell**: [MIT](client/resources/html/LICENSE)
+
+© 2025 Oleksandr Kozlov — AGPL-3.0-only

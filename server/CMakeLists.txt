@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2025 Oleksandr Kozlov
+
 cmake_minimum_required(VERSION 3.16.3)
 project(server CXX)
 
@@ -6,7 +9,11 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
+option(ENABLE_SANITIZERS "Enable undefined behavior, leak, and address sanitizers" OFF)
+option(ENABLE_THREAD_SANITIZER "Enable the thread sanitizer" OFF)
+
 include(flags)
+include(sanitizers)
 
 find_package(PkgConfig REQUIRED)
 find_package(boost_headers REQUIRED)

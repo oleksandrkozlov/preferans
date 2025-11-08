@@ -1,5 +1,8 @@
 #!/bin/bash -x
 
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2025 Oleksandr Kozlov
+
 set -euo pipefail
 
 IP_ADDRESS=${1:-0.0.0.0}

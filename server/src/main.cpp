@@ -1,5 +1,9 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2025 Oleksandr Kozlov
+
 #include "game_data.hpp"
 #include "server.hpp"
+#include "transport.hpp"
 
 #include <boost/asio.hpp>
 #include <docopt/docopt.h>
@@ -15,19 +19,9 @@ namespace pref {
 namespace {
 
 #ifdef PREF_SSL
-#define SSL_OPTS " --cert=<path> --key=<path> --dh=<path>"
-[[nodiscard]] auto loadCertificate(const fs::path& cert, const fs::path& key, const fs::path& dh) -> net::ssl::context
-{
-    auto ssl = net::ssl::context{net::ssl::context::tlsv12};
-    ssl.set_options(
-        net::ssl::context::default_workarounds | net::ssl::context::no_sslv2 | net::ssl::context::single_dh_use);
-    ssl.use_certificate_chain_file(cert);
-    ssl.use_private_key_file(key, net::ssl::context::file_format::pem);
-    ssl.use_tmp_dh_file(dh);
-    return ssl;
-}
+#define PREF_SSL_OPTS " --cert=<path> --key=<path> --dh=<path>"
 #else // PREF_SSL
-#define SSL_OPTS ""
+#define PREF_SSL_OPTS ""
 #endif // PREF_SSL
 
 auto handleSignals() -> Awaitable<>
@@ -35,14 +29,14 @@ auto handleSignals() -> Awaitable<>
     const auto ex = co_await net::this_coro::executor;
     auto signals = net::signal_set{ex, SIGINT, SIGTERM};
     const auto signal = co_await signals.async_wait();
-    PREF_DI(signal);
+    PREF_I("signal: {} ({})", signal == SIGINT ? "SIGINT" : "SIGTERM", signal);
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
     static_cast<net::io_context&>(ex.context()).stop();
 }
 
 constexpr auto usage = R"(
 Usage:
-    server <address> <port> [<data>])" SSL_OPTS R"(
+    server <address> <port> [<data>])" PREF_SSL_OPTS R"(
 
 Options:
     -h --help     Show this screen.
@@ -63,6 +57,8 @@ int main(const int argc, const char* const argv[])
         if (args.contains("<data>") and args.at("<data>").isString()) {
             ctx.gameDataPath = args.at("<data>").asString();
             ctx.gameData = pref::loadGameData(ctx.gameDataPath);
+        } else {
+            PREF_W("game data is not provided");
         }
         ctx.gameId = pref::lastGameId(ctx.gameData);
         net::co_spawn(loop, pref::handleSignals(), pref::Detached("handleStop"));
@@ -76,6 +72,7 @@ int main(const int argc, const char* const argv[])
 #endif // PREF_SSL
         net::co_spawn(loop, std::move(accept), pref::Detached("acceptConnectionAndLaunchSession")); // clang-format on
         loop.run();
+        ctx.shutdown();
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
         PREF_DE(error);

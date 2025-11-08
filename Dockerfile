@@ -1,9 +1,13 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2025 Oleksandr Kozlov
+
 FROM ubuntu:25.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt update && apt install -y \
     build-essential \
+    ccache \
     clang-format \
     clangd \
     cmake \

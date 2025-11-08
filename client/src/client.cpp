@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2025 Oleksandr Kozlov
+
 #include "client.hpp"
 
 #include "common/common.hpp"
@@ -134,7 +137,8 @@ struct Card {
 
 [[nodiscard]] auto suitValue(const std::string_view suit) -> int
 {
-    static const auto map = std::map<std::string_view, int>{{SPADES, 1}, {DIAMONDS, 2}, {CLUBS, 3}, {HEARTS, 4}};
+    static const auto map
+        = std::map<std::string_view, int>{{PREF_SPADES, 1}, {PREF_DIAMONDS, 2}, {PREF_CLUBS, 3}, {PREF_HEARTS, 4}};
     return map.at(suit);
 }
 
@@ -230,7 +234,7 @@ struct HowToPlayMenu {
 
 [[nodiscard]] constexpr auto isRedSuit(const std::string_view suit) noexcept -> bool
 {
-    return suit.ends_with(DIAMOND) or suit.ends_with(HEART);
+    return suit.ends_with(PREF_DIAMOND) or suit.ends_with(PREF_HEART);
 }
 
 [[nodiscard]] auto getStyle(const int control, const int property) noexcept -> float
@@ -332,7 +336,8 @@ auto withGuiState(const int newState, const bool condition, Draw&& draw)
 
 [[nodiscard]] constexpr auto localizeText(const GameText text, const GameLang lang) noexcept -> std::string_view
 {
-    return localization[std::to_underlying(lang)][std::to_underlying(text)];
+    static constexpr auto langs = std::array{&Localication::en, &Localication::ua, &Localication::alt};
+    return localization[std::to_underlying(text)].*langs[std::to_underlying(lang)];
 }
 
 [[nodiscard]] constexpr auto whistingChoiceToGameText(const std::string_view choice) noexcept -> GameText
@@ -421,57 +426,68 @@ struct Ping {
     double rtt = static_cast<double>(InvalidRtt);
 };
 
-[[nodiscard]] auto getCard(const CardNameView name) -> const Card*
+[[nodiscard]] auto getCard(const CardNameView name) -> const Card&
 {
     static auto allCards = std::invoke([&] {
         auto result = std::map<CardNameView, Card>{};
         const auto add = [&](const CardNameView name) { result.emplace(name, Card{name}); };
-        add("10_of_clubs");
-        add("10_of_diamonds");
-        add("10_of_hearts");
-        add("10_of_spades");
-        add("7_of_clubs");
-        add("7_of_diamonds");
-        add("7_of_hearts");
-        add("7_of_spades");
-        add("8_of_clubs");
-        add("8_of_diamonds");
-        add("8_of_hearts");
-        add("8_of_spades");
-        add("9_of_clubs");
-        add("9_of_diamonds");
-        add("9_of_hearts");
-        add("9_of_spades");
-        add("ace_of_clubs");
-        add("ace_of_diamonds");
-        add("ace_of_hearts");
-        add("ace_of_spades");
-        add("jack_of_clubs");
-        add("jack_of_diamonds");
-        add("jack_of_hearts");
-        add("jack_of_spades");
-        add("king_of_clubs");
-        add("king_of_diamonds");
-        add("king_of_hearts");
-        add("king_of_spades");
-        add("queen_of_clubs");
-        add("queen_of_diamonds");
-        add("queen_of_hearts");
-        add("queen_of_spades");
+#define PREF_X(PREF_CARD_NAME) add(PREF_CARD_NAME);
+        PREF_CARDS
+#undef PREF_X
         return result;
     });
-    const auto& card = allCards.at(name);
-    return &card;
+    return allCards.at(name);
 }
 
+auto loadCards() -> void
+{
+    auto&& _ = getCard(PREF_SEVEN_OF_SPADES);
+}
+
+struct PassGameTalon {
+    const Card* first = nullptr;
+    const Card* second = nullptr;
+
+    auto push(const Card& card) noexcept -> void
+    {
+        if (first == nullptr) {
+            first = &card;
+        } else {
+            assert(second == nullptr);
+            second = &card;
+        }
+    }
+
+    [[nodiscard]] auto get() noexcept -> const Card&
+    {
+        assert(exists());
+        return *first;
+    }
+
+    [[nodiscard]] auto pop() noexcept -> const Card*
+    {
+        return std::exchange(first, std::exchange(second, nullptr));
+    }
+
+    [[nodiscard]] auto exists() const noexcept -> bool
+    {
+        return first != nullptr;
+    }
+
+    auto clear() noexcept -> void
+    {
+        first = nullptr;
+        second = nullptr;
+    }
+};
+
 struct Context {
-    // TODO: Figure out how to use one font with different sizes
-    //       Should we use `fontL` and scale it down?
     r::Font fontS;
     r::Font fontM;
     r::Font fontL;
     r::Font initialFont;
     r::Font fontAwesome;
+    r::Font fontAwesomeXL;
     float scale = 1.f;
     float offsetX = 0.f;
     float offsetY = 0.f;
@@ -497,7 +513,7 @@ struct Context {
     int leftCardCount = 10;
     int rightCardCount = 10;
     std::map<PlayerId, const Card*> cardsOnTable;
-    std::vector<CardNameView> lastTrick;
+    std::vector<CardNameView> lastTrickOrTalon;
     PlayerId turnPlayerId;
     BiddingMenu bidding;
     WhistingMenu whisting;
@@ -505,7 +521,7 @@ struct Context {
     GameStage stage = GameStage::UNKNOWN;
     std::vector<CardNameView> discardedTalon;
     std::string leadSuit;
-    const Card* talonCard = nullptr;
+    PassGameTalon passGameTalon;
     GameLang lang{};
     SettingsMenu settingsMenu;
     ScoreSheetMenu scoreSheet;
@@ -516,13 +532,14 @@ struct Context {
     Ping ping;
     std::string url;
     std::map<CardNameView, r::Vector2> cardPositions;
+    bool isGameFreezed{};
 
     auto clear() -> void
     {
         leftCardCount = 10;
         rightCardCount = 10;
         cardsOnTable.clear();
-        lastTrick.clear();
+        lastTrickOrTalon.clear();
         turnPlayerId.clear();
         bidding.clear();
         whisting.clear();
@@ -530,9 +547,11 @@ struct Context {
         stage = GameStage::UNKNOWN;
         discardedTalon.clear();
         leadSuit.clear();
-        talonCard = nullptr;
+        passGameTalon.clear();
+        scoreSheet.isVisible = false;
         miserCardsPanel.clear();
         cardPositions.clear();
+        isGameFreezed = false;
         for (auto& p : players | rv::values) { p.clear(); }
     }
 
@@ -544,14 +563,14 @@ struct Context {
     [[nodiscard]] constexpr auto localizeBid(const std::string_view bid) const noexcept -> std::string_view
     {
         if (lang == GameLang::Alternative) {
-            if (bid == NINE_WT) { return NINE " БП"; }
-            if (bid == TEN_WT) { return TEN " БП"; }
+            if (bid == PREF_NINE_WT) { return PREF_NINE " БП"; }
+            if (bid == PREF_TEN_WT) { return PREF_TEN " БП"; }
             if (bid == PREF_MISER) { return pref::localizeText(GameText::Miser, lang); }
             if (bid == PREF_MISER_WT) { return "Миз.БП"; }
             if (bid == PREF_PASS) { return pref::localizeText(GameText::Pass, lang); }
         } else if (lang == GameLang::Ukrainian) {
-            if (bid == NINE_WT) { return NINE " БП"; }
-            if (bid == TEN_WT) { return TEN " БП"; }
+            if (bid == PREF_NINE_WT) { return PREF_NINE " БП"; }
+            if (bid == PREF_TEN_WT) { return PREF_TEN " БП"; }
             if (bid == PREF_MISER) { return pref::localizeText(GameText::Miser, lang); }
             if (bid == PREF_MISER_WT) { return "Міз.БП"; }
             if (bid == PREF_PASS) { return pref::localizeText(GameText::Pass, lang); }
@@ -579,6 +598,11 @@ struct Context {
         return fontSize(fontL);
     }
 
+    [[nodiscard]] auto fontSizeXL() const noexcept -> float
+    {
+        return fontSize(fontAwesomeXL);
+    }
+
     [[nodiscard]] auto player(const PlayerId& playerId) const -> Player&
     {
         assert(players.contains(playerId) and "player exists");
@@ -593,7 +617,6 @@ struct Context {
 
 [[nodiscard]] auto ctx() -> Context&
 {
-    // FIXME: fix segfault on exit
     static auto ctx = Context{};
     return ctx;
 }
@@ -1003,7 +1026,7 @@ auto handleDealCards(const Message& msg) -> void
         }
         return ctx().player(playerId);
     });
-    for (const auto& cardName : dealCards->cards()) { player.hand.emplace_back(getCard(cardName)); }
+    for (const auto& cardName : dealCards->cards()) { player.hand.emplace_back(&getCard(cardName)); }
     player.sortCards();
 }
 
@@ -1013,15 +1036,26 @@ auto handlePlayerTurn(const Message& msg) -> void
     if (not playerTurn) { return; }
     ctx().turnPlayerId = playerTurn->player_id();
     ctx().stage = playerTurn->stage();
-    PREF_I("turnPlayerId: {}, stage: {}", ctx().turnPlayerId, GameStage_Name(ctx().stage));
-    if (not isMyTurn()) { return; }
-    if (ctx().stage == GameStage::BIDDING) {
-        ctx().bidding.isVisible = true;
+    const auto& minBid = playerTurn->min_bid();
+    PREF_I("turnPlayerId: {}, stage: {}{}", ctx().turnPlayerId, GameStage_Name(ctx().stage), PREF_M(minBid));
+    if (not std::empty(minBid)) {
+        if (const auto rank = bidRank(minBid); ctx().bidding.rank == AllRanks or ctx().bidding.rank < rank) {
+            ctx().bidding.rank = rank;
+        }
+    }
+    const auto isMyTurn = pref::isMyTurn();
+    if (ctx().stage == GameStage::TALON_PICKING) {
+        for (const auto& cardName : playerTurn->talon()) {
+            const auto& card = getCard(cardName);
+            ctx().lastTrickOrTalon.push_back(card.name);
+            if (isMyTurn) { ctx().myPlayer().hand.emplace_back(&card); }
+        }
+        if (isMyTurn) { ctx().myPlayer().sortCards(); }
         return;
     }
-    if (ctx().stage == GameStage::TALON_PICKING) {
-        for (const auto& card : playerTurn->talon()) { ctx().myPlayer().hand.emplace_back(getCard(card)); }
-        ctx().myPlayer().sortCards();
+    if (not isMyTurn) { return; }
+    if (ctx().stage == GameStage::BIDDING) {
+        ctx().bidding.isVisible = true;
         return;
     }
     if (ctx().stage == GameStage::WHISTING) {
@@ -1094,30 +1128,43 @@ auto handlePlayCard(const Message& msg) -> void
     }
 
     ctx().player(playerId).hand |= rng::actions::remove_if(equalTo(cardName), &Card::name);
-    if (std::empty(ctx().cardsOnTable) and ctx().talonCard == nullptr) { ctx().leadSuit = cardSuit(cardName); }
-    ctx().cardsOnTable.emplace(std::move(playerId), getCard(cardName));
+    if (std::empty(ctx().cardsOnTable) and not ctx().passGameTalon.exists()) { ctx().leadSuit = cardSuit(cardName); }
+    ctx().cardsOnTable.emplace(std::move(playerId), &getCard(cardName));
 }
 
 auto handleTrickFinished(const Message& msg) -> void
 {
     const auto trickFinished = makeMethod<TrickFinished>(msg);
     if (not trickFinished) { return; }
-    for (auto&& tricks : trickFinished->tricks()) {
-        auto&& playerId = tricks.player_id();
-        auto&& tricksTaken = tricks.taken();
-        PREF_DI(playerId, tricksTaken);
-        ctx().player(playerId).tricksTaken = tricksTaken;
-    }
-    assert(std::size(ctx().cardsOnTable) == 3);
-    // TODO: remove sleep
-    // std::this_thread::sleep_for(1s);
-    ctx().lastTrick = ctx().cardsOnTable | rv::values | rv::transform(&Card::name) | rng::to_vector;
-    if (ctx().talonCard != nullptr) {
-        ctx().lastTrick.push_back(ctx().talonCard->name);
-        ctx().talonCard = nullptr;
-    }
-    rng::sort(ctx().lastTrick, cardLess());
-    ctx().cardsOnTable.clear();
+    ctx().isGameFreezed = true;
+    emscripten_async_call(
+        [](void* ud) {
+            assert(ud != nullptr);
+            auto trickFinished = static_cast<TrickFinished*>(ud);
+            auto _ = gsl::finally([&] { delete trickFinished; });
+            if (not ctx().isGameFreezed) { return; }
+            if (std::empty(ctx().myPlayer().hand)) {
+                // TODO: show scoreSheet when the deal finished with Pass or Half-Whist
+                ctx().scoreSheet.isVisible = true;
+            } else {
+                ctx().isGameFreezed = false;
+            }
+            for (auto&& tricks : trickFinished->tricks()) {
+                auto&& playerId = tricks.player_id();
+                auto&& tricksTaken = tricks.taken();
+                PREF_DI(playerId, tricksTaken);
+                ctx().player(playerId).tricksTaken = tricksTaken;
+            }
+            assert(std::size(ctx().cardsOnTable) == 3);
+            ctx().lastTrickOrTalon = ctx().cardsOnTable | rv::values | rv::transform(&Card::name) | rng::to_vector;
+            if (const auto card = ctx().passGameTalon.pop(); card != nullptr) {
+                ctx().lastTrickOrTalon.push_back(card->name);
+            }
+            rng::sort(ctx().lastTrickOrTalon, cardLess());
+            ctx().cardsOnTable.clear();
+        },
+        new TrickFinished{*trickFinished},
+        1000);
 }
 
 auto handleDealFinished(const Message& msg) -> void
@@ -1152,7 +1199,6 @@ auto handlePingPong(const Message& msg) -> void
     ctx().ping.sentAt.erase(id);
 }
 
-// TODO: exclude the current game
 auto updateOverallScoreboardTable() -> void
 {
     const auto& games = ctx().overallScoreboard.userGames.games();
@@ -1212,7 +1258,7 @@ auto handleOpenTalon(const Message& msg) -> void
     if (not openTalon) { return; }
     auto& cardName = *openTalon->mutable_card();
     ctx().leadSuit = cardSuit(cardName);
-    ctx().talonCard = getCard(cardName);
+    ctx().passGameTalon.push(getCard(cardName));
 }
 
 auto handleMiserCards(const Message& msg) -> void
@@ -1254,8 +1300,7 @@ auto updateWindowSize() -> void
     ctx().scale = std::fminf(windowW / VirtualW, windowH / VirtualH);
     ctx().offsetX = (windowW - VirtualW * ctx().scale) * 0.5f;
     ctx().offsetY = (windowH - VirtualH * ctx().scale) * 0.5f;
-    // TODO: Fix incorrect mouse scaling/offset when entering fullscreen mode
-    // in smartphone browsers
+    // FIXME: fix incorrect mouse scaling/offset when entering fullscreen mode on mobile devices
     auto text = fmt::format(
         "[updateWindowSize] cssW: {}, cssH: {}, dpr: {}, w: {}, h: {}, scale: {}, offX: {}, "
         "offY: {}",
@@ -1272,34 +1317,21 @@ auto updateWindowSize() -> void
     r::Mouse::SetScale(1.f / ctx().scale, 1.f / ctx().scale);
 }
 
+// clang-format off
 #define PREF_METHODS                                                                                                   \
-    X(LoginResponse)                                                                                                   \
-    X(AuthResponse)                                                                                                    \
-    X(PlayerJoined)                                                                                                    \
-    X(PlayerLeft)                                                                                                      \
-    X(DealCards)                                                                                                       \
-    X(PlayerTurn)                                                                                                      \
-    X(Bidding)                                                                                                         \
-    X(Whisting)                                                                                                        \
-    X(OpenWhistPlay)                                                                                                   \
-    X(HowToPlay)                                                                                                       \
-    X(PlayCard)                                                                                                        \
-    X(TrickFinished)                                                                                                   \
-    X(DealFinished)                                                                                                    \
-    X(SpeechBubble)                                                                                                    \
-    X(PingPong)                                                                                                        \
-    X(UserGames)                                                                                                       \
-    X(OpenTalon)                                                                                                       \
-    X(MiserCards)
+    PREF_X(LoginResponse) PREF_X(AuthResponse) PREF_X(PlayerJoined) PREF_X(PlayerLeft) PREF_X(DealCards) PREF_X(PlayerTurn) \
+    PREF_X(Bidding) PREF_X(Whisting) PREF_X(OpenWhistPlay) PREF_X(HowToPlay) PREF_X(PlayCard) PREF_X(TrickFinished) \
+    PREF_X(DealFinished) PREF_X(SpeechBubble) PREF_X(PingPong) PREF_X(UserGames) PREF_X(OpenTalon) PREF_X(MiserCards)
+// clang-format on
 
 auto dispatchMessage(const std::optional<Message>& msg) -> void
 {
     if (not msg) { return; }
     const auto& method = msg->method();
-#define X(MSGNAME)                                                                                                     \
-    if (method == std::string_view{#MSGNAME}) { return handle##MSGNAME(*msg); }
+#define PREF_X(PREF_MSG_NAME)                                                                                          \
+    if (method == std::string_view{#PREF_MSG_NAME}) { return handle##PREF_MSG_NAME(*msg); }
     PREF_METHODS;
-#undef X
+#undef PREF_X
     PREF_W("error: unknown {}", PREF_V(method));
 }
 
@@ -1311,7 +1343,7 @@ auto onWsOpen(
     [[maybe_unused]] void* ud) -> EM_BOOL
 {
     if (not std::empty(ctx().myPlayerId) and not std::empty(ctx().authToken)) {
-        // TODO: Draw Enter Screen (no password) instead of Login Screen when auth token is in place and
+        // TODO: draw Enter Screen (no password) instead of Login Screen when auth token is in place and
         // replace `ctx().password.clear()` with `assert(std::empty(ctx().password))`
         ctx().password.clear();
         sendAuthRequest();
@@ -1353,10 +1385,10 @@ auto onWsClosed([[maybe_unused]] const int eventType, const EmscriptenWebSocketC
         ctx().isLoggedIn = false;
         return EM_TRUE;
     }
-    // TODO: Draw error message: e.g., server is down, etc.
+    // TODO: draw error message: e.g., server is down, etc.
     if (not e->wasClean and ctx().isLoggedIn) {
         emscripten_async_call([]([[maybe_unused]] void* ud) { setupWebsocket(); }, nullptr, 2000);
-        // TODO: give up at some point?
+        // TODO: stop reconnection attempts at some point
     }
     return EM_TRUE;
 }
@@ -1494,6 +1526,7 @@ auto drawGameplayScreen() -> void
     ctx().fontL.DrawText(title, {x, y}, ctx().fontSizeL(), FontSpacing, getGuiColor(LABEL, TEXT_COLOR_NORMAL));
 }
 
+// TODO: support text input for mobile devices
 auto drawLoginScreen() -> void
 {
     if (ctx().isLoggedIn or ctx().isLoginInProgress) { return; }
@@ -1645,7 +1678,7 @@ auto drawConnectedPlayersPanel() -> void
         return rng::any_of(hand, [&](const CardNameView name) { return cardSuit(name) == suit; }, &Card::name);
     };
     // first card in the trick: any card is allowed
-    if (std::empty(ctx().cardsOnTable) and ctx().talonCard == nullptr) { return true; }
+    if (std::empty(ctx().cardsOnTable) and not ctx().passGameTalon.exists()) { return true; }
     if (clickedSuit == ctx().leadSuit) { return true; } // follows lead suit
     if (hasSuit(ctx().leadSuit)) { return false; } // must follow lead suit
     if (clickedSuit == trump) { return true; } //  no lead suit cards, playing trump
@@ -1653,10 +1686,10 @@ auto drawConnectedPlayersPanel() -> void
     return true; // no lead or trump suit cards, free to play
 }
 
-[[nodiscard]] auto tintForCard(const std::list<const Card*>& hand, const CardNameView cardName) -> r::Color
+[[nodiscard]] auto tintForCard(const bool canPlay) -> r::Color
 {
-    const auto lightGray = r::Color{150, 150, 150, 255};
-    return isCardPlayable(hand, cardName) ? r::Color::White() : lightGray;
+    static const auto lightGray = r::Color{150, 150, 150, 255};
+    return canPlay ? r::Color::White() : lightGray;
 }
 
 auto drawCardShineEffect(const bool isHovered, const r::Vector2& cardPosition) -> void
@@ -1707,18 +1740,20 @@ auto drawCards(const r::Vector2 pos, Player& player, const Shift shift) -> void
     });
     for (auto&& [i, card] : player.hand | rv::enumerate) {
         const auto isMyHand = ctx().myPlayerId == player.id;
-        const auto isTheyHand = ctx().myPlayer().playsOnBehalfOf == player.id;
-        const auto isHovered = ((isMyHand and isMyTurn() and not isSomeonePlayingOnMyBehalf())
-                                or (isTheyHand and isMyTurnOnBehalfOfSomeone()))
+        const auto isTheirHand = ctx().myPlayer().playsOnBehalfOf == player.id;
+        const auto isRightTurn = (isMyHand and isMyTurn() and not isSomeonePlayingOnMyBehalf())
+            or (isTheirHand and isMyTurnOnBehalfOfSomeone());
+        const auto isCardPlayable = pref::isCardPlayable(player.hand, card->name);
+        const auto isHovered = (not ctx().isGameFreezed and isRightTurn)
             and (ctx().stage == GameStage::PLAYING or ctx().stage == GameStage::TALON_PICKING)
             and not ctx().bidding.isVisible
-            and isCardPlayable(player.hand, card->name)
+            and isCardPlayable
             and static_cast<int>(i) == hoveredIndex;
         static constexpr auto Offset = CardHeight / 10.f;
         const auto offset = isHovered ? (hasShift(shift, Positive) ? Offset : -Offset) : 0.f;
         const auto cardPosition = toPos(i, offset);
         ctx().cardPositions[card->name] = cardPosition;
-        card->texture.Draw(cardPosition, tintForCard(player.hand, card->name));
+        card->texture.Draw(cardPosition, tintForCard(not ctx().cardsOnTable.contains(player.id) and isCardPlayable));
         drawCardShineEffect(isHovered, cardPosition);
     }
 }
@@ -1746,6 +1781,7 @@ auto drawBackCards(const int cardCount, const r::Vector2& pos) -> void
 
 auto drawCards(const r::Vector2& pos, Player& player, const Shift shift, const int cardCount) -> void
 {
+    if (cardCount == 0) { return; }
     std::empty(player.hand) ? drawBackCards(cardCount, pos) : drawCards(pos, player, shift);
 }
 
@@ -1769,7 +1805,7 @@ auto drawCards(const r::Vector2& pos, Player& player, const Shift shift, const i
 {
     return fmt::format(
         "{}{}{}",
-        ctx().turnPlayerId == player.id ? fmt::format("{} ", ARROW_RIGHT) : "",
+        ctx().turnPlayerId == player.id and not ctx().isGameFreezed ? fmt::format("{} ", PREF_ARROW_RIGHT) : "",
         player.name,
         player.tricksTaken != 0 ? fmt::format(" {}", prettifyTricksTaken(player.tricksTaken)) : "");
 }
@@ -1781,11 +1817,24 @@ auto drawCards(const r::Vector2& pos, Player& player, const Shift shift, const i
     });
 }
 
+[[nodiscard]] auto getCodepoint(const char* text) -> int
+{
+    auto codepointSize = 0;
+    return GetCodepoint(text, &codepointSize);
+}
+
+template<typename... Args>
+[[nodiscard]] auto makeCodepoints(const Args&... args) -> auto
+{
+    return std::array{getCodepoint(args)...};
+}
+
 [[nodiscard]] auto drawYourTurn(
     const r::Vector2& pos, const float gap, const float totalWidth, const PlayerId& playerId) -> float
 {
+    const auto isPlayerTurnOnBehalfOfSomeone = pref::isPlayerTurnOnBehalfOfSomeone(playerId);
     const auto text = std::invoke([&] {
-        if (isPlayerTurnOnBehalfOfSomeone(playerId)) {
+        if (isPlayerTurnOnBehalfOfSomeone) {
             const auto& playerName = ctx().player(ctx().player(playerId).playsOnBehalfOf).name;
             return fmt::format("{} {}", ctx().localizeText(GameText::YourTurnFor), playerName);
         }
@@ -1794,11 +1843,22 @@ auto drawCards(const r::Vector2& pos, Player& player, const Shift shift, const i
     const auto textSize = measureGuiText(text);
     const auto textX = pos.x + (totalWidth - textSize.x) * 0.5f;
     const auto textY = (pos.y + BidOriginY + BidMenuH - textSize.y) * 0.5f;
-    if ((not isPlayerTurn(playerId) or isSomeonePlayingOnBehalfOf(playerId))
-        and not isPlayerTurnOnBehalfOfSomeone(playerId)) {
+    if (ctx().isGameFreezed
+        or ((not isPlayerTurn(playerId) or isSomeonePlayingOnBehalfOf(playerId))
+            and not isPlayerTurnOnBehalfOfSomeone)) {
         return textY;
     }
     const auto rect = r::Rectangle{textX + gap * 0.5f, textY - gap * 0.5f, textSize.x + gap, textSize.y + gap};
+    if (isPlayerTurnOnBehalfOfSomeone) {
+        static const auto arrowSize = ctx().fontSizeXL();
+        const auto [leftOpponentId, _] = getOpponentIds();
+        const auto isLeft = leftOpponentId == ctx().player(playerId).playsOnBehalfOf;
+        const auto arrowY = rect.y + rect.height - arrowSize;
+        const auto arrow = isLeft ? r::Vector2{rect.x - arrowSize, arrowY} //
+                                  : r::Vector2{rect.x + rect.width, arrowY};
+        ctx().fontAwesomeXL.DrawText(
+            isLeft ? LeftArrowIcon : RightArrowIcon, arrow, arrowSize, getGuiColor(TEXT_COLOR_NORMAL));
+    }
     GuiLabel(rect, text.c_str());
     return textY;
 }
@@ -1835,7 +1895,6 @@ auto drawMyHand() -> void
     using enum DrawPosition;
     auto& player = ctx().myPlayer();
     const auto cardCount = std::ssize(player.hand);
-    if (cardCount == 0) { return; }
     const auto totalWidth = (static_cast<float>(cardCount) - 1.f) * CardOverlapX + CardWidth;
     const auto cardFirstLeftTopPos
         = r::Vector2{(VirtualW - totalWidth) * 0.5f, VirtualH - CardHeight - MyCardBorderMarginY};
@@ -1870,7 +1929,6 @@ auto drawOpponentHand(const DrawPosition drawPosition) -> void
         return not std::empty(player.hand) ? std::ssize(player.hand)
                                            : (isRight(drawPosition) ? ctx().rightCardCount : ctx().leftCardCount);
     });
-    if (cardCount == 0) { return; }
     const auto totalHeight = (static_cast<float>(cardCount) - 1.f) * CardOverlapY + CardHeight;
     const auto cardFirstLeftTopPos = r::Vector2{
         isRight(drawPosition) ? VirtualW - CardWidth - CardBorderMargin : CardBorderMargin,
@@ -1910,7 +1968,7 @@ auto drawPlayedCards() -> void
     static const auto leftPlayPos = r::Vector2{centerPos.x - CardWidth * 0.5f - cardSpacing - CardWidth, leftRightY};
     static const auto rightPlayPos = r::Vector2{centerPos.x + cardSpacing + CardWidth * 0.5f, leftRightY};
     const auto [leftOpponentId, rightOpponentId] = getOpponentIds();
-    if (ctx().talonCard != nullptr) { ctx().talonCard->texture.Draw(topPlayPos); }
+    if (ctx().passGameTalon.exists()) { ctx().passGameTalon.get().texture.Draw(topPlayPos); }
     if (std::empty(ctx().cardsOnTable)) { return; }
     if (ctx().cardsOnTable.contains(leftOpponentId)) {
         ctx().cardsOnTable.at(leftOpponentId)->texture.Draw(leftPlayPos);
@@ -1923,13 +1981,13 @@ auto drawPlayedCards() -> void
     }
 }
 
-#define GUI_PROPERTY(PREFIX, STATE)                                                                                    \
+#define PREF_GUI_PROPERTY(PREF_PREFIX, PREF_STATE)                                                                     \
     std::invoke([&] {                                                                                                  \
-        switch (STATE) {                                                                                               \
-        case STATE_NORMAL: return PREFIX##_COLOR_NORMAL;                                                               \
-        case STATE_DISABLED: return PREFIX##_COLOR_DISABLED;                                                           \
-        case STATE_PRESSED: return PREFIX##_COLOR_PRESSED;                                                             \
-        case STATE_FOCUSED: return PREFIX##_COLOR_FOCUSED;                                                             \
+        switch (PREF_STATE) {                                                                                          \
+        case STATE_NORMAL: return PREF_PREFIX##_COLOR_NORMAL;                                                          \
+        case STATE_DISABLED: return PREF_PREFIX##_COLOR_DISABLED;                                                      \
+        case STATE_PRESSED: return PREF_PREFIX##_COLOR_PRESSED;                                                        \
+        case STATE_FOCUSED: return PREF_PREFIX##_COLOR_FOCUSED;                                                        \
         }                                                                                                              \
         std::unreachable();                                                                                            \
     })
@@ -1958,6 +2016,7 @@ auto drawPlayedCards() -> void
             and bid != PREF_PASS);
 }
 
+// TODO: don't draw BiddingMenu if there is only one choice
 auto drawBiddingMenu() -> void
 {
     if (not ctx().bidding.isVisible) { return; }
@@ -1979,9 +2038,11 @@ auto drawBiddingMenu() -> void
                 state = r::Mouse::IsButtonDown(MOUSE_LEFT_BUTTON) ? STATE_PRESSED : STATE_FOCUSED;
                 return r::Mouse::IsButtonReleased(MOUSE_LEFT_BUTTON);
             });
-            const auto textColor = getGuiColor(BUTTON, GUI_PROPERTY(TEXT, state));
+            const auto textColor = getGuiColor(BUTTON, PREF_GUI_PROPERTY(TEXT, state));
             drawRectangleWithBorder(
-                cell, getGuiColor(BUTTON, GUI_PROPERTY(BASE, state)), getGuiColor(BUTTON, GUI_PROPERTY(BORDER, state)));
+                cell,
+                getGuiColor(BUTTON, PREF_GUI_PROPERTY(BASE, state)),
+                getGuiColor(BUTTON, PREF_GUI_PROPERTY(BORDER, state)));
             auto text = std::string{ctx().localizeBid(bid)};
             auto textSize = ctx().fontM.MeasureText(text, ctx().fontSizeM(), FontSpacing);
             const auto textX = cell.x + (cell.width - textSize.x) * 0.5f;
@@ -2023,6 +2084,7 @@ auto drawBiddingMenu() -> void
     }
 }
 
+// TODO: implement Z-ordering of windows
 auto drawMenu(
     const auto& allButtons,
     const bool isVisible,
@@ -2047,9 +2109,9 @@ auto drawMenu(
             state = r::Mouse::IsButtonDown(MOUSE_LEFT_BUTTON) ? STATE_PRESSED : STATE_FOCUSED;
             return r::Mouse::IsButtonReleased(MOUSE_LEFT_BUTTON);
         });
-        const auto borderColor = getGuiColor(BUTTON, GUI_PROPERTY(BORDER, state));
-        const auto bgColor = getGuiColor(BUTTON, GUI_PROPERTY(BASE, state));
-        const auto textColor = getGuiColor(BUTTON, GUI_PROPERTY(TEXT, state));
+        const auto borderColor = getGuiColor(BUTTON, PREF_GUI_PROPERTY(BORDER, state));
+        const auto bgColor = getGuiColor(BUTTON, PREF_GUI_PROPERTY(BASE, state));
+        const auto textColor = getGuiColor(BUTTON, PREF_GUI_PROPERTY(TEXT, state));
         rect.Draw(bgColor);
         rect.DrawLines(borderColor, getGuiButtonBorderWidth());
         const auto text = ctx().localizeText(buttonName);
@@ -2064,10 +2126,13 @@ auto drawMenu(
 [[nodiscard]] auto buildMiserCards(const std::vector<CardName>& remaining, const std::vector<CardName>& played)
     -> std::array<std::string, 36>
 {
-    static constexpr auto ranksShort = std::array<std::string_view, 8>{SEVEN, EIGHT, NINE, TEN, "J", "Q", "K", "A"};
-    static constexpr auto ranksLong = std::array<std::string_view, 8>{SEVEN, EIGHT, NINE, TEN, JACK, QUEEN, KING, ACE};
+    static constexpr auto ranksShort
+        = std::array<std::string_view, 8>{PREF_SEVEN, PREF_EIGHT, PREF_NINE, PREF_TEN, "J", "Q", "K", "A"};
+    static constexpr auto ranksLong = std::array<std::string_view, 8>{
+        PREF_SEVEN, PREF_EIGHT, PREF_NINE, PREF_TEN, PREF_JACK, PREF_QUEEN, PREF_KING, PREF_ACE};
     static constexpr auto suitsShort = std::array<std::string_view, 4>{SpadeSign, ClubSign, DiamondSign, HeartSign};
-    static constexpr auto suitsLong = std::array<std::string_view, 4>{SPADES, CLUBS, DIAMONDS, HEARTS};
+    static constexpr auto suitsLong
+        = std::array<std::string_view, 4>{PREF_SPADES, PREF_CLUBS, PREF_DIAMONDS, PREF_HEARTS};
     auto result = std::array<std::string, std::size(suitsLong) * (1 + std::size(ranksShort))>{};
     auto idx = 0uz;
     for (auto&& [shortSuit, longSuit] : rv::zip(suitsShort, suitsLong)) {
@@ -2117,8 +2182,8 @@ auto drawMiserCards() -> void
             if (i != 0) {
                 drawRectangleWithBorder(
                     cell,
-                    getGuiColor(BUTTON, GUI_PROPERTY(BASE, state)),
-                    getGuiColor(BUTTON, GUI_PROPERTY(BORDER, state)));
+                    getGuiColor(BUTTON, PREF_GUI_PROPERTY(BASE, state)),
+                    getGuiColor(BUTTON, PREF_GUI_PROPERTY(BORDER, state)));
             }
             if (not std::empty(textCell)) {
                 const auto textSize = ctx().fontM.MeasureText(textCell, ctx().fontSizeM(), FontSpacing);
@@ -2127,7 +2192,7 @@ auto drawMiserCards() -> void
                     pos.y + (cellSize - textSize.y) * 0.5f};
                 const auto textColor = (textCell == DiamondSign or textCell == HeartSign)
                     ? r::Color::Red()
-                    : getGuiColor(BUTTON, GUI_PROPERTY(TEXT, state));
+                    : getGuiColor(BUTTON, PREF_GUI_PROPERTY(TEXT, state));
                 ctx().fontM.DrawText(textCell, textPos, ctx().fontSizeM(), FontSpacing, textColor);
             }
         }
@@ -2147,6 +2212,7 @@ auto drawWhistingOrMiserMenu() -> void
     if (isMiser()) {
         drawMenu(MiserButtons, ctx().whisting.isVisible, click, checkHalfWhist);
     } else {
+        // TODO: Don't draw Pass if can Half-Whist
         drawMenu(WhistingButtons, ctx().whisting.isVisible, click, checkHalfWhist);
     }
 }
@@ -2189,28 +2255,27 @@ auto handleCardClick(std::list<const Card*>& hand, std::invocable<const Card&> a
     }
 }
 
-template<typename... Args>
-[[nodiscard]] auto makeCodepoints(Args&&... args) -> auto
-{
-    auto codepointSize = 0;
-    return std::array{GetCodepoint(std::forward<Args>(args), &codepointSize)...};
-}
-
 [[nodiscard]] auto makeCodepoints() -> std::vector<int>
 {
     const auto ascii = rv::closed_iota(0x20, 0x7E); // space..~
     const auto cyrillic = rv::closed_iota(0x0410, 0x044F); // А..я
-    const auto cards = rv::closed_iota(0x1F0A1, 0x1F0DE);
     const auto extras = makeCodepoints( // clang-format off
         "Ё", "ё", "Ґ", "ґ", "Є", "є", "І", "і", "Ї", "ї", "è", "’", "—",
-        SPADE, CLUB, HEART, DIAMOND, ARROW_RIGHT,
+        PREF_SPADE, PREF_CLUB, PREF_HEART, PREF_DIAMOND, PREF_ARROW_RIGHT,
         PREF_TRICKS_01, PREF_TRICKS_02, PREF_TRICKS_03, PREF_TRICKS_04, PREF_TRICKS_05,
         PREF_TRICKS_06, PREF_TRICKS_07, PREF_TRICKS_08, PREF_TRICKS_09, PREF_TRICKS_10
     ); // clang-format on
-    return rv::concat(ascii, cyrillic, extras, cards) | rng::to_vector;
+    return rv::concat(ascii, cyrillic, extras) | rng::to_vector;
 }
 
-[[nodiscard]] auto makeAwesomeCodepoints() -> auto
+[[nodiscard]] auto makeCodepointsLarge() -> std::vector<int>
+{
+    const auto codepoints = makeCodepoints();
+    const auto cards = rv::closed_iota(0x1F0A1, 0x1F0DE);
+    return rv::concat(codepoints, cards) | rng::to_vector;
+}
+
+[[nodiscard]] auto makeAwesomeCodepoints()
 {
     return makeCodepoints(
         ScoreSheetIcon,
@@ -2222,24 +2287,35 @@ template<typename... Args>
         LogoutIcon);
 }
 
+[[nodiscard]] auto makeAwesomeLargeCodepoints()
+{
+    return std::array{LeftArrowIcon, RightArrowIcon};
+}
+
 auto loadFonts() -> void
 {
     static constexpr auto FontSizeS = static_cast<int>(VirtualH / 54.f);
     static constexpr auto FontSizeM = static_cast<int>(VirtualH / 30.f);
     static constexpr auto FontSizeL = static_cast<int>(VirtualH / 11.25f);
+    static constexpr auto FontSizeXL = static_cast<int>(VirtualH / 6.f);
     const auto fontPath = resources("fonts", "DejaVuSans.ttf");
     const auto fontAwesomePath = resources("fonts", "Font-Awesome-7-Free-Solid-900.otf");
     auto codepoints = makeCodepoints();
+    auto codepointsLarge = makeCodepointsLarge();
     auto awesomeCodepoints = makeAwesomeCodepoints();
+    auto awesomeLargeCodepoints = makeAwesomeLargeCodepoints();
     ctx().fontS = LoadFontEx(fontPath.c_str(), FontSizeS, std::data(codepoints), std::ssize(codepoints));
     ctx().fontM = LoadFontEx(fontPath.c_str(), FontSizeM, std::data(codepoints), std::ssize(codepoints));
-    ctx().fontL = LoadFontEx(fontPath.c_str(), FontSizeL, std::data(codepoints), std::ssize(codepoints));
+    ctx().fontL = LoadFontEx(fontPath.c_str(), FontSizeL, std::data(codepointsLarge), std::ssize(codepointsLarge));
     ctx().fontAwesome = LoadFontEx(
         fontAwesomePath.c_str(), FontSizeM - 1, std::data(awesomeCodepoints), std::ssize(awesomeCodepoints));
+    ctx().fontAwesomeXL = LoadFontEx(
+        fontAwesomePath.c_str(), FontSizeXL, std::data(awesomeLargeCodepoints), std::ssize(awesomeLargeCodepoints));
     SetTextureFilter(ctx().fontS.texture, TEXTURE_FILTER_BILINEAR);
     SetTextureFilter(ctx().fontM.texture, TEXTURE_FILTER_BILINEAR);
     SetTextureFilter(ctx().fontL.texture, TEXTURE_FILTER_BILINEAR);
     SetTextureFilter(ctx().fontAwesome.texture, TEXTURE_FILTER_BILINEAR);
+    SetTextureFilter(ctx().fontAwesomeXL.texture, TEXTURE_FILTER_BILINEAR);
     setDefaultFont();
 }
 
@@ -2256,11 +2332,12 @@ auto loadColorScheme(const std::string_view style) -> void
 [[nodiscard]] constexpr auto textToEnglish(const std::string_view text) noexcept -> std::string_view
 {
     for (auto i = 0uz; i < std::to_underlying(GameText::Count); ++i) {
-        const auto en = localization[std::to_underlying(GameLang::English)][i];
-        if (text == en
-            or text == localization[std::to_underlying(GameLang::Ukrainian)][i]
-            or text == localization[std::to_underlying(GameLang::Alternative)][i]) {
-            return en;
+        const auto key = static_cast<GameText>(i);
+        const auto eng = localizeText(key, GameLang::English);
+        if (text == eng
+            or text == localizeText(key, GameLang::Ukrainian)
+            or text == localizeText(key, GameLang::Alternative)) {
+            return eng;
         }
     }
     return text;
@@ -2336,7 +2413,7 @@ auto drawLogoutButton() -> void
         drawToolbarButton(
             1,
             LogoutIcon,
-            [&] { // TODO: don't close settingsMenu
+            [&] {
                 ctx().settingsMenu.isVisible = false;
                 ctx().logoutMessage.isVisible = true;
             },
@@ -2468,7 +2545,6 @@ auto drawSettingsMenu() -> void
              SettingsMenu::windowBoxW,
              windowBoxH},
             settingsText.c_str());
-        // TODO: don't close logoutMessage
         if (ctx().settingsMenu.isVisible) { ctx().logoutMessage.isVisible = false; }
         GuiGroupBox({langGroupBox.x, langGroupBox.y, groupBoxW, langGroupBoxH}, languageText.c_str());
         GuiListView(
@@ -2482,7 +2558,6 @@ auto drawSettingsMenu() -> void
             if (const auto langToLoad = textToEnglish(lang[static_cast<std::size_t>(ctx().settingsMenu.langIdSelect)]);
                 ctx().settingsMenu.loadedLang != langToLoad) {
                 loadLang(langToLoad);
-                // TODO: fix changing language of OverallScoreboard and remove userGames
                 updateOverallScoreboardTable();
             }
         }
@@ -2576,7 +2651,6 @@ auto drawScoreSheet() -> void
                 ctx().fontM.MeasureText(result, ctx().fontSizeM(), fSpace),
                 result.starts_with('-') ? r::Color::Red() : (result.starts_with('+') ? r::Color::DarkGreen() : c)};
         });
-        // TODO: use `assert(cond)` instead of `else if(cond)`?
         if (playerId == ctx().myPlayerId) {
             if (resultValue) {
                 const auto& [result, resultSize, color] = *resultValue;
@@ -2586,7 +2660,7 @@ auto drawScoreSheet() -> void
             const auto dumpValues = joinValues(score.dump);
             const auto poolValues = joinValues(score.pool);
             font.DrawText(dumpValues, {rs.x + radius, rs.y + rs.height - fSize}, fSize, fSpace, c);
-            // TODO: properly center `poolValues` (here and below) instead of adding `gap* 0.5f`
+            // TODO: properly center `poolValues` (here and below) instead of adding `gap * 0.5f`
             font.DrawText(poolValues, {rs.x + gap, rs.y + rs.height + gap * 0.5f}, fSize, fSpace, c);
             for (const auto& [toWhomWhistId, whist] : score.whists) {
                 const auto whistValues = joinValues(whist);
@@ -2684,7 +2758,6 @@ auto drawOverallScoreboard() -> void
             for (auto&& [i, cell] : row | rv::enumerate) {
                 const auto color = std::invoke([&] {
                     const auto& scheme = ctx().settingsMenu.loadedColorScheme;
-                    // TODO: remove winrate color if not used
                     static constexpr auto GoodWinrate = 51;
                     static constexpr auto BadWinrate = 39;
                     if (cell.starts_with('+')
@@ -2731,15 +2804,35 @@ auto drawOverallScoreboard() -> void
     });
 }
 
-auto drawLastTrick() -> void
+[[nodiscard]] auto measureTextCodepoints(
+    const r::Font& font, const std::span<const int> codepoints, const float fontSize, const float spacing) -> r::Vector2
 {
-    if (std::empty(ctx().lastTrick)) { return; }
-    const auto lastTricks = ctx().lastTrick | rv::transform(&cardNameCodepoint) | rng::to_vector;
-    const auto fontSize = 100; // TODO: make relative
+    if (std::empty(codepoints)) { return {}; }
+    const auto scale = fontSize / static_cast<float>(font.baseSize);
+    auto width = 0.0f;
+    for (const auto [i, cp] : codepoints | rv::enumerate) {
+        const auto glyph = GetGlyphInfo(font, cp);
+        const auto advance = glyph.advanceX > 0 ? static_cast<float>(glyph.advanceX) //
+                                                : static_cast<float>(font.baseSize) * 0.5f;
+        width += advance * scale;
+        if (i < std::size(codepoints) - 1) { width += spacing * scale; };
+    }
+    return {width, fontSize};
+}
+
+auto drawLastTrickOrTalon() -> void
+{
+    if (std::empty(ctx().lastTrickOrTalon)) { return; }
+    static constexpr auto cardCenterX = CardBorderMargin + CardWidth * 0.5f;
+    static constexpr auto fontSize = CardHeight / 2.88f;
+    static constexpr auto y = VirtualH - BorderMargin - fontSize;
+    const auto lastTrickOrTalon = ctx().lastTrickOrTalon | rv::transform(&cardNameCodepoint) | rng::to_vector;
+    const auto size = measureTextCodepoints(ctx().fontL, lastTrickOrTalon, fontSize, FontSpacing);
+    const auto x = cardCenterX - size.x * 0.5f;
     ctx().fontL.DrawText(
-        std::data(lastTricks),
-        std::ssize(lastTricks),
-        {BorderMargin, VirtualH - BorderMargin - fontSize},
+        std::data(lastTrickOrTalon),
+        std::ssize(lastTrickOrTalon),
+        {x, y},
         fontSize,
         FontSpacing,
         getGuiColor(TEXT_COLOR_NORMAL));
@@ -2791,15 +2884,17 @@ auto drawPingAndFps() -> void
 
 auto handleMousePress() -> void
 {
-    if (not r::Mouse::IsButtonPressed(MOUSE_LEFT_BUTTON)) { return; }
+    if (not r::Mouse::IsButtonPressed(MOUSE_LEFT_BUTTON) or ctx().isGameFreezed) { return; }
     if (ctx().stage == GameStage::PLAYING) {
         if ((not isMyTurn() or isSomeonePlayingOnMyBehalf()) and not isMyTurnOnBehalfOfSomeone()) { return; }
         const auto& playerId
             = std::invoke([&] { return isMyTurn() ? ctx().myPlayerId : ctx().myPlayer().playsOnBehalfOf; });
 
         handleCardClick(ctx().player(playerId).hand, [&](const Card& card) {
-            if (std::empty(ctx().cardsOnTable) and ctx().talonCard == nullptr) { ctx().leadSuit = cardSuit(card.name); }
-            ctx().cardsOnTable.insert_or_assign(playerId, getCard(card.name));
+            if (std::empty(ctx().cardsOnTable) and not ctx().passGameTalon.exists()) {
+                ctx().leadSuit = cardSuit(card.name);
+            }
+            ctx().cardsOnTable.insert_or_assign(playerId, &getCard(card.name));
             sendPlayCard(playerId, card.name);
         });
         return;
@@ -2870,7 +2965,7 @@ auto updateDrawFrame([[maybe_unused]] void* ud) -> void
         drawPlayedCards();
         drawScoreSheetButton();
         drawScoreSheet();
-        drawLastTrick();
+        drawLastTrickOrTalon();
         drawSpeechBubbleButton();
         drawOverallScoreboardButton();
     } else {
@@ -2930,6 +3025,7 @@ int main(const int argc, const char* const argv[])
     pref::loadColorScheme(not std::empty(colorScheme) ? colorScheme : args.at("--color-scheme").asString());
     ctx.initialFont = GuiGetFont();
     pref::loadFonts();
+    pref::loadCards();
     emscripten_set_resize_callback(
         EMSCRIPTEN_EVENT_TARGET_WINDOW,
         nullptr,

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2025 Oleksandr Kozlov
+
 #pragma once
 
 #include "common/logger.hpp"
@@ -14,6 +17,7 @@
 #include <fstream>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -22,36 +26,36 @@ namespace pref {
 
 // NOLINTBEGIN(cppcoreguidelines-macro-usage)
 
-#define SPADES "spades"
-#define CLUBS "clubs"
-#define HEARTS "hearts"
-#define DIAMONDS "diamonds"
+#define PREF_SPADES "spades"
+#define PREF_CLUBS "clubs"
+#define PREF_HEARTS "hearts"
+#define PREF_DIAMONDS "diamonds"
 
-#define SPADE "♠"
-#define CLUB "♣"
-#define HEART "♥"
-#define DIAMOND "♦"
+#define PREF_SPADE "♠"
+#define PREF_CLUB "♣"
+#define PREF_HEART "♥"
+#define PREF_DIAMOND "♦"
 
-inline constexpr std::string_view SpadeSign = SPADE;
-inline constexpr std::string_view ClubSign = CLUB;
-inline constexpr std::string_view HeartSign = HEART;
-inline constexpr std::string_view DiamondSign = DIAMOND;
+inline constexpr std::string_view SpadeSign = PREF_SPADE;
+inline constexpr std::string_view ClubSign = PREF_CLUB;
+inline constexpr std::string_view HeartSign = PREF_HEART;
+inline constexpr std::string_view DiamondSign = PREF_DIAMOND;
 
-#define ARROW_RIGHT "▶"
+#define PREF_ARROW_RIGHT "▶"
 
-#define SIX "6"
-#define SEVEN "7"
-#define EIGHT "8"
-#define NINE "9"
-#define TEN "10"
-#define JACK "jack"
-#define QUEEN "queen"
-#define KING "king"
-#define ACE "ace"
+#define PREF_SIX "6"
+#define PREF_SEVEN "7"
+#define PREF_EIGHT "8"
+#define PREF_NINE "9"
+#define PREF_TEN "10"
+#define PREF_JACK "jack"
+#define PREF_QUEEN "queen"
+#define PREF_KING "king"
+#define PREF_ACE "ace"
 
 #define PREF_WT "WT" // without talon
-#define NINE_WT NINE " " PREF_WT
-#define TEN_WT TEN " " PREF_WT
+#define PREF_NINE_WT PREF_NINE " " PREF_WT
+#define PREF_TEN_WT PREF_TEN " " PREF_WT
 #define PREF_MIS "Mis"
 #define PREF_MISER PREF_MIS "ère" // Misère
 #define PREF_MISER_WT PREF_MIS "." PREF_WT // Mis.WT
@@ -63,6 +67,7 @@ inline constexpr std::string_view DiamondSign = DIAMOND;
 #define PREF_PASS_PASS PREF_PASS PREF_PASS
 #define PREF_CATCH "Catch"
 #define PREF_TRUST "Trust"
+#define PREF_OPENLY "Openly"
 
 #define PREF_OF_ "_of_"
 
@@ -73,15 +78,23 @@ namespace rng = ranges;
 namespace rv = rng::views;
 namespace fs = std::filesystem;
 
-using CardName = std::string;
 using PlayerId = std::string;
-using PlayerName = std::string;
-
-using CardNameView = std::string_view;
 using PlayerIdView = std::string_view;
+
+using PlayerName = std::string;
 using PlayerNameView = std::string_view;
 
-// TODO: Support 4 players
+using PlayerIdent = std::pair<PlayerId, PlayerName>;
+using PlayersIdents = std::vector<PlayerIdent>;
+using PlayersIdentsView = std::span<const PlayerIdent>;
+
+using CardName = std::string;
+using CardNameView = std::string_view;
+
+using CardsNames = std::vector<CardName>;
+using CardsNamesView = std::span<const CardName>;
+
+// TODO: support 4 players
 inline constexpr auto NumberOfPlayers = 3uz;
 inline constexpr auto WhistersCount = 2uz;
 inline constexpr auto DeclarerCount = 1uz;
@@ -132,17 +145,24 @@ using FinalResult = std::map<PlayerId, std::int32_t>;
 [[nodiscard]] inline auto rankValue(const std::string_view rank) -> int
 {
     static const auto rankMap = std::map<std::string_view, int>{
-        {ACE, 8}, {KING, 7}, {QUEEN, 6}, {JACK, 5}, {TEN, 4}, {NINE, 3}, {EIGHT, 2}, {SEVEN, 1}};
+        {PREF_ACE, 8},
+        {PREF_KING, 7},
+        {PREF_QUEEN, 6},
+        {PREF_JACK, 5},
+        {PREF_TEN, 4},
+        {PREF_NINE, 3},
+        {PREF_EIGHT, 2},
+        {PREF_SEVEN, 1}};
     return rankMap.at(rank);
 }
 
 [[nodiscard]] constexpr auto getTrump(const std::string_view bid) noexcept -> std::string_view
 {
     if (bid.contains(PREF_WT) or bid.contains(PREF_MIS) or bid.contains(PREF_PASS)) { return {}; }
-    if (bid.contains(SPADE)) { return SPADES; }
-    if (bid.contains(CLUB)) { return CLUBS; }
-    if (bid.contains(HEART)) { return HEARTS; }
-    if (bid.contains(DIAMOND)) { return DIAMONDS; }
+    if (bid.contains(PREF_SPADE)) { return PREF_SPADES; }
+    if (bid.contains(PREF_CLUB)) { return PREF_CLUBS; }
+    if (bid.contains(PREF_HEART)) { return PREF_HEARTS; }
+    if (bid.contains(PREF_DIAMOND)) { return PREF_DIAMONDS; }
     return {};
 }
 
@@ -256,7 +276,7 @@ template<typename T>
     return "Unknown";
 }
 
-#define DEFINE_METHOD_NAME(Type)                                                                                       \
+#define PREF_DEFINE_METHOD_NAME(Type)                                                                                  \
     template<>                                                                                                         \
     [[nodiscard]]                                                                                                      \
     constexpr auto methodName<Type>() noexcept -> std::string_view                                                     \
@@ -264,29 +284,29 @@ template<typename T>
         return #Type;                                                                                                  \
     }
 
-DEFINE_METHOD_NAME(LoginRequest)
-DEFINE_METHOD_NAME(LoginResponse)
-DEFINE_METHOD_NAME(AuthRequest)
-DEFINE_METHOD_NAME(AuthResponse)
-DEFINE_METHOD_NAME(Logout)
-DEFINE_METHOD_NAME(Bidding)
-DEFINE_METHOD_NAME(DealCards)
-DEFINE_METHOD_NAME(DiscardTalon)
-DEFINE_METHOD_NAME(PlayCard)
-DEFINE_METHOD_NAME(PlayerJoined)
-DEFINE_METHOD_NAME(PlayerLeft)
-DEFINE_METHOD_NAME(PlayerTurn)
-DEFINE_METHOD_NAME(DealFinished)
-DEFINE_METHOD_NAME(TrickFinished)
-DEFINE_METHOD_NAME(Whisting)
-DEFINE_METHOD_NAME(SpeechBubble)
-DEFINE_METHOD_NAME(Log)
-DEFINE_METHOD_NAME(HowToPlay)
-DEFINE_METHOD_NAME(PingPong)
-DEFINE_METHOD_NAME(OpenWhistPlay)
-DEFINE_METHOD_NAME(UserGames)
-DEFINE_METHOD_NAME(OpenTalon)
-DEFINE_METHOD_NAME(MiserCards)
+PREF_DEFINE_METHOD_NAME(LoginRequest)
+PREF_DEFINE_METHOD_NAME(LoginResponse)
+PREF_DEFINE_METHOD_NAME(AuthRequest)
+PREF_DEFINE_METHOD_NAME(AuthResponse)
+PREF_DEFINE_METHOD_NAME(Logout)
+PREF_DEFINE_METHOD_NAME(Bidding)
+PREF_DEFINE_METHOD_NAME(DealCards)
+PREF_DEFINE_METHOD_NAME(DiscardTalon)
+PREF_DEFINE_METHOD_NAME(PlayCard)
+PREF_DEFINE_METHOD_NAME(PlayerJoined)
+PREF_DEFINE_METHOD_NAME(PlayerLeft)
+PREF_DEFINE_METHOD_NAME(PlayerTurn)
+PREF_DEFINE_METHOD_NAME(DealFinished)
+PREF_DEFINE_METHOD_NAME(TrickFinished)
+PREF_DEFINE_METHOD_NAME(Whisting)
+PREF_DEFINE_METHOD_NAME(SpeechBubble)
+PREF_DEFINE_METHOD_NAME(Log)
+PREF_DEFINE_METHOD_NAME(HowToPlay)
+PREF_DEFINE_METHOD_NAME(PingPong)
+PREF_DEFINE_METHOD_NAME(OpenWhistPlay)
+PREF_DEFINE_METHOD_NAME(UserGames)
+PREF_DEFINE_METHOD_NAME(OpenTalon)
+PREF_DEFINE_METHOD_NAME(MiserCards)
 
 template<typename Method>
 [[nodiscard]] auto makeMessage(const Method& method) -> Message
@@ -307,14 +327,6 @@ template<typename Method>
         return {};
     }
     return result;
-}
-
-// TODO: remove if unused
-[[maybe_unused]] [[nodiscard]] inline auto readFile(const fs::path& path) -> std::string
-{
-    auto in = std::ifstream{path};
-    if (not in) { throw std::runtime_error{fmt::format("{}: {}, {}", __func__, std::strerror(errno), PREF_V(path))}; }
-    return std::string{std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
 }
 
 template<typename T>

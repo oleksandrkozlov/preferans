@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2025 Oleksandr Kozlov
+
 #include "auth.hpp"
 #include "common/common.hpp"
 #include "server.hpp"
@@ -32,53 +35,53 @@ TEST_CASE("server")
     SECTION("beats")
     {
         // clang-format off
-        REQUIRE_FALSE(beats({.candidate = SEVEN PREF_OF_ HEARTS, .best = EIGHT PREF_OF_ HEARTS, .leadSuit = HEARTS, .trump = SPADES}));
-        REQUIRE_FALSE(beats({.candidate = SEVEN PREF_OF_ HEARTS, .best = SEVEN PREF_OF_ HEARTS, .leadSuit = HEARTS, .trump = SPADES}));
-        REQUIRE_FALSE(beats({.candidate = SEVEN PREF_OF_ HEARTS, .best = SEVEN PREF_OF_ SPADES, .leadSuit = HEARTS, .trump = SPADES}));
+        REQUIRE_FALSE(beats({.candidate = PREF_SEVEN PREF_OF_ PREF_HEARTS, .best = PREF_EIGHT PREF_OF_ PREF_HEARTS, .leadSuit = PREF_HEARTS, .trump = PREF_SPADES}));
+        REQUIRE_FALSE(beats({.candidate = PREF_SEVEN PREF_OF_ PREF_HEARTS, .best = PREF_SEVEN PREF_OF_ PREF_HEARTS, .leadSuit = PREF_HEARTS, .trump = PREF_SPADES}));
+        REQUIRE_FALSE(beats({.candidate = PREF_SEVEN PREF_OF_ PREF_HEARTS, .best = PREF_SEVEN PREF_OF_ PREF_SPADES, .leadSuit = PREF_HEARTS, .trump = PREF_SPADES}));
 
-        REQUIRE(beats({.candidate = EIGHT PREF_OF_ HEARTS, .best = SEVEN PREF_OF_ HEARTS, .leadSuit = HEARTS, .trump = SPADES}));
-        REQUIRE(beats({.candidate = SEVEN PREF_OF_ HEARTS, .best = SEVEN PREF_OF_ SPADES, .leadSuit = HEARTS, .trump = ""}));
-        REQUIRE(beats({.candidate = SEVEN PREF_OF_ SPADES, .best = EIGHT PREF_OF_ HEARTS, .leadSuit = HEARTS, .trump = SPADES}));
-        REQUIRE(beats({.candidate = SEVEN PREF_OF_ SPADES, .best = SEVEN PREF_OF_ HEARTS, .leadSuit = HEARTS, .trump = SPADES}));
+        REQUIRE(beats({.candidate = PREF_EIGHT PREF_OF_ PREF_HEARTS, .best = PREF_SEVEN PREF_OF_ PREF_HEARTS, .leadSuit = PREF_HEARTS, .trump = PREF_SPADES}));
+        REQUIRE(beats({.candidate = PREF_SEVEN PREF_OF_ PREF_HEARTS, .best = PREF_SEVEN PREF_OF_ PREF_SPADES, .leadSuit = PREF_HEARTS, .trump = ""}));
+        REQUIRE(beats({.candidate = PREF_SEVEN PREF_OF_ PREF_SPADES, .best = PREF_EIGHT PREF_OF_ PREF_HEARTS, .leadSuit = PREF_HEARTS, .trump = PREF_SPADES}));
+        REQUIRE(beats({.candidate = PREF_SEVEN PREF_OF_ PREF_SPADES, .best = PREF_SEVEN PREF_OF_ PREF_HEARTS, .leadSuit = PREF_HEARTS, .trump = PREF_SPADES}));
         // clang-format on
     }
 
     // clang-format off
-    SECTION("finishTrick")
+    SECTION("decideTrickWinner")
     {
         SECTION("higher rank wins last")
         {
-            REQUIRE(finishTrick({{.playerId = "1", .name = SEVEN PREF_OF_ HEARTS},
-                                 {.playerId = "2", .name = EIGHT PREF_OF_ HEARTS},
-                                 {.playerId = "3", .name = NINE  PREF_OF_ HEARTS}}, SPADES) == "3");
+            REQUIRE(decideTrickWinner({{.playerId = "1", .name = PREF_SEVEN PREF_OF_ PREF_HEARTS},
+                                       {.playerId = "2", .name = PREF_EIGHT PREF_OF_ PREF_HEARTS},
+                                       {.playerId = "3", .name = PREF_NINE  PREF_OF_ PREF_HEARTS}}, PREF_SPADES) == "3");
         }
 
         SECTION("higer rank wins first")
         {
-            REQUIRE(finishTrick({{.playerId = "1", .name = NINE  PREF_OF_ HEARTS},
-                                 {.playerId = "2", .name = EIGHT PREF_OF_ HEARTS},
-                                 {.playerId = "3", .name = SEVEN PREF_OF_ HEARTS}}, SPADES) == "1");
+            REQUIRE(decideTrickWinner({{.playerId = "1", .name = PREF_NINE  PREF_OF_ PREF_HEARTS},
+                                       {.playerId = "2", .name = PREF_EIGHT PREF_OF_ PREF_HEARTS},
+                                       {.playerId = "3", .name = PREF_SEVEN PREF_OF_ PREF_HEARTS}}, PREF_SPADES) == "1");
         }
 
         SECTION("trump wins")
         {
-            REQUIRE(finishTrick({{.playerId = "1", .name = NINE  PREF_OF_ HEARTS},
-                                 {.playerId = "2", .name = SEVEN PREF_OF_ SPADES},
-                                 {.playerId = "3", .name = SEVEN PREF_OF_ HEARTS}}, SPADES) == "2");
+            REQUIRE(decideTrickWinner({{.playerId = "1", .name = PREF_NINE  PREF_OF_ PREF_HEARTS},
+                                       {.playerId = "2", .name = PREF_SEVEN PREF_OF_ PREF_SPADES},
+                                       {.playerId = "3", .name = PREF_SEVEN PREF_OF_ PREF_HEARTS}}, PREF_SPADES) == "2");
         }
 
         SECTION ("first lead wins")
         {
-            REQUIRE(finishTrick({{.playerId = "1", .name = SEVEN PREF_OF_ HEARTS},
-                                 {.playerId = "2", .name = SEVEN PREF_OF_ DIAMONDS},
-                                 {.playerId = "3", .name = SEVEN PREF_OF_ CLUBS}}, SPADES) == "1");
+            REQUIRE(decideTrickWinner({{.playerId = "1", .name = PREF_SEVEN PREF_OF_ PREF_HEARTS},
+                                       {.playerId = "2", .name = PREF_SEVEN PREF_OF_ PREF_DIAMONDS},
+                                       {.playerId = "3", .name = PREF_SEVEN PREF_OF_ PREF_CLUBS}}, PREF_SPADES) == "1");
         }
 
         SECTION("higher rank wins second without trump")
         {
-            REQUIRE(finishTrick({{.playerId = "1", .name = SEVEN PREF_OF_ HEARTS},
-                                 {.playerId = "2", .name = EIGHT PREF_OF_ HEARTS},
-                                 {.playerId = "3", .name = EIGHT PREF_OF_ CLUBS}}, "") == "2");
+            REQUIRE(decideTrickWinner({{.playerId = "1", .name = PREF_SEVEN PREF_OF_ PREF_HEARTS},
+                                       {.playerId = "2", .name = PREF_EIGHT PREF_OF_ PREF_HEARTS},
+                                       {.playerId = "3", .name = PREF_EIGHT PREF_OF_ PREF_CLUBS}}, "") == "2");
         }
         // clang-format on
     }
@@ -394,7 +397,7 @@ TEST_CASE("auth")
     {
         const auto str = "aboba"s;
         const auto view = "aboba"sv;
-        const auto vec = std::list<char>{'a', 'b', 'o', 'b', 'a', '\n'};
+        const auto vec = std::vector<char>{'a', 'b', 'o', 'b', 'a', '\n'};
         const auto spanFromStr = toBytes(str);
         const auto spanFromView = toBytes(view);
         const auto spanFromVec = toBytes(vec);

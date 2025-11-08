@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2025 Oleksandr Kozlov
+
 cmake_minimum_required(VERSION 3.16.3)
 project(client C CXX)
 
@@ -55,12 +58,13 @@ target_include_directories(client PRIVATE ${PROJECT_SOURCE_DIR}/..)
 
 set_target_properties(client PROPERTIES SUFFIX ".html")
 set_target_properties(client PROPERTIES OUTPUT_NAME "index")
-set(SHELL resources/shells/shell_minimal.html)
+set(PREF_INDEX_HTML resources/html/index.html)
 
 if(NOT DEFINED CMAKE_WEBSOCKET_URL)
     set(CMAKE_WEBSOCKET_URL "ws://0.0.0.0:8080")
 endif()
-configure_file(${SHELL}.in ${SHELL} @ONLY)
+configure_file(${PREF_INDEX_HTML}.in ${PREF_INDEX_HTML} @ONLY)
+configure_file(resources/cards/favicon.png ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/favicon.ico COPYONLY)
 target_link_options(
     client
     PUBLIC
@@ -71,7 +75,7 @@ target_link_options(
     -sFORCE_FILESYSTEM=1
     -sEXPORTED_RUNTIME_METHODS=requestFullscreen
     --shell-file
-    ${SHELL}
+    ${PREF_INDEX_HTML}
     --preload-file
     resources
     -lwebsocket.js
@@ -79,5 +83,5 @@ target_link_options(
 
 add_custom_command(
     OUTPUT ${CMAKE_SOURCE_DIR}/src/client.cpp COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_SOURCE_DIR}/src/client.cpp
-    DEPENDS ${SHELL}.in
+    DEPENDS ${PREF_INDEX_HTML}.in
 )

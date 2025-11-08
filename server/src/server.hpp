@@ -1,10 +1,15 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2025 Oleksandr Kozlov
+
 #pragma once
 
 #include "common/common.hpp"
 #include "common/logger.hpp"
 #include "proto/pref.pb.h"
+#include "transport.hpp"
 
 #include <boost/asio.hpp>
+#include <boost/asio/experimental/channel.hpp>
 #include <boost/beast.hpp>
 #ifdef PREF_SSL
 #include <boost/asio/ssl.hpp>
@@ -25,34 +30,9 @@
 #include <string_view>
 #include <vector>
 
-namespace net = boost::asio;
-namespace beast = boost::beast;
-namespace web = beast::websocket;
-namespace sys = boost::system;
-
-namespace boost::system {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunneeded-internal-declaration"
-// NOLINTNEXTLINE(readability-identifier-naming, misc-use-anonymous-namespace)
-[[maybe_unused]] inline auto format_as(const error_code& error) -> std::string
-{
-    return error.message();
-}
-#pragma GCC diagnostic pop
-} // namespace boost::system
-
 namespace pref {
 
-using SteadyTimer = net::steady_timer;
-#ifdef PREF_SSL
-using Stream = web::stream<net::ssl::stream<beast::tcp_stream>>;
-#else // PREF_SSL
-using Stream = web::stream<beast::tcp_stream>;
-#endif // PREF_SSL
 using Hand = std::set<CardName>;
-
-template<typename T = void>
-using Awaitable = net::awaitable<T>;
 
 struct PlayerSession {
     using Id = std::uint64_t;
@@ -70,13 +50,12 @@ struct Player {
     using NameView = PlayerNameView;
 
     Player() = default;
-    Player(Id aId, Name aName, PlayerSession::Id aSessionId, const std::shared_ptr<Stream>& aWs);
+    Player(Id aId, Name aName, PlayerSession::Id aSessionId, const ChannelPtr& ch);
 
     Id id;
     Name name;
     PlayerSession::Id sessionId{};
-    std::shared_ptr<Stream> ws;
-    std::optional<SteadyTimer> reconnectTimer;
+    Connection conn;
     Hand hand;
     std::vector<CardName> playedCards;
     std::string bid;
@@ -146,6 +125,17 @@ struct Talon {
     }
 };
 
+struct PassGame {
+    bool now{};
+    std::optional<ContractLevel> level;
+
+    auto clear() -> void
+    {
+        now = false;
+        if (level == ContractLevel::Eight) { level.reset(); }
+    }
+};
+
 struct Context {
     using Players = std::map<Player::Id, Player>;
 
@@ -165,9 +155,14 @@ struct Context {
         talon.clear();
         trick.clear();
         trump.clear();
-        isPassGame = false;
+        passGame.clear();
         isDeclarerFirstMiserTurn = false;
         for (auto&& [_, p] : players) { p.clear(); }
+    }
+
+    auto shutdown() -> void
+    {
+        players.clear();
     }
 
     mutable Players players;
@@ -175,7 +170,7 @@ struct Context {
     Talon talon;
     std::vector<PlayedCard> trick;
     std::string trump;
-    bool isPassGame{};
+    PassGame passGame;
     Player::Id forehandId;
     ScoreSheet scoreSheet;
     fs::path gameDataPath;
@@ -220,7 +215,7 @@ struct Beat {
 
 [[nodiscard]] auto beats(Beat beat) -> bool;
 
-[[nodiscard]] auto finishTrick(const std::vector<PlayedCard>& trick, std::string_view trump) -> Player::Id;
+[[nodiscard]] auto decideTrickWinner(const std::vector<PlayedCard>& trick, std::string_view trump) -> Player::Id;
 [[nodiscard]] auto calculateDealScore(const Declarer& declarer, const std::vector<Whister>& whisters) -> DealScore;
 
 auto acceptConnectionAndLaunchSession(

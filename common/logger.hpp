@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2025 Oleksandr Kozlov
+
 #pragma once
 
 #include <fmt/format.h>
@@ -57,6 +60,7 @@ inline constexpr std::array<char, 0> FormatString<0>;
 // clang-format off
 #define PREF_V(var) fmt::format("{}: {}", #var, var) // PREF VAR
 #define PREF_M(value) (not std::empty(value) ? fmt::format(", {}", PREF_V(value)) : "") // PREF (VAR) MAYBE
+#define PREF_B(value) (value ? fmt::format(", {}", PREF_V(value)) : "") // PREF (VAR) BOOL
 #define PREF_APPLY_0
 #define PREF_APPLY_1(arg) PREF_V(arg)
 #define PREF_APPLY_2(arg, ...) PREF_V(arg), PREF_APPLY_1(__VA_ARGS__)

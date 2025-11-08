@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2025 Oleksandr Kozlov
+
 syntax = "proto3";
 
 package pref;
@@ -13,9 +16,9 @@ message LoginRequest {
 }
 
 message LoginResponse {
-   string error = 1;
-   string player_id = 2;
-   string auth_token = 3;
+   optional string error = 1;
+   optional string player_id = 2;
+   optional string auth_token = 3;
    repeated PPlayer players = 4;
 }
 
@@ -25,8 +28,8 @@ message AuthRequest {
 }
 
 message AuthResponse {
-  string error = 1;
-  string player_name = 2;
+  optional string error = 1;
+  optional string player_name = 2;
   repeated PPlayer players = 3;
 }
 
@@ -66,17 +69,14 @@ enum GameStage {
 message PlayerTurn {
   string player_id = 1;
   GameStage stage = 2;
-  bool can_half_whist = 3 ; // only for the Whisting stage
+  optional bool can_half_whist = 3 ; // only for the Whisting stage
   repeated string talon = 4; // queen_of_hearts, etc.
+  optional string min_bid = 5; // only when stage == BIDDING
 }
 
 message Bidding {
     string player_id = 1;
     string bid = 2; // e.g., "8♠", "PASS", "MISER", etc.
-}
-
-message OpenTalon {
-    string card = 1;
 }
 
 message DiscardTalon {
@@ -95,9 +95,18 @@ message OpenWhistPlay {
   string passive_whister_id = 2;
 }
 
+message OpenTalon {
+    string card = 1;
+}
+
 message HowToPlay {
     string player_id = 1;
     string choice = 3; // "", "Openly", or "Closed"
+}
+
+message MiserCards {
+  repeated string remaining_cards = 1;
+  repeated string played_cards = 2;
 }
 
 message Tricks {
@@ -135,11 +144,6 @@ message SpeechBubble {
 
 message PingPong {
   int32 id = 1;
-}
-
-message MiserCards {
-  repeated string remaining_cards = 1;
-  repeated string played_cards = 2;
 }
 
 enum GameType {

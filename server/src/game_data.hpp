@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2025 Oleksandr Kozlov
+
 #pragma once
 
 #include "auth.hpp"
@@ -139,16 +142,14 @@ inline auto revokeAuthToken(GameData& data, const PlayerIdView playerId, const s
     });
 }
 
-[[nodiscard]] inline auto makeUserGames(const GameData& data, const PlayerId& playerId) -> UserGames
-{
-    return userByPlayerId(data, playerId)
-        .transform([&](const User& user) {
-            auto result = UserGames{};
-            for (const auto& game : user.games()) { *result.add_games() = game; }
-            return result;
-        })
-        .value_or(UserGames{});
-}
+[[nodiscard]] inline auto makeUserGames(const GameData& data, const PlayerId& playerId) -> std::string
+{ // clang-format off
+    return makeMessage(userByPlayerId(data, playerId).transform([&](const User& user) {
+        auto result = UserGames{};
+        for (const auto& game : user.games()) { *result.add_games() = game; }
+        return result;
+    }).value_or(UserGames{})).SerializeAsString();
+} // clang-format on
 
 [[nodiscard]] inline auto makeUserGame(
     const std::int32_t gameId,
@@ -193,6 +194,7 @@ inline auto storeGameData(const fs::path& path, const GameData& gameData) -> voi
 
 [[nodiscard]] inline auto loadGameData(const fs::path& path) -> GameData
 {
+    PREF_DI(path);
     auto in = std::ifstream{path, std::ios::binary};
     if (not in) {
         PREF_W("error: {}, {}", std::strerror(errno), PREF_V(path));

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (c) 2025 Oleksandr Kozlov
+
 from pathlib import Path
 from websockets import connect
 import asyncio
@@ -45,10 +48,10 @@ def wait_for_port(host, port, timeout=5.0):
 
 
 async def send_join(websocket, name):
-    jr = pref_pb2.JoinRequest()
+    jr = pref_pb2.LoginRequest()
     jr.player_name = name
     msg = pref_pb2.Message()
-    msg.method = 'JoinRequest'
+    msg.method = 'LoginRequest'
     msg.payload = jr.SerializeToString()
     await websocket.send(msg.SerializeToString())
 
