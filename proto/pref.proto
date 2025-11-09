@@ -47,6 +47,10 @@ message PlayerLeft {
   string player_id = 1;
 }
 
+message Forehand {
+  string player_id = 1;
+}
+
 message DealCards {
   string player_id = 1;
   repeated string cards = 2;
@@ -61,17 +65,19 @@ enum GameStage {
   UNKNOWN = 0;
   BIDDING = 1;
   TALON_PICKING = 2;
-  WHISTING = 3;
-  HOW_TO_PLAY = 4;
-  PLAYING = 5;
+  WITHOUT_TALON = 3;
+  WHISTING = 4;
+  HOW_TO_PLAY = 5;
+  PLAYING = 6;
 }
 
 message PlayerTurn {
   string player_id = 1;
   GameStage stage = 2;
-  optional bool can_half_whist = 3 ; // only for the Whisting stage
-  repeated string talon = 4; // queen_of_hearts, etc.
-  optional string min_bid = 5; // only when stage == BIDDING
+  string min_bid = 3;
+  optional bool can_half_whist = 4 ; // only for the Whisting stage
+  repeated string talon = 5; // queen_of_hearts, etc.
+  optional int32 pass_round = 6; // equals to 0 unless PassGame
 }
 
 message Bidding {

@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
+#
 # Copyright (c) 2025 Oleksandr Kozlov
 
 cmake_minimum_required(VERSION 3.16.3)
@@ -33,12 +34,25 @@ protobuf_generate_python(PREF_PROTO_PY_FILES ${PREF_PROTO_FILES} PROTOC_OUT_DIR 
 add_custom_target(pref_proto_py_files DEPENDS ${PREF_PROTO_PY_FILES})
 
 if(CMAKE_BUILD_TYPE STREQUAL Debug)
-    include(cmake-format)
-    include(clang-format)
     include(ccache)
+    include(clang-format)
+    include(clang-tidy)
+    include(cmake-format)
+    include(iwyu)
 endif()
 
-add_library(serverlib STATIC src/server.cpp ${PREF_PROTO_CPP_SOURCES})
+add_library(
+    serverlib STATIC
+    src/auth.cpp
+    src/game_data.cpp
+    src/main.cpp
+    src/pref_cli.cpp
+    src/senders.cpp
+    src/serialization.cpp
+    src/server.cpp
+    src/transport.cpp
+    ${PREF_PROTO_CPP_SOURCES}
+)
 add_dependencies(serverlib pref_proto_py_files)
 target_link_libraries(
     serverlib

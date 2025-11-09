@@ -3,6 +3,7 @@
 
 #include "auth.hpp"
 #include "common/common.hpp"
+#include "common/logger.hpp"
 #include "common/time.hpp"
 #include "game_data.hpp"
 #include "proto/pref.pb.h"
@@ -10,15 +11,19 @@
 #include <docopt/docopt.h>
 #include <range/v3/all.hpp>
 
+#include <filesystem>
+#include <functional>
+#include <iterator>
 #include <optional>
 #include <print>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace pref {
 namespace {
 
-constexpr std::string_view usage = R"(
+constexpr std::string_view Usage = R"(
 Preferans CLI
 
 Usage:
@@ -33,8 +38,8 @@ Usage:
   pref-cli (-h | --help)
 )";
 
-constexpr auto logOnNone
-    = [](const PlayerIdView playerId) { return onNone([playerId] { PREF_W("{} not found", PREF_V(playerId)); }); };
+constexpr auto LogOnNone
+    = [](const PlayerIdView playerId) { return OnNone([playerId] { PREF_W("{} not found", PREF_V(playerId)); }); };
 
 auto listUsers(const GameData& data) -> void
 {
@@ -44,7 +49,7 @@ auto listUsers(const GameData& data) -> void
 
 auto showUser(const GameData& data, const PlayerIdView playerId) -> void
 {
-    userByPlayerId(data, playerId) | logOnNone(playerId) | onValue([](const User& user) {
+    userByPlayerId(data, playerId) | LogOnNone(playerId) | OnValue([](const User& user) {
         std::println("Name:     {}", user.player_name());
         std::println("ID:       {}", user.player_id());
         std::println("Password: {}", user.password());
@@ -55,14 +60,14 @@ auto showUser(const GameData& data, const PlayerIdView playerId) -> void
 
 auto showTokens(const GameData& data, const PlayerIdView playerId) -> void
 {
-    userByPlayerId(data, playerId) | logOnNone(playerId) | onValue([playerId](const User& user) {
-        rng::for_each(user.auth_tokens(), [playerId](const std::string_view token) { std::println("{}", token); });
+    userByPlayerId(data, playerId) | LogOnNone(playerId) | OnValue([](const User& user) {
+        rng::for_each(user.auth_tokens(), [](const std::string_view token) { std::println("{}", token); });
     });
 }
 
 auto showGames(const GameData& data, const PlayerIdView playerId) -> void
 {
-    userByPlayerId(data, playerId) | logOnNone(playerId) | onValue([](const User& user) {
+    userByPlayerId(data, playerId) | LogOnNone(playerId) | OnValue([](const User& user) {
         rng::for_each(user.games(), [](const UserGame& game) {
             std::println(
                 "| #{:<2} | {} {} | {} | {} | {:>+4} | {}/{}/{}",
@@ -81,11 +86,11 @@ auto showGames(const GameData& data, const PlayerIdView playerId) -> void
 
 auto removeTokens(GameData& data, const PlayerIdView playerId, const std::optional<std::string>& authToken) -> void
 {
-    userByPlayerId(data, playerId) | logOnNone(playerId) | onValue([&authToken, playerId](User& user) {
-        authToken | onNone([&user, playerId] {
+    userByPlayerId(data, playerId) | LogOnNone(playerId) | OnValue([&authToken, playerId](User& user) {
+        authToken | OnNone([&user, playerId] {
             user.clear_auth_tokens();
             PREF_I("Removed all tokens for {}", PREF_V(playerId));
-        }) | onValue([&user, playerId](const std::string& token) {
+        }) | OnValue([&user, playerId](const std::string& token) {
             auto& tokens = *user.mutable_auth_tokens();
             const auto it = rng::remove(tokens, token);
             if (it == rng::end(tokens)) {
@@ -122,7 +127,7 @@ auto removeUser(GameData& data, const PlayerNameView playerId) -> void
 
 auto removeGames(GameData& data, const PlayerNameView playerId) -> void
 {
-    userByPlayerId(data, playerId) | logOnNone(playerId) | onValue([](User& user) {
+    userByPlayerId(data, playerId) | LogOnNone(playerId) | OnValue([](User& user) {
         PREF_I("Removed {} games", user.games_size());
         user.clear_games();
     });
@@ -131,36 +136,41 @@ auto removeGames(GameData& data, const PlayerNameView playerId) -> void
 } // namespace
 } // namespace pref
 
-int main(int argc, char** argv)
+auto main(int argc, char** argv) -> int
 {
-    const auto args = docopt::docopt(std::string{pref::usage}, {std::next(argv), std::next(argv, argc)});
-    const auto path = args.at("<path>").asString();
-    auto data = pref::loadGameData(path);
-    if (args.at("show").asBool()) {
-        if (args.at("--users").asBool()) {
-            pref::listUsers(data);
-        } else if (args.at("--user").asBool()) {
-            pref::showUser(data, args.at("<id>").asString());
-        } else if (args.at("--tokens").asBool()) {
-            pref::showTokens(data, args.at("<id>").asString());
-        } else if (args.at("--games").asBool()) {
-            pref::showGames(data, args.at("<id>").asString());
+    try {
+        const auto args = docopt::docopt(std::string{pref::Usage}, {std::next(argv), std::next(argv, argc)});
+        const auto path = args.at("<path>").asString();
+        auto data = pref::loadGameData(path);
+        if (args.at("show").asBool()) {
+            if (args.at("--users").asBool()) {
+                pref::listUsers(data);
+            } else if (args.at("--user").asBool()) {
+                pref::showUser(data, args.at("<id>").asString());
+            } else if (args.at("--tokens").asBool()) {
+                pref::showTokens(data, args.at("<id>").asString());
+            } else if (args.at("--games").asBool()) {
+                pref::showGames(data, args.at("<id>").asString());
+            }
+        } else if (args.at("remove").asBool()) {
+            if (args.at("--tokens").asBool()) {
+                const auto tokenOpt
+                    = args.at("--token").isString() ? std::optional{args.at("--token").asString()} : std::nullopt;
+                pref::removeTokens(data, args.at("<id>").asString(), tokenOpt);
+            } else if (args.at("--user").asBool()) {
+                pref::removeUser(data, args.at("<id>").asString());
+            } else if (args.at("--games").asBool()) {
+                pref::removeGames(data, args.at("<id>").asString());
+            }
+            pref::storeGameData(path, data);
+        } else if (args.at("add").asBool()) {
+            if (args.at("--user").asBool()) {
+                pref::addUser(data, args.at("<name>").asString(), args.at("<password>").asString());
+            }
+            pref::storeGameData(path, data);
         }
-    } else if (args.at("remove").asBool()) {
-        if (args.at("--tokens").asBool()) {
-            const auto tokenOpt
-                = args.at("--token").isString() ? std::optional{args.at("--token").asString()} : std::nullopt;
-            pref::removeTokens(data, args.at("<id>").asString(), tokenOpt);
-        } else if (args.at("--user").asBool()) {
-            pref::removeUser(data, args.at("<id>").asString());
-        } else if (args.at("--games").asBool()) {
-            pref::removeGames(data, args.at("<id>").asString());
-        }
-        pref::storeGameData(path, data);
-    } else if (args.at("add").asBool()) {
-        if (args.at("--user").asBool()) {
-            pref::addUser(data, args.at("<name>").asString(), args.at("<password>").asString());
-        }
-        pref::storeGameData(path, data);
+        return 1;
+    } catch (...) {
+        return 0;
     }
 }

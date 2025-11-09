@@ -9,21 +9,14 @@
 #include "transport.hpp"
 
 #include <boost/asio.hpp>
-#include <boost/asio/experimental/channel.hpp>
-#include <boost/beast.hpp>
-#ifdef PREF_SSL
-#include <boost/asio/ssl.hpp>
-#include <boost/asio/ssl/context.hpp>
-#include <boost/beast/websocket/ssl.hpp>
-#endif // PREF_SSL
-#include <fmt/core.h>
-#include <fmt/format.h>
-#include <fmt/std.h>
+#include <boost/system.hpp>
+#include <range/v3/all.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <map>
-#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -79,7 +72,6 @@ struct PlayedCard {
     CardName name;
 };
 
-// NOLINTBEGIN(performance-enum-size)
 enum class WhistingChoice {
     Pass,
     Whist,
@@ -102,7 +94,6 @@ enum class ContractLevel {
     Ten,
     Miser,
 };
-// NOLINTEND(performance-enum-size)
 
 struct Declarer {
     Player::Id id;
@@ -125,14 +116,45 @@ struct Talon {
     }
 };
 
+[[nodiscard]] constexpr auto pickMinBid(int round, std::span<const std::string_view> values) noexcept
+    -> std::string_view
+{
+    assert(not std::empty(values));
+    return values[static_cast<std::size_t>(std::clamp(round, 0, static_cast<int>(std::size(values) - 1)))];
+}
+
 struct PassGame {
+    static constexpr auto s_rounds = 3; // 1, 2, 3
+    static constexpr auto s_progression = ProgressionArgs{.prog = Progression::Arithmetic, .first = 1, .step = 1};
+    static constexpr auto s_minBids = std::array<std::string_view, 2>{PREF_SIX, PREF_SEVEN};
+    int round{};
     bool now{};
-    std::optional<ContractLevel> level;
+
+    [[nodiscard]] constexpr auto minBid() const noexcept -> std::string_view
+    {
+        return pickMinBid(round, s_minBids);
+    }
+
+    auto update() -> void
+    {
+        now = true;
+        if (round <= 1) {
+            ++round;
+        } else {
+            round = s_rounds;
+        }
+    }
+
+    auto resetRound() -> void
+    {
+        assert(round != 0);
+        round = 0;
+    }
 
     auto clear() -> void
     {
         now = false;
-        if (level == ContractLevel::Eight) { level.reset(); }
+        // `round` is not reset between deals
     }
 };
 
@@ -191,7 +213,7 @@ struct Context {
 inline constexpr auto ToPlayerId = &Context::Players::value_type::first;
 inline constexpr auto ToPlayer = &Context::Players::value_type::second;
 
-constexpr auto Detached = [](const std::string_view func) { // NOLINT(fuchsia-statically-constructed-objects)
+inline constexpr auto Detached = [](const std::string_view func) {
     return [func](const std::exception_ptr& eptr) {
         if (not eptr) { return; }
         try {
@@ -223,18 +245,5 @@ auto acceptConnectionAndLaunchSession(
     net::ssl::context ssl,
 #endif // PREF_SSL
     net::ip::tcp::endpoint endpoint) -> Awaitable<>;
-
-// NOLINTNEXTLINE
-[[maybe_unused]] auto inline format_as(const DealScoreEntry& entry) -> std::string
-{
-    return fmt::format("dump: {}, pool: {}, whist: {}", entry.dump, entry.pool, entry.whist);
-}
-
-// NOLINTNEXTLINE
-[[maybe_unused]] auto inline format_as(const DealScore& entry) -> std::string
-{ // clang-format off
-    return fmt::format("{}", fmt::join(entry
-        | rv::transform(unpair([](const auto& k, const auto& v) { return fmt::format("{}: {}", k, v); })), "\n"));
-} // clang-format on
 
 }; // namespace pref

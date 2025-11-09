@@ -9,22 +9,25 @@
 #include "game_data.hpp"
 #include "proto/pref.pb.h"
 #include "senders.hpp"
+#include "serialization.hpp"
 
-#include <fmt/ranges.h>
+#include <boost/beast.hpp>
 #include <range/v3/all.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cassert>
+#include <chrono>
+#include <coroutine>
 #include <functional>
-#include <gsl/gsl>
 #include <iterator>
+#include <memory>
+#include <random>
+#include <tuple>
 #include <utility>
-#include <variant>
 
 namespace pref {
 namespace {
-
-// NOLINTBEGIN(performance-unnecessary-value-param, cppcoreguidelines-avoid-reference-coroutine-parameters)
 
 using net::ip::tcp;
 
@@ -50,9 +53,10 @@ auto advanceWhoseTurn() -> void
     assert((std::size(ctx().players) == NumberOfPlayers) and "all players joined");
     if (const auto nextTurnIt = std::next(ctx().whoseTurnIt); nextTurnIt != std::cend(ctx().players)) {
         setWhoseTurn(nextTurnIt);
-        return;
+    } else {
+        resetWhoseTurn();
     }
-    resetWhoseTurn();
+    PREF_I("playerId: {}", ctx().whoseTurnId());
 }
 
 auto forehandsTurn() -> void
@@ -64,8 +68,10 @@ auto forehandsTurn() -> void
 
 auto advanceWhoseTurn(const GameStage stage) -> void
 {
+    using enum GameStage;
+    PREF_I("stage: {}", GameStage_Name(stage));
     advanceWhoseTurn();
-    if (not rng::contains(std::array{GameStage::BIDDING, GameStage::TALON_PICKING}, stage)) { return; }
+    if (not rng::contains(std::array{BIDDING, TALON_PICKING, WITHOUT_TALON}, stage)) { return; }
     while (ctx().player(ctx().whoseTurnId()).bid == PREF_PASS) { advanceWhoseTurn(); }
 }
 
@@ -95,14 +101,13 @@ auto setNextDealTurn() -> void
     if (contract.starts_with(PREF_SEVEN)) { return Seven; }
     if (contract.starts_with(PREF_EIGHT)) { return Eight; }
     if (contract.starts_with(PREF_NINE)) { return Nine; }
-    // TODO: Make Ten Game only "check-able"
     if (contract.starts_with(PREF_TEN)) { return Ten; }
     if (contract.starts_with(PREF_MIS)) { return Miser; }
     std::unreachable();
 }
 
 [[nodiscard]] constexpr auto contractPrice(const ContractLevel level) noexcept -> int
-{ // NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers, readability-magic-numbers)
+{
     using enum ContractLevel;
     switch (level) {
     case Six: return 2;
@@ -127,7 +132,7 @@ auto setNextDealTurn() -> void
     case Miser: return 0;
     };
     std::unreachable();
-} // NOLINTEND(cppcoreguidelines-avoid-magic-numbers, readability-magic-numbers)
+}
 
 [[nodiscard]] constexpr auto twoWhistersReqTricks(const ContractLevel level) noexcept -> int
 {
@@ -230,21 +235,15 @@ auto addCardToHand(const Player::Id& playerId, const std::string& card) -> void
 
 [[nodiscard]] auto decidePlayerTurn(const GameStage stage) -> PlayerTurnData
 {
+    using enum GameStage;
     auto playerId = ctx().whoseTurnId();
     auto canHalfWhist = false; // default;
-    const auto minBid = std::invoke([&] {
-        if (stage != GameStage::BIDDING) { return ""; };
-        if (ctx().passGame.level == ContractLevel::Six) { return PREF_SIX; }
-        if (ctx().passGame.level == ContractLevel::Seven) { return PREF_SEVEN; }
-        if (ctx().passGame.level == ContractLevel::Eight) { return PREF_EIGHT; }
-        return "";
-    });
     auto talon = CardsNames{};
-    if (stage == GameStage::TALON_PICKING) {
+    if (stage == TALON_PICKING) {
         assert((std::size(ctx().talon.cards) == 2) and "talon is two cards");
         talon = ctx().talon.cards;
         for (const auto& card : talon) { addCardToHand(playerId, card); }
-    } else if (stage == GameStage::WHISTING) {
+    } else if (stage == WHISTING) {
         if (const auto contractLevel = makeContractLevel(getDeclarer(ctx().players).bid);
             contractLevel == ContractLevel::Six or contractLevel == ContractLevel::Seven) {
             const auto checkHalfWhist = [&](const Player& self, const Player& other) {
@@ -255,7 +254,7 @@ auto addCardToHand(const Player::Id& playerId, const std::string& card) -> void
             }
         }
     }
-    return {playerId, stage, canHalfWhist, minBid, talon};
+    return {playerId, stage, std::string{ctx().passGame.minBid()}, canHalfWhist, ctx().passGame.round, talon};
 }
 
 auto removeCardFromHand(const Player::Id& playerId, const std::string& card) -> void
@@ -283,7 +282,7 @@ auto dealCards() -> Awaitable<>
     ctx().talon.cards = chunks | rv::drop(NumberOfPlayers) | rv::join | rng::to_vector;
     assert((std::size(ctx().talon.cards) == 2) and "talon is two cards");
     assert((std::size(ctx().players) == NumberOfPlayers) and (std::size(hands) == NumberOfPlayers));
-    for (const auto& [playerId, hand] : rv::zip(ctx().players | rv::keys, hands)) {
+    for (auto&& [playerId, hand] : rv::zip(ctx().players | rv::keys, hands)) {
         ctx().player(playerId).hand = hand | rng::to<Hand>;
     }
     PREF_I("talon: {}", ctx().talon.cards);
@@ -292,13 +291,13 @@ auto dealCards() -> Awaitable<>
         | rv::transform([](const Player& player) { return std::pair{player.conn.ch, player.id}; })
         | rng::to_vector;
     assert((std::size(channels) == NumberOfPlayers) and (std::size(hands) == NumberOfPlayers));
-    for (const auto& [ch_id, hand] : rv::zip(channels, hands)) {
+    for (auto&& [ch_id, hand] : rv::zip(channels, hands)) {
         const auto& [ch, id] = ch_id;
         co_await sendDealCardsFor(ch, id, hand | rng::to<Hand>);
     }
 }
 
-auto removePlayer(const Player::Id playerId) -> Awaitable<>
+auto removePlayer(const Player::Id& playerId) -> Awaitable<>
 {
     assert(ctx().players.contains(playerId) and "player exists");
     PREF_DI(playerId);
@@ -316,7 +315,7 @@ auto disconnected(Player::Id playerId) -> Awaitable<>
         if (error != net::error::operation_aborted) { PREF_DW(error); }
         co_return;
     }
-    co_await removePlayer(std::move(playerId));
+    co_await removePlayer(playerId);
 }
 
 using TrickComparator = std::function<bool(int, int)>;
@@ -338,7 +337,7 @@ using TrickComparator = std::function<bool(int, int)>;
 
 auto updateScoreSheetForDeal() -> void
 {
-    findDeclarerId(ctx().players) | onValue([&](const Player::Id& declarerId) {
+    findDeclarerId(ctx().players) | OnValue([&](const Player::Id& declarerId) {
         const auto& declarerPlayer = ctx().players.at(declarerId);
         const auto declarer = Declarer{
             .id = declarerId,
@@ -356,13 +355,14 @@ auto updateScoreSheetForDeal() -> void
             ctx().scoreSheet[id].pool.push_back(entry.pool);
             if (id != declarerId) { ctx().scoreSheet[id].whists[declarerId].push_back(entry.whist); }
         }
-    }) | onNone([] {
+    }) | OnNone([] { // PassGame
         const auto players = ctx().players | rv::values;
         const auto minTricksTaken = rng::min(players | rv::transform(&Player::tricksTaken));
         for (const auto& player : players) {
             assert(ctx().passGame.now);
-            assert(ctx().passGame.level);
-            if (const auto price = contractPrice(*ctx().passGame.level); player.tricksTaken == 0) {
+            assert(ctx().passGame.round != 0);
+            if (const auto price = progressionTerm(ctx().passGame.round, PassGame::s_progression);
+                player.tricksTaken == 0) {
                 ctx().scoreSheet[player.id].pool.push_back(price);
             } else {
                 ctx().scoreSheet[player.id].dump.push_back((player.tricksTaken - minTricksTaken) * price);
@@ -406,19 +406,12 @@ auto dealFinished() -> Awaitable<>
     const auto bids = ctx().players | rv::values | rv::transform(&Player::bid);
     const auto passCount = rng::count(bids, PREF_PASS);
     const auto activeCount = rng::count_if(bids, [](auto&& bid) { return not std::empty(bid) and bid != PREF_PASS; });
-    if (passCount == WhistersCount and activeCount == DeclarerCount) {
+    if (std::cmp_equal(passCount, WhistersCount) and std::cmp_equal(activeCount, DeclarerCount)) {
         const auto& contract = *rng::find_if(bids, notEqualTo(PREF_PASS));
-        return contract.contains(PREF_WT) ? GameStage::WHISTING : GameStage::TALON_PICKING;
+        return contract.contains(PREF_WT) ? GameStage::WITHOUT_TALON : GameStage::TALON_PICKING;
     }
-    if (passCount == NumberOfPlayers) {
-        ctx().passGame.now = true;
-        if (ctx().passGame.level == ContractLevel::Six) {
-            ctx().passGame.level.emplace(ContractLevel::Seven);
-        } else if (ctx().passGame.level == ContractLevel::Seven) {
-            ctx().passGame.level.emplace(ContractLevel::Eight);
-        } else {
-            ctx().passGame.level.emplace(ContractLevel::Six);
-        }
+    if (std::cmp_equal(passCount, NumberOfPlayers)) {
+        ctx().passGame.update();
         return GameStage::PLAYING;
     }
     return GameStage::BIDDING;
@@ -439,6 +432,7 @@ auto maybeStartGame() -> Awaitable<>
     co_await dealCards();
     resetWhoseTurn();
     setForehandId();
+    co_await sendForehand();
     co_await sendPlayerTurn(decidePlayerTurn(GameStage::BIDDING));
 }
 
@@ -466,6 +460,7 @@ auto handleLoginRequest(const Message& msg, const ChannelPtr& ch) -> Awaitable<P
         co_return session;
     }
     assert(userPlayerId(ctx().gameData, playerName));
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     const auto& playerId = userPlayerId(ctx().gameData, playerName)->get();
     const auto authToken = generateClientAuthToken();
     addAuthToken(ctx().gameData, playerId, toServerAuthToken(authToken));
@@ -474,7 +469,7 @@ auto handleLoginRequest(const Message& msg, const ChannelPtr& ch) -> Awaitable<P
     session.playerName = playerName;
     if (isNewPlayer(playerId)) {
         joinPlayer(ch, playerId, session);
-        co_await sendLoginResponse(ch, playerId, authToken);
+        co_await sendLoginResponse(ch, {}, playerId, authToken);
     } else {
         co_await reconnectPlayer(ch, playerId, session);
         co_await sendLoginResponse(ch, {}, playerId, authToken);
@@ -485,7 +480,7 @@ auto handleLoginRequest(const Message& msg, const ChannelPtr& ch) -> Awaitable<P
     co_return session;
 }
 
-auto handleAuthRequest(const Message msg, const ChannelPtr& ch) -> Awaitable<PlayerSession>
+auto handleAuthRequest(const Message& msg, const ChannelPtr& ch) -> Awaitable<PlayerSession>
 {
     auto authRequest = makeMethod<AuthRequest>(msg);
     if (not authRequest) { co_return PlayerSession{}; }
@@ -498,6 +493,7 @@ auto handleAuthRequest(const Message msg, const ChannelPtr& ch) -> Awaitable<Pla
         co_return session;
     }
     assert(userByPlayerId(ctx().gameData, playerId).has_value());
+    // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
     const auto& playerName = userByPlayerId(ctx().gameData, playerId)->get().player_name();
     PREF_DI(playerName, playerId);
     session.playerName = playerName;
@@ -518,9 +514,11 @@ auto handleLogout(const Message& msg) -> Awaitable<>
 {
     auto logout = makeMethod<Logout>(msg);
     if (not logout) { co_return; }
-    revokeAuthToken(ctx().gameData, logout->player_id(), toServerAuthToken(logout->auth_token()));
+    const auto& playerId = logout->player_id();
+    PREF_DI(playerId);
+    revokeAuthToken(ctx().gameData, playerId, toServerAuthToken(logout->auth_token()));
     storeGameData(ctx().gameDataPath, ctx().gameData);
-    co_await removePlayer(std::move(*logout->mutable_player_id()));
+    co_await removePlayer(playerId);
 }
 
 auto handleBidding(const Message& msg) -> Awaitable<>
@@ -577,6 +575,7 @@ auto finishDeal() -> Awaitable<>
     co_await sleepFor(3s);
     co_await dealCards();
     setNextDealTurn();
+    co_await sendForehand();
     co_await sendPlayerTurn(decidePlayerTurn(GameStage::BIDDING));
 }
 
@@ -591,10 +590,10 @@ auto updateDeclarerTakenTricks() -> void
 { // clang-format off
     auto it = rng::find_if(players, [&](const Player& player) {
         return not std::empty(player.whistingChoice) and makeWhistingChoice(player.whistingChoice) == choice;
-    }, ToPlayer); // clang-format on
+    }, ToPlayer);
     assert(it != rng::end(players) and "player with the given choice exists");
     return it;
-}
+} // clang-format on
 
 [[nodiscard]] auto playerByWhistingChoice(Context::Players& players, const WhistingChoice choice) -> Player&
 {
@@ -667,7 +666,7 @@ auto handleWhisting(const Message& msg) -> Awaitable<>
     const auto oneWhist = ctx().areWhistersPassAndWhist();
     const auto bothWhist = ctx().areWhistersWhist();
     const auto whist = oneWhist or bothWhist;
-    if (isMiser and whist) {
+    if (isMiser and whist) [[unlikely]] {
         if (ctx().forehandId == declarer.id) {
             ctx().isDeclarerFirstMiserTurn = true;
         } else if (ctx().areWhistersWhist()) {
@@ -699,11 +698,11 @@ auto handleHowToPlay(const Message& msg) -> Awaitable<>
     auto& player = ctx().player(playerId);
     player.howToPlayChoice = choice;
     co_await forwardToAllExcept(msg, playerId);
-    // TODO: Always open cards when Miser or 10 is played
     if (choice == PREF_OPENLY) { co_await openCardsAndLetAnotherWhisterPlay(); }
     co_await startPlayingFromForehand();
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 auto handlePlayCard(const Message& msg) -> Awaitable<>
 {
     const auto playCard = makeMethod<PlayCard>(msg);
@@ -731,10 +730,7 @@ auto handlePlayCard(const Message& msg) -> Awaitable<>
         co_await sendTrickFinished();
         if (const auto isDealFinished = rng::all_of(ctx().players | rv::values, &Hand::empty, &Player::hand);
             isDealFinished) {
-            if (ctx().passGame.level and hasDeclarerFulfilledContract()) {
-                assert(not ctx().passGame.now);
-                ctx().passGame.level.reset();
-            }
+            if (ctx().passGame.round != 0 and hasDeclarerFulfilledContract()) { ctx().passGame.resetRound(); }
             co_return co_await finishDeal();
         }
         if (not ctx().passGame.now) {
@@ -769,16 +765,18 @@ auto handleSpeechBubble(const Message& msg) -> Awaitable<>
 {
     const auto speechBubble = makeMethod<SpeechBubble>(msg);
     if (not speechBubble) { co_return; }
-    co_await forwardToAllExcept(msg, speechBubble->player_id());
+    const auto& playerId = speechBubble->player_id();
+    PREF_DI(playerId);
+    co_await forwardToAllExcept(msg, playerId);
 }
 
 auto dispatchMessage(const ChannelPtr& ch, PlayerSession& session, std::optional<Message> msg) -> Awaitable<>
 { // clang-format off
     if (not msg) { co_return; }
     const auto& method = msg->method();
-    // TODO: don't dispatch messages if AuthRequest or AuthLogin failed
     if (method == "LoginRequest") { session = co_await handleLoginRequest(*msg, ch); co_return; }
     if (method == "AuthRequest") { session = co_await handleAuthRequest(*msg, ch); co_return; }
+    if (session.id == 0) { co_return; }
     if (method == "Logout") { co_await handleLogout(*msg); co_return; }
     if (method == "Bidding") { co_await handleBidding(*msg); co_return; }
     if (method == "DiscardTalon") { co_await handleDiscardTalon(*msg); co_return; }
@@ -830,13 +828,14 @@ auto launchSession(Stream ws) -> Awaitable<>
             break;
         }
         co_await dispatchMessage(ch, session, makeMessage(buffer.data().data(), buffer.size()));
+        if (session.id == 0) { break; }
     }
-    if (std::empty(session.playerId)) {
-        PREF_W("error: playerId is empty");
+    if (session.id == 0) {
+        PREF_W("error: session ID is empty");
         ch->close();
         co_return;
     }
-    if (not ctx().players.contains(session.playerId)) {
+    if (not std::empty(session.playerId) and not ctx().players.contains(session.playerId)) {
         PREF_W("{} already left", PREF_V(session.playerId));
         ch->close();
         co_return;
@@ -850,7 +849,6 @@ auto launchSession(Stream ws) -> Awaitable<>
     ch->close();
 }
 
-// NOLINTEND(performance-unnecessary-value-param, cppcoreguidelines-avoid-reference-coroutine-parameters)
 } // namespace
 
 Player::Player(Id aId, Name aName, PlayerSession::Id aSessionId, const ChannelPtr& ch)
@@ -932,17 +930,17 @@ auto Context::countWhistingChoice(const WhistingChoice choice) const -> std::ptr
 }
 
 [[nodiscard]] auto decideTrickWinner(const std::vector<PlayedCard>& trick, const std::string_view trump) -> Player::Id
-{
+{ // clang-format off
     assert(std::size(trick) == NumberOfPlayers and "all players played cards");
     const auto& firstCard = trick.front();
     const auto& leadSuit = cardSuit(not std::empty(ctx().talon.current) ? ctx().talon.current : firstCard.name);
-    ctx().talon.current.clear(); // clang-format off
+    ctx().talon.current.clear();
     return rng::accumulate(trick, firstCard, [&](const PlayedCard& best, const PlayedCard& candidate) {
         return beats({candidate.name, best.name, leadSuit, trump}) ? candidate : best; // NOLINT(modernize-use-designated-initializers)
-    }).playerId; // clang-format on
-}
+    }).playerId;
+} // clang-format on
 
-// NOLINTBEGIN(readability-function-cognitive-complexity, hicpp-uppercase-literal-suffix)
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] auto calculateDealScore(const Declarer& declarer, const std::vector<Whister>& whisters) -> DealScore
 {
     assert(std::size(whisters) == 2);
@@ -1004,13 +1002,13 @@ auto Context::countWhistingChoice(const WhistingChoice choice) const -> std::ptr
         {w2.id, makeWhisterScore(w2)},
     };
 }
-// NOLINTEND(readability-function-cognitive-complexity, hicpp-uppercase-literal-suffix)
 
 auto acceptConnectionAndLaunchSession(
 #ifdef PREF_SSL
     net::ssl::context ssl,
 #endif // PREF_SSL
-    const tcp::endpoint endpoint) -> Awaitable<>
+    // NOLINTNEXTLINE(performance-unnecessary-value-param)
+    tcp::endpoint endpoint) -> Awaitable<>
 {
     PREF_I();
     const auto ex = co_await net::this_coro::executor;

@@ -7,9 +7,10 @@
 #include "common/logger.hpp"
 #include "proto/pref.pb.h"
 
-#include <fmt/ranges.h>
-
 #include <concepts>
+#include <cstddef>
+#include <iterator>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -45,7 +46,7 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
     result.set_player_id(playerId);
     result.set_auth_token(authToken);
     for (const auto& [id, name] : players) {
-        auto p = result.add_players();
+        auto* p = result.add_players();
         p->set_player_id(id);
         p->set_player_name(name);
     }
@@ -63,7 +64,7 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
     }
     result.set_player_name(playerName);
     for (const auto& [id, name] : players) {
-        auto p = result.add_players();
+        auto* p = result.add_players();
         p->set_player_id(id);
         p->set_player_name(name);
     }
@@ -87,6 +88,14 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
     return makeMessage(result).SerializeAsString();
 }
 
+[[nodiscard]] inline auto makeForehand(const PlayerId& playerId) -> std::string
+{
+    PREF_DI(playerId);
+    auto result = Forehand{};
+    result.set_player_id(playerId);
+    return makeMessage(result).SerializeAsString();
+}
+
 [[nodiscard]] inline auto makeDealCards(const PlayerId& playerId, const CardsNamesView hand) -> std::string
 {
     PREF_DI(playerId, hand);
@@ -99,17 +108,25 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
 [[nodiscard]] inline auto makePlayerTurn(
     const PlayerId& playerId,
     const GameStage stage,
-    const bool canHalfWhist,
     const std::string& minBid,
+    const bool canHalfWhist,
+    const int passRound,
     const CardsNamesView talon) -> std::string
 {
     PREF_I(
-        "{}, {}{}{}{}", PREF_V(playerId), GameStage_Name(stage), PREF_B(canHalfWhist), PREF_M(minBid), PREF_M(talon));
+        "{}, {}, {}{}{}",
+        PREF_V(playerId),
+        GameStage_Name(stage),
+        PREF_V(minBid),
+        PREF_B(canHalfWhist),
+        PREF_B(passRound),
+        PREF_M(talon));
     auto result = PlayerTurn{};
     result.set_player_id(playerId);
     result.set_stage(stage);
-    result.set_can_half_whist(canHalfWhist);
     result.set_min_bid(minBid);
+    result.set_can_half_whist(canHalfWhist);
+    result.set_pass_round(passRound);
     for (const auto& card : talon) { result.add_talon(card); }
     return makeMessage(result).SerializeAsString();
 }
@@ -165,7 +182,7 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
     PREF_DI(playersTakenTricks);
     auto result = TrickFinished{};
     for (const auto& [playerId, tricksTaken] : playersTakenTricks) {
-        auto tricks = result.add_tricks();
+        auto* tricks = result.add_tricks();
         tricks->set_player_id(playerId);
         tricks->set_taken(tricksTaken);
     }

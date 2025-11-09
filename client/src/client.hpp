@@ -132,30 +132,35 @@ inline constexpr auto PREF_ACE_OF_HEARTS_CARD = 0x1F0B1;
     std::unreachable();
 }
 
-#define PREF_TRICKS_01 "❶"
-#define PREF_TRICKS_02 "❷"
-#define PREF_TRICKS_03 "❸"
-#define PREF_TRICKS_04 "❹"
-#define PREF_TRICKS_05 "❺"
-#define PREF_TRICKS_06 "❻"
-#define PREF_TRICKS_07 "❼"
-#define PREF_TRICKS_08 "❽"
-#define PREF_TRICKS_09 "❾"
-#define PREF_TRICKS_10 "❿"
+#define PREF_NUMBER_01 "❶"
+#define PREF_NUMBER_02 "❷"
+#define PREF_NUMBER_03 "❸"
+#define PREF_NUMBER_04 "❹"
+#define PREF_NUMBER_05 "❺"
+#define PREF_NUMBER_06 "❻"
+#define PREF_NUMBER_07 "❼"
+#define PREF_NUMBER_08 "❽"
+#define PREF_NUMBER_09 "❾"
+#define PREF_NUMBER_10 "❿"
 
-[[nodiscard]] constexpr auto prettifyTricksTaken(const int tricksTaken) noexcept -> std::string_view
+#define PREF_MOUSE_FACE "\xF0\x9F\x90\xAD"
+#define PREF_COW_FACE "\xF0\x9F\x90\xAE"
+#define PREF_CAT_FACE "\xF0\x9F\x90\xB1"
+#define PREF_MONKEY_FACE "\xF0\x9F\x90\xB5"
+
+[[nodiscard]] constexpr auto prettifyNumber(const int tricksTaken) noexcept -> std::string_view
 {
     switch (tricksTaken) {
-    case 1: return PREF_TRICKS_01;
-    case 2: return PREF_TRICKS_02;
-    case 3: return PREF_TRICKS_03;
-    case 4: return PREF_TRICKS_04;
-    case 5: return PREF_TRICKS_05;
-    case 6: return PREF_TRICKS_06;
-    case 7: return PREF_TRICKS_07;
-    case 8: return PREF_TRICKS_08;
-    case 9: return PREF_TRICKS_09;
-    case 10: return PREF_TRICKS_10;
+    case 1: return PREF_NUMBER_01;
+    case 2: return PREF_NUMBER_02;
+    case 3: return PREF_NUMBER_03;
+    case 4: return PREF_NUMBER_04;
+    case 5: return PREF_NUMBER_05;
+    case 6: return PREF_NUMBER_06;
+    case 7: return PREF_NUMBER_07;
+    case 8: return PREF_NUMBER_08;
+    case 9: return PREF_NUMBER_09;
+    case 10: return PREF_NUMBER_10;
     }
     std::unreachable();
 }
@@ -165,19 +170,18 @@ inline constexpr const auto LocalStoragePrefix = "preferans_";
 // ♠ - Spades | ♣ - Clubs | ♦ - Diamonds | ♥ - Hearts
 // clang-format off
 inline constexpr auto BidsRank = std::array{
-     PREF_SIX PREF_SPADE,   PREF_SIX PREF_CLUB,   PREF_SIX PREF_DIAMOND,   PREF_SIX PREF_HEART,    PREF_SIX,
-   PREF_SEVEN PREF_SPADE, PREF_SEVEN PREF_CLUB, PREF_SEVEN PREF_DIAMOND, PREF_SEVEN PREF_HEART,  PREF_SEVEN,
-   PREF_EIGHT PREF_SPADE, PREF_EIGHT PREF_CLUB, PREF_EIGHT PREF_DIAMOND, PREF_EIGHT PREF_HEART,  PREF_EIGHT,    PREF_MISER,
-    PREF_NINE PREF_SPADE,  PREF_NINE PREF_CLUB,  PREF_NINE PREF_DIAMOND,  PREF_NINE PREF_HEART,   PREF_NINE, PREF_MISER_WT, PREF_NINE_WT,
-     PREF_TEN PREF_SPADE,   PREF_TEN PREF_CLUB,   PREF_TEN PREF_DIAMOND,   PREF_TEN PREF_HEART,    PREF_TEN,   PREF_TEN_WT, PREF_PASS};
+     PREF_SIX PREF_SPADE,   PREF_SIX PREF_CLUB,   PREF_SIX PREF_DIAMOND,   PREF_SIX PREF_HEART,            PREF_SIX,
+   PREF_SEVEN PREF_SPADE, PREF_SEVEN PREF_CLUB, PREF_SEVEN PREF_DIAMOND, PREF_SEVEN PREF_HEART,          PREF_SEVEN,
+   PREF_EIGHT PREF_SPADE, PREF_EIGHT PREF_CLUB, PREF_EIGHT PREF_DIAMOND, PREF_EIGHT PREF_HEART,          PREF_EIGHT, PREF_MISER,
+    PREF_NINE PREF_SPADE,  PREF_NINE PREF_CLUB,  PREF_NINE PREF_DIAMOND,  PREF_NINE PREF_HEART,           PREF_NINE, PREF_MISER_WT,
+            PREF_NINE_WT,  PREF_TEN PREF_SPADE,      PREF_TEN PREF_CLUB, PREF_TEN PREF_DIAMOND, PREF_TEN PREF_HEART, PREF_TEN, PREF_PASS};
 
-inline constexpr auto BidTable = std::array<std::array<std::string_view, 6>, 6>{
-{{   PREF_SIX PREF_SPADE,   PREF_SIX PREF_CLUB,   PREF_SIX PREF_DIAMOND,   PREF_SIX PREF_HEART,      PREF_SIX,           "" },
- { PREF_SEVEN PREF_SPADE, PREF_SEVEN PREF_CLUB, PREF_SEVEN PREF_DIAMOND, PREF_SEVEN PREF_HEART,    PREF_SEVEN,           "" },
- { PREF_EIGHT PREF_SPADE, PREF_EIGHT PREF_CLUB, PREF_EIGHT PREF_DIAMOND, PREF_EIGHT PREF_HEART,    PREF_EIGHT,           "" },
- {  PREF_NINE PREF_SPADE,  PREF_NINE PREF_CLUB,  PREF_NINE PREF_DIAMOND,  PREF_NINE PREF_HEART,     PREF_NINE, PREF_NINE_WT },
- {   PREF_TEN PREF_SPADE,   PREF_TEN PREF_CLUB,   PREF_TEN PREF_DIAMOND,   PREF_TEN PREF_HEART,      PREF_TEN, PREF_TEN_WT },
- {                    "",                   "",                      "",            PREF_MISER, PREF_MISER_WT, PREF_PASS }}};
+inline constexpr auto BidTable = std::array<std::array<std::string_view, 7>, 6>{
+{{           "",   PREF_SIX PREF_SPADE,   PREF_SIX PREF_CLUB,   PREF_SIX PREF_DIAMOND,   PREF_SIX PREF_HEART,   PREF_SIX, ""},
+ {           "", PREF_SEVEN PREF_SPADE, PREF_SEVEN PREF_CLUB, PREF_SEVEN PREF_DIAMOND, PREF_SEVEN PREF_HEART, PREF_SEVEN, ""},
+ {           "", PREF_EIGHT PREF_SPADE, PREF_EIGHT PREF_CLUB, PREF_EIGHT PREF_DIAMOND, PREF_EIGHT PREF_HEART, PREF_EIGHT, ""},
+ {   PREF_MISER,  PREF_NINE PREF_SPADE,  PREF_NINE PREF_CLUB,  PREF_NINE PREF_DIAMOND,  PREF_NINE PREF_HEART,  PREF_NINE, PREF_MISER_WT},
+ { PREF_NINE_WT,   PREF_TEN PREF_SPADE,   PREF_TEN PREF_CLUB,   PREF_TEN PREF_DIAMOND,   PREF_TEN PREF_HEART,   PREF_TEN, PREF_PASS}}};
 // clang-format on
 
 inline constexpr auto AllRanks = std::size(BidsRank);
@@ -225,7 +229,7 @@ enum class GameLang : std::size_t {
     PREF_X(Login, "LOG IN", "ЛОГІН", "ЛОГИН")                                                                          \
     PREF_X(Lost, "Lost", "Поразка", "Поражение")                                                                       \
     PREF_X(MMR, "MMR", "РЕЙТИНГ", "РЕЙТИНГ")                                                                           \
-    PREF_X(Miser, PREF_MISER, "Мізер", "Мизер")                                                                        \
+    PREF_X(Miser, PREF_MISER, "Мізéр", "Мизéр")                                                                        \
     PREF_X(No, "No", "Ні", "Нет")                                                                                      \
     PREF_X(Normal, "Normal", "Звичайна", "Обычная")                                                                    \
     PREF_X(Openly, PREF_OPENLY, "У світлу", "В светлую")                                                               \
@@ -233,6 +237,7 @@ enum class GameLang : std::size_t {
     PREF_X(OverallScoreboard, "OVERALL SCOREBOARD", "ЗАГАЛЬНА ТАБЛИЦЯ РЕЗУЛЬТАТІВ", "ОБЩАЯ ТАБЛИЦА РЕЗУЛЬТАТОВ")       \
     PREF_X(PDW, "P/D/W", "П/Г/В", "П/Г/В")                                                                             \
     PREF_X(Pass, PREF_PASS, "Пас", "Пас")                                                                              \
+    PREF_X(Passing, "Passing", "Розпаси", "Распасы")                                                                   \
     PREF_X(Phrases, "PHRASES", "ФРАЗИ", "ФРАЗЫ")                                                                       \
     PREF_X(Preferans, "PREFERANS", "ПРЕФЕРАНС", "ПРЕФЕРАНС")                                                           \
     PREF_X(Ranked, "Ranked", "Рейтингова", "Рейтинговая")                                                              \
@@ -251,11 +256,7 @@ enum class GameLang : std::size_t {
     PREF_X(Yes, "Yes", "Так", "Да")                                                                                    \
     PREF_X(YourTurn, "Your turn", "Ваш хід", "Ваш ход")                                                                \
     PREF_X(YourTurnFor, "Your turn for", "Ваш хід за", "Ваш ход за")                                                   \
-    PREF_X(                                                                                                            \
-        AreYouSureYouWantToLogOut,                                                                                     \
-        "Are you sure you want to log out?",                                                                           \
-        "Ви впевнені, що хочете вийти?",                                                                               \
-        "Вы уверены, что хотите выйти?")
+    PREF_X(LogOutOfTheAccount, "Log out of the account?", "Вийти з облікового запису?", "Выйти из учётной записи?")
 
 enum class GameText : std::size_t {
 #define PREF_X(PREF_TEXT_ID, PREF_LANG_EN, PREF_LANG_UA, PREF_LANG_ALT) PREF_TEXT_ID,

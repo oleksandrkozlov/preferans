@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
+#
 # Copyright (c) 2025 Oleksandr Kozlov
 
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -34,6 +35,7 @@ set(COMPILE_OPTIONS
     -Wsign-conversion
     -Wswitch-enum
     -Wunused
+    -flto
     -fstack-protector-all
 )
 set(GNU_COMPILE_OPTIONS

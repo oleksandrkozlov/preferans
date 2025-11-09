@@ -6,10 +6,15 @@
 #include "server.hpp"
 
 #include <catch2/catch_all.hpp>
-#include <catch2/catch_test_macros.hpp>
 
+#include <cstdint>
+#include <iterator>
+#include <map>
+#include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 template<>
@@ -19,7 +24,6 @@ struct Catch::StringMaker<pref::DealScoreEntry> {
         return fmt::format("{}", entry);
     }
 };
-
 template<>
 struct Catch::StringMaker<std::map<pref::Player::Id, pref::DealScoreEntry>> {
     static auto convert(const std::map<pref::Player::Id, pref::DealScoreEntry>& scoreEntry) -> std::string
@@ -30,11 +34,11 @@ struct Catch::StringMaker<std::map<pref::Player::Id, pref::DealScoreEntry>> {
 
 namespace pref {
 
+// clang-format off
 TEST_CASE("server")
 {
     SECTION("beats")
     {
-        // clang-format off
         REQUIRE_FALSE(beats({.candidate = PREF_SEVEN PREF_OF_ PREF_HEARTS, .best = PREF_EIGHT PREF_OF_ PREF_HEARTS, .leadSuit = PREF_HEARTS, .trump = PREF_SPADES}));
         REQUIRE_FALSE(beats({.candidate = PREF_SEVEN PREF_OF_ PREF_HEARTS, .best = PREF_SEVEN PREF_OF_ PREF_HEARTS, .leadSuit = PREF_HEARTS, .trump = PREF_SPADES}));
         REQUIRE_FALSE(beats({.candidate = PREF_SEVEN PREF_OF_ PREF_HEARTS, .best = PREF_SEVEN PREF_OF_ PREF_SPADES, .leadSuit = PREF_HEARTS, .trump = PREF_SPADES}));
@@ -43,10 +47,8 @@ TEST_CASE("server")
         REQUIRE(beats({.candidate = PREF_SEVEN PREF_OF_ PREF_HEARTS, .best = PREF_SEVEN PREF_OF_ PREF_SPADES, .leadSuit = PREF_HEARTS, .trump = ""}));
         REQUIRE(beats({.candidate = PREF_SEVEN PREF_OF_ PREF_SPADES, .best = PREF_EIGHT PREF_OF_ PREF_HEARTS, .leadSuit = PREF_HEARTS, .trump = PREF_SPADES}));
         REQUIRE(beats({.candidate = PREF_SEVEN PREF_OF_ PREF_SPADES, .best = PREF_SEVEN PREF_OF_ PREF_HEARTS, .leadSuit = PREF_HEARTS, .trump = PREF_SPADES}));
-        // clang-format on
     }
 
-    // clang-format off
     SECTION("decideTrickWinner")
     {
         SECTION("higher rank wins last")
@@ -83,7 +85,6 @@ TEST_CASE("server")
                                        {.playerId = "2", .name = PREF_EIGHT PREF_OF_ PREF_HEARTS},
                                        {.playerId = "3", .name = PREF_EIGHT PREF_OF_ PREF_CLUBS}}, "") == "2");
         }
-        // clang-format on
     }
 }
 
@@ -97,7 +98,7 @@ TEST_CASE("calculateDealScore")
     static constexpr auto w2 = "2-whister ";
 
     SECTION("declarer declares miser")
-    { // clang-format off
+    {
         const auto [tricksDeclarer, tricksW1, dump, pool] = GENERATE(
             table<int, int, int, int>(
                 {{ 0, 10,   0, 10},
@@ -119,12 +120,12 @@ TEST_CASE("calculateDealScore")
             {de, {.dump = dump, .pool = pool, .whist = 0}},
             {w1, {.dump = 0,    .pool = 0,    .whist = 0}},
             {w2, {.dump = 0,    .pool = 0,    .whist = 0}},
-        }; // clang-format on
+        };
         REQUIRE(actual == expected);
     }
 
     SECTION("everyone fulfilled what declared")
-    { // clang-format off
+    {
             const auto [contractLevel, tricksDeclarer, tricksW1, tricksW2, whistW1, whistW2, declarerPool] = GENERATE(
                 table<ContractLevel, int,  int, int, int, int, int>({
                      {  Six, 6, 2, 2, 2 *  2, 2 *  2, 2},
@@ -141,12 +142,12 @@ TEST_CASE("calculateDealScore")
                 {de, {.dump = 0, .pool = declarerPool, .whist = 0}},
                 {w1, {.dump = 0, .pool = 0,            .whist = whistW1}},
                 {w2, {.dump = 0, .pool = 0,            .whist = whistW2}},
-            }; // clang-format on
+            };
         REQUIRE(actual == expected);
     }
 
     SECTION("declarer did not fulfill what declared")
-    { // clang-format off
+    {
             const auto tricksDeclarer = 5;
             const auto tricksW1 = 3;
             const auto tricksW2 = 2;
@@ -167,12 +168,12 @@ TEST_CASE("calculateDealScore")
                 {de, {.dump = dump, .pool = 0, .whist = 0}},
                 {w1, {.dump = 0,    .pool = 0, .whist = whistW1}},
                 {w2, {.dump = 0,    .pool = 0, .whist = whistW2}},
-            }; // clang-format on
+            };
         REQUIRE(actual == expected);
     }
 
     SECTION("one whister did not fulfill what declared")
-    { // clang-format off
+    {
             const auto [contractLevel, declarerPool, dumpW1] = GENERATE(
                 table<ContractLevel, int, int>({
                     {  Six,  2, 4 *  2},
@@ -190,12 +191,12 @@ TEST_CASE("calculateDealScore")
                 {de, {.dump = 0,      .pool = declarerPool, .whist = 0}},
                 {w1, {.dump = dumpW1, .pool = 0,            .whist = 0}},
                 {w2, {.dump = 0,      .pool = 0,            .whist = 0}},
-            }; // clang-format on
+            };
         REQUIRE(actual == expected);
     }
 
     SECTION("both whisters did not fulfill what declared")
-    { // clang-format off
+    {
             const auto [contractLevel, declarerPool, dumpW] = GENERATE(
                 table<ContractLevel, int, int>({
                     {  Six, 2, 2 *  2},
@@ -213,10 +214,11 @@ TEST_CASE("calculateDealScore")
                 {de, {.dump = 0, .pool = declarerPool, .whist = 0}},
                 {w1, {.dump = dumpW, .pool = 0, .whist = 0}},
                 {w2, {.dump = dumpW, .pool = 0, .whist = 0}},
-            }; // clang-format on
+            };
         REQUIRE(actual == expected);
     }
 }
+// clang-format on
 
 TEST_CASE("calculateFinalResult")
 {
@@ -410,6 +412,27 @@ TEST_CASE("auth")
         REQUIRE(str == strFromSpanStr);
         REQUIRE(view == viewFromSpanView);
         REQUIRE(vec == vecFromSpanVec);
+    }
+}
+
+TEST_CASE("progression")
+{
+    SECTION("arithmetic")
+    {
+        STATIC_REQUIRE(progressionTerm(1, {.prog = Progression::Arithmetic, .first = 1, .step = 1}) == 1);
+        STATIC_REQUIRE(progressionTerm(2, {.prog = Progression::Arithmetic, .first = 1, .step = 1}) == 2);
+        STATIC_REQUIRE(progressionTerm(3, {.prog = Progression::Arithmetic, .first = 1, .step = 1}) == 3);
+
+        STATIC_REQUIRE(progressionTerm(1, {.prog = Progression::Arithmetic, .first = 2, .step = 2}) == 2);
+        STATIC_REQUIRE(progressionTerm(2, {.prog = Progression::Arithmetic, .first = 2, .step = 2}) == 4);
+        STATIC_REQUIRE(progressionTerm(3, {.prog = Progression::Arithmetic, .first = 2, .step = 2}) == 6);
+    }
+
+    SECTION("geometric")
+    {
+        STATIC_REQUIRE(progressionTerm(1, {.prog = Progression::Geometric, .first = 2, .step = 2}) == 2);
+        STATIC_REQUIRE(progressionTerm(2, {.prog = Progression::Geometric, .first = 2, .step = 2}) == 4);
+        STATIC_REQUIRE(progressionTerm(3, {.prog = Progression::Geometric, .first = 2, .step = 2}) == 8);
     }
 }
 

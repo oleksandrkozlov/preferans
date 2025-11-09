@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-FileCopyrightText: (c) 2025 Oleksandr Kozlov
 // Copyright (c) 2025 Oleksandr Kozlov
 
 #pragma once
@@ -7,7 +7,9 @@
 #include "common/time.hpp"
 #include "proto/pref.pb.h"
 
+#include <fmt/core.h>
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <fmt/std.h>
 #include <range/v3/all.hpp>
 
@@ -23,8 +25,6 @@
 #include <utility>
 
 namespace pref {
-
-// NOLINTBEGIN(cppcoreguidelines-macro-usage)
 
 #define PREF_SPADES "spades"
 #define PREF_CLUBS "clubs"
@@ -42,6 +42,7 @@ inline constexpr std::string_view HeartSign = PREF_HEART;
 inline constexpr std::string_view DiamondSign = PREF_DIAMOND;
 
 #define PREF_ARROW_RIGHT "▶"
+#define PREF_FOREHAND_SIGN "\xF0\x9F\x83\x8F"
 
 #define PREF_SIX "6"
 #define PREF_SEVEN "7"
@@ -55,7 +56,6 @@ inline constexpr std::string_view DiamondSign = PREF_DIAMOND;
 
 #define PREF_WT "WT" // without talon
 #define PREF_NINE_WT PREF_NINE " " PREF_WT
-#define PREF_TEN_WT PREF_TEN " " PREF_WT
 #define PREF_MIS "Mis"
 #define PREF_MISER PREF_MIS "ère" // Misère
 #define PREF_MISER_WT PREF_MIS "." PREF_WT // Mis.WT
@@ -70,8 +70,6 @@ inline constexpr std::string_view DiamondSign = PREF_DIAMOND;
 #define PREF_OPENLY "Openly"
 
 #define PREF_OF_ "_of_"
-
-// NOLINTEND(cppcoreguidelines-macro-usage)
 
 using namespace std::literals;
 namespace rng = ranges;
@@ -109,6 +107,12 @@ struct DealScoreEntry {
     std::int32_t pool{};
     std::int32_t whist{};
 };
+
+// NOLINTNEXTLINE(readability-identifier-naming)
+[[maybe_unused]] auto inline format_as(const DealScoreEntry& entry) -> std::string
+{
+    return fmt::format("dump: {}, pool: {}, whist: {}", entry.dump, entry.pool, entry.whist);
+}
 
 using AllWhists = std::map<PlayerId, std::vector<std::int32_t>>;
 using FinalWhists = std::map<PlayerId, std::int32_t>;
@@ -166,6 +170,23 @@ using FinalResult = std::map<PlayerId, std::int32_t>;
     return {};
 }
 
+enum class Progression {
+    Arithmetic,
+    Geometric,
+};
+
+struct ProgressionArgs {
+    Progression prog = Progression::Arithmetic;
+    int first{};
+    int step{};
+};
+
+[[nodiscard]] constexpr auto progressionTerm(const int n, const ProgressionArgs& p) noexcept -> int
+{
+    return (p.prog == Progression::Arithmetic) ? p.first + ((n - 1) * p.step)
+                                               : static_cast<int>(p.first * std::pow(p.step, n - 1));
+}
+
 template<typename Callable>
 [[nodiscard]] auto unpair(Callable&& callable)
 {
@@ -185,6 +206,7 @@ template<typename Value>
 }
 
 template<typename Range, typename Value, typename ProjIn = rng::identity, typename ProjOut = rng::identity>
+// NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward)
 [[nodiscard]] auto find(Range&& range, const Value& value, ProjIn projIn = {}, ProjOut projOut = {})
 {
     const auto it = rng::find(range, value, projIn);
@@ -192,12 +214,14 @@ template<typename Range, typename Value, typename ProjIn = rng::identity, typena
 }
 
 template<typename Range, typename Pred, typename ProjIn = rng::identity, typename ProjOut = rng::identity>
-[[nodiscard]] auto findIf(Range&& range, Pred pred, ProjIn projIn = {}, ProjOut projOut = {})
+// NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward)
+[[nodiscard]] auto find_if(Range&& range, Pred pred, ProjIn projIn = {}, ProjOut projOut = {})
 {
     const auto it = rng::find_if(range, std::move(pred), projIn);
     return it != rng::cend(range) ? std::optional{std::ref(std::invoke(projOut, *it))} : std::nullopt;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 [[nodiscard]] inline auto calculateFinalResult(FinalScore finalScore) -> FinalResult
 {
     if (std::empty(finalScore)) { return {}; }
@@ -215,7 +239,7 @@ template<typename Range, typename Pred, typename ProjIn = rng::identity, typenam
     const auto distributeWhists = [&](const auto member, const bool isDump) {
         for (auto& [playerId, score] : finalScore | rv::filter([&](auto&& kv) { return kv.second.*member != 0; })) {
             const auto adjust = adjustScore(score.*member);
-            const int amount = (score.*member + adjust) * price / numberOfPlayers + adjust * -numberOfPlayers;
+            const int amount = ((score.*member + adjust) * price / numberOfPlayers) + (adjust * -numberOfPlayers);
             for (const auto& otherId : finalScore | rv::keys | rv::filter(notEqualTo(playerId))) {
                 auto& other = finalScore.at(otherId);
                 if (isDump) {
@@ -284,29 +308,30 @@ template<typename T>
         return #Type;                                                                                                  \
     }
 
-PREF_DEFINE_METHOD_NAME(LoginRequest)
-PREF_DEFINE_METHOD_NAME(LoginResponse)
 PREF_DEFINE_METHOD_NAME(AuthRequest)
 PREF_DEFINE_METHOD_NAME(AuthResponse)
-PREF_DEFINE_METHOD_NAME(Logout)
 PREF_DEFINE_METHOD_NAME(Bidding)
 PREF_DEFINE_METHOD_NAME(DealCards)
+PREF_DEFINE_METHOD_NAME(DealFinished)
 PREF_DEFINE_METHOD_NAME(DiscardTalon)
+PREF_DEFINE_METHOD_NAME(Forehand)
+PREF_DEFINE_METHOD_NAME(HowToPlay)
+PREF_DEFINE_METHOD_NAME(Log)
+PREF_DEFINE_METHOD_NAME(LoginRequest)
+PREF_DEFINE_METHOD_NAME(LoginResponse)
+PREF_DEFINE_METHOD_NAME(Logout)
+PREF_DEFINE_METHOD_NAME(MiserCards)
+PREF_DEFINE_METHOD_NAME(OpenTalon)
+PREF_DEFINE_METHOD_NAME(OpenWhistPlay)
+PREF_DEFINE_METHOD_NAME(PingPong)
 PREF_DEFINE_METHOD_NAME(PlayCard)
 PREF_DEFINE_METHOD_NAME(PlayerJoined)
 PREF_DEFINE_METHOD_NAME(PlayerLeft)
 PREF_DEFINE_METHOD_NAME(PlayerTurn)
-PREF_DEFINE_METHOD_NAME(DealFinished)
-PREF_DEFINE_METHOD_NAME(TrickFinished)
-PREF_DEFINE_METHOD_NAME(Whisting)
 PREF_DEFINE_METHOD_NAME(SpeechBubble)
-PREF_DEFINE_METHOD_NAME(Log)
-PREF_DEFINE_METHOD_NAME(HowToPlay)
-PREF_DEFINE_METHOD_NAME(PingPong)
-PREF_DEFINE_METHOD_NAME(OpenWhistPlay)
+PREF_DEFINE_METHOD_NAME(TrickFinished)
 PREF_DEFINE_METHOD_NAME(UserGames)
-PREF_DEFINE_METHOD_NAME(OpenTalon)
-PREF_DEFINE_METHOD_NAME(MiserCards)
+PREF_DEFINE_METHOD_NAME(Whisting)
 
 template<typename Method>
 [[nodiscard]] auto makeMessage(const Method& method) -> Message
@@ -348,7 +373,7 @@ concept NoneAction = Optional<Opt> and requires(F&& f) {
     { std::invoke(std::forward<F>(f)) } -> std::same_as<void>;
 };
 
-inline constexpr auto onValue = [](auto&& f) {
+inline constexpr auto OnValue = [](auto&& f) {
     return [fn = std::forward<decltype(f)>(f)](auto&& opt) -> decltype(auto)
                requires ValueAction<decltype(f), decltype(opt)>
     {
@@ -357,7 +382,7 @@ inline constexpr auto onValue = [](auto&& f) {
     };
 };
 
-inline constexpr auto onNone = [](auto&& f) {
+inline constexpr auto OnNone = [](auto&& f) {
     return [fn = std::forward<decltype(f)>(f)](auto&& opt) -> decltype(auto)
                requires NoneAction<decltype(f), decltype(opt)>
     {

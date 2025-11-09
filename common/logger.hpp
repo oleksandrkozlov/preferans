@@ -3,7 +3,10 @@
 
 #pragma once
 
+#include <fmt/core.h>
 #include <fmt/format.h>
+#include <fmt/ranges.h>
+#include <fmt/std.h>
 #include <spdlog/spdlog.h>
 
 #include <array>
@@ -17,7 +20,7 @@ namespace pref {
 template<std::size_t N>
 inline constexpr auto FormatString = std::invoke([] {
     auto result = std::array<char, (N * 4U) - 2U>{};
-    auto ptr = &result[0];
+    auto ptr = result.data();
     for (auto i = 0U; i != N; ++i) {
         if (i > 0) {
             *ptr++ = ',';
@@ -60,7 +63,7 @@ inline constexpr std::array<char, 0> FormatString<0>;
 // clang-format off
 #define PREF_V(var) fmt::format("{}: {}", #var, var) // PREF VAR
 #define PREF_M(value) (not std::empty(value) ? fmt::format(", {}", PREF_V(value)) : "") // PREF (VAR) MAYBE
-#define PREF_B(value) (value ? fmt::format(", {}", PREF_V(value)) : "") // PREF (VAR) BOOL
+#define PREF_B(value) ((value) ? fmt::format(", {}", PREF_V(value)) : "") // PREF (VAR) BOOL
 #define PREF_APPLY_0
 #define PREF_APPLY_1(arg) PREF_V(arg)
 #define PREF_APPLY_2(arg, ...) PREF_V(arg), PREF_APPLY_1(__VA_ARGS__)

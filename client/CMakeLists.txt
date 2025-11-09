@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
+#
 # Copyright (c) 2025 Oleksandr Kozlov
 
 cmake_minimum_required(VERSION 3.16.3)
@@ -65,14 +66,13 @@ if(NOT DEFINED CMAKE_WEBSOCKET_URL)
 endif()
 configure_file(${PREF_INDEX_HTML}.in ${PREF_INDEX_HTML} @ONLY)
 configure_file(resources/cards/favicon.png ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/favicon.ico COPYONLY)
+target_compile_options(client PRIVATE -fno-exceptions)
 target_link_options(
     client
-    PUBLIC
-    -sUSE_GLFW=3
-    -sASYNCIFY
-    -sNO_DISABLE_EXCEPTION_CATCHING
-    -sALLOW_MEMORY_GROWTH
-    -sFORCE_FILESYSTEM=1
+    PRIVATE
+    -sINITIAL_MEMORY=128MB
+    -sALLOW_MEMORY_GROWTH=0
+    -sDISABLE_EXCEPTION_CATCHING
     -sEXPORTED_RUNTIME_METHODS=requestFullscreen
     --shell-file
     ${PREF_INDEX_HTML}

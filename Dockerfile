@@ -9,16 +9,17 @@ RUN apt update && apt install -y \
     build-essential \
     ccache \
     clang-format \
+    clang-tidy \
     clangd \
     cmake \
     cmake-format \
     git \
+    iwyu \
     libasound2-dev \
     libboost1.88-dev \
     libbotan-3-dev \
     libcatch2-dev \
     libdocopt-dev \
-    libfmt-dev \
     libgl1-mesa-dev \
     libglfw3-dev \
     libglu1-mesa-dev \
@@ -26,7 +27,6 @@ RUN apt update && apt install -y \
     libmsgsl-dev \
     libprotobuf-dev \
     librange-v3-dev \
-    libspdlog-dev \
     libssl-dev \
     libwayland-dev \
     libx11-dev \
@@ -56,6 +56,16 @@ RUN git clone --depth=1 --branch 4.0.17 https://github.com/emscripten-core/emsdk
     && cd /usr/local/share/emsdk \
     && ./emsdk install latest \
     && ./emsdk activate latest
+
+RUN git clone --depth=1 --branch 12.1.0 git@github.com:fmtlib/fmt.git \
+    && cmake -Hfmt -Bfmt/build -GNinja -DCMAKE_BUILD_TYPE=Release -DFMT_TEST=OFF \
+    && cmake --build fmt/build --target install --parallel \
+    && rm -rf fmt
+
+RUN git clone --depth=1 --branch v1.16.0 git@github.com:gabime/spdlog.git \
+    && cmake -Hspdlog -Bspdlog/build -GNinja -DCMAKE_BUILD_TYPE=Release -DSPDLOG_BUILD_EXAMPLE=OFF -DSPDLOG_FMT_EXTERNAL=ON \
+    && cmake --build spdlog/build --target install --parallel \
+    && rm -rf spdlog
 
 RUN echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 

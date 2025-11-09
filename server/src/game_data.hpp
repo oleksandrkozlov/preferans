@@ -4,19 +4,26 @@
 #pragma once
 
 #include "auth.hpp"
+#include "common/time.hpp"
 #include "proto/pref.pb.h"
 
 #include <common/common.hpp>
 #include <common/logger.hpp>
-#include <fmt/core.h>
-#include <fmt/format.h>
 #include <range/v3/all.hpp>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <functional>
+#include <iterator>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
 
 namespace pref {
 
@@ -64,6 +71,7 @@ namespace pref {
 }
 
 template<typename GameDataT>
+// NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward)
 [[nodiscard]] auto userByPlayerId(GameDataT&& data, const PlayerIdView playerId)
 {
     if constexpr (std::is_const_v<std::remove_reference_t<GameDataT>>) {
@@ -122,7 +130,7 @@ inline auto addOrUpdateUserGame(GameData& gameData, const PlayerIdView playerId,
 // TODO: support token expiration
 inline auto addAuthToken(GameData& data, const PlayerIdView playerId, std::string serverAuthToken) -> void
 {
-    userByPlayerId(data, playerId) | onValue([&](User& user) {
+    userByPlayerId(data, playerId) | OnValue([&](User& user) {
         user.add_auth_tokens(std::move(serverAuthToken));
         const auto totalTokens = std::size(user.auth_tokens());
         PREF_DI(playerId, totalTokens);
@@ -132,7 +140,7 @@ inline auto addAuthToken(GameData& data, const PlayerIdView playerId, std::strin
 inline auto revokeAuthToken(GameData& data, const PlayerIdView playerId, const std::string_view serverAuthToken) -> void
 {
     PREF_DI(playerId);
-    userByPlayerId(data, playerId) | onValue([&](User& user) {
+    userByPlayerId(data, playerId) | OnValue([&](User& user) {
         auto& tokens = *user.mutable_auth_tokens();
         const auto tokensCount = std::size(tokens);
         tokens.erase(rng::remove(tokens, serverAuthToken), rng::end(tokens));

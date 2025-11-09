@@ -3,16 +3,12 @@
 
 #pragma once
 
-#include "common/common.hpp"
 #include "common/logger.hpp"
 
 #include <boost/asio.hpp>
-#include <boost/asio/as_tuple.hpp>
-#include <boost/asio/experimental/channel.hpp>
+#include <boost/asio/experimental/channel.hpp> // IWYU pragma: keep
 #include <boost/beast.hpp>
-#include <fmt/core.h>
-
-#include <thread>
+#include <boost/system.hpp>
 
 #ifdef PREF_SSL
 #include <boost/asio/ssl.hpp>
@@ -20,10 +16,16 @@
 #include <boost/beast/websocket/ssl.hpp>
 #endif // PREF_SSL
 
-#include <filesystem>
+#include <cassert>
+#include <chrono>
+#include <coroutine>
+#include <iterator>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <utility>
 
 namespace net = boost::asio;
@@ -32,14 +34,11 @@ namespace web = beast::websocket;
 namespace sys = boost::system;
 
 namespace boost::system {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunneeded-internal-declaration"
-// NOLINTNEXTLINE(readability-identifier-naming, misc-use-anonymous-namespace)
+// NOLINTNEXTLINE(readability-identifier-naming)
 [[maybe_unused]] inline auto format_as(const error_code& error) -> std::string
 {
     return error.message();
 }
-#pragma GCC diagnostic pop
 } // namespace boost::system
 
 namespace pref {
@@ -90,6 +89,7 @@ inline auto sendToMany(const std::span<const ChannelPtr> channels, std::string p
 
 struct Connection {
     Connection() = default;
+    // NOLINTNEXTLINE(modernize-pass-by-value)
     explicit Connection(const ChannelPtr& channel)
         : ch{channel}
     {

@@ -5,15 +5,20 @@
 
 #include "common/common.hpp"
 
-#include <botan/argon2.h>
+#include <botan/argon2fmt.h>
 #include <botan/hash.h>
 #include <botan/hex.h>
+#include <botan/rng.h>
 #include <botan/system_rng.h>
 #include <botan/uuid.h>
+#include <range/v3/all.hpp>
 
 #include <concepts>
 #include <cstdint>
 #include <iterator>
+#include <memory>
+#include <ranges>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>

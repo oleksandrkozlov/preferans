@@ -12,9 +12,6 @@
 #include <emscripten/emscripten.h>
 #include <emscripten/val.h>
 #include <emscripten/websocket.h>
-#include <fmt/format.h>
-#include <fmt/ranges.h>
-#include <fmt/std.h>
 #include <range/v3/all.hpp>
 #define RAYGUI_TEXTSPLIT_MAX_ITEMS 128
 #define RAYGUI_TEXTSPLIT_MAX_TEXT_SIZE 8192
@@ -50,7 +47,7 @@ constexpr auto PlayerIdStorageKey = "player_id";
 constexpr auto PlayerNameStorageKey = "player_name";
 constexpr auto AuthTokenStorageKey = "auth_token";
 
-[[nodiscard]] auto operator+(const r::Vector2& lhs, const float rhs) -> r::Vector2
+[[maybe_unused]] [[nodiscard]] auto operator+(const r::Vector2& lhs, const float rhs) -> r::Vector2
 {
     return Vector2AddValue(lhs, rhs);
 }
@@ -60,7 +57,7 @@ constexpr auto AuthTokenStorageKey = "auth_token";
     return Vector2SubtractValue(lhs, rhs);
 }
 
-[[nodiscard]] constexpr auto operator+(r::Rectangle lhs, const float value) noexcept -> r::Rectangle
+[[maybe_unused]] [[nodiscard]] constexpr auto operator+(r::Rectangle lhs, const float value) noexcept -> r::Rectangle
 {
     lhs.x -= value * 0.5f;
     lhs.y -= value * 0.5f;
@@ -79,10 +76,11 @@ constexpr auto AuthTokenStorageKey = "auth_token";
 }
 
 enum class Shift : std::uint8_t {
-    Horizont = 1 << 0,
-    Vertical = 1 << 1,
-    Positive = 1 << 2,
-    Negative = 1 << 3,
+    None = 1 << 0,
+    Horizont = 1 << 1,
+    Vertical = 1 << 2,
+    Positive = 1 << 3,
+    Negative = 1 << 4,
 };
 
 [[nodiscard]] constexpr auto operator&(const Shift lhs, const Shift rhs) noexcept -> Shift
@@ -190,12 +188,14 @@ struct Player {
 struct BiddingMenu {
     bool isVisible{};
     std::string bid;
+    int passRound{};
     std::size_t rank = AllRanks;
 
     auto clear() -> void
     {
         isVisible = false;
         bid.clear();
+        passRound = 0;
         rank = AllRanks;
     }
 };
@@ -493,14 +493,7 @@ struct Context {
     float offsetY = 0.f;
     int windowWidth = static_cast<int>(VirtualW);
     int windowHeight = static_cast<int>(VirtualH);
-    r::Window window{
-        windowWidth,
-        windowHeight,
-        "Preferans",
-        FLAG_MSAA_4X_HINT // smooth edges for circles, rings, etc.
-            | FLAG_WINDOW_ALWAYS_RUN // don't throttle when tab is not focused
-            | FLAG_WINDOW_RESIZABLE,
-    };
+    r::Window window{windowWidth, windowHeight, "Preferans"};
     r::RenderTexture target{static_cast<int>(VirtualW), static_cast<int>(VirtualH)};
     PlayerId myPlayerId;
     PlayerName myPlayerName;
@@ -514,6 +507,7 @@ struct Context {
     int rightCardCount = 10;
     std::map<PlayerId, const Card*> cardsOnTable;
     std::vector<CardNameView> lastTrickOrTalon;
+    PlayerId forehandId;
     PlayerId turnPlayerId;
     BiddingMenu bidding;
     WhistingMenu whisting;
@@ -533,6 +527,8 @@ struct Context {
     std::string url;
     std::map<CardNameView, r::Vector2> cardPositions;
     bool isGameFreezed{};
+    bool needsDraw = true;
+    double tick = 0.0;
 
     auto clear() -> void
     {
@@ -540,6 +536,7 @@ struct Context {
         rightCardCount = 10;
         cardsOnTable.clear();
         lastTrickOrTalon.clear();
+        forehandId.clear();
         turnPlayerId.clear();
         bidding.clear();
         whisting.clear();
@@ -564,13 +561,11 @@ struct Context {
     {
         if (lang == GameLang::Alternative) {
             if (bid == PREF_NINE_WT) { return PREF_NINE " БП"; }
-            if (bid == PREF_TEN_WT) { return PREF_TEN " БП"; }
             if (bid == PREF_MISER) { return pref::localizeText(GameText::Miser, lang); }
             if (bid == PREF_MISER_WT) { return "Миз.БП"; }
             if (bid == PREF_PASS) { return pref::localizeText(GameText::Pass, lang); }
         } else if (lang == GameLang::Ukrainian) {
             if (bid == PREF_NINE_WT) { return PREF_NINE " БП"; }
-            if (bid == PREF_TEN_WT) { return PREF_TEN " БП"; }
             if (bid == PREF_MISER) { return pref::localizeText(GameText::Miser, lang); }
             if (bid == PREF_MISER_WT) { return "Міз.БП"; }
             if (bid == PREF_PASS) { return pref::localizeText(GameText::Pass, lang); }
@@ -746,6 +741,7 @@ auto sendMessage(const EMSCRIPTEN_WEBSOCKET_T ws, const Message& msg) -> bool
         PREF_W("error: ws is not open");
         return false;
     }
+    ctx().needsDraw = true;
     // unsigned short readyState = 0;
     // if (const auto result = emscripten_websocket_get_ready_state(ws, &readyState);
     //     result != EMSCRIPTEN_RESULT_SUCCESS and readyState != 1) {
@@ -865,7 +861,7 @@ auto sendMessage(const EMSCRIPTEN_WEBSOCKET_T ws, const Message& msg) -> bool
 auto sendLoginRequest() -> void
 {
     auto _ = gsl::finally([] { ctx().password.clear(); });
-    // The password is sent in plain text; that's why SSL (wss://) is required in production.
+    // The password is sent in plain text; that's why SSL (wss://) is required in prod.
     if (not sendMessage(ctx().ws, makeMessage(makeLoginRequest(ctx().myPlayerName, ctx().password)))) {
         ctx().isLoginInProgress = false;
     }
@@ -1012,6 +1008,15 @@ auto handlePlayerLeft(const Message& msg) -> void
         ctx().players | rv::values, [](const std::string_view bid) { return bid.contains(PREF_MIS); }, &Player::bid);
 }
 
+auto handleForehand(const Message& msg) -> void
+{
+    auto forehand = makeMethod<Forehand>(msg);
+    if (not forehand) { return; }
+    auto& playerId = *forehand->mutable_player_id();
+    PREF_DI(playerId);
+    ctx().forehandId = std::move(playerId);
+}
+
 auto handleDealCards(const Message& msg) -> void
 {
     auto dealCards = makeMethod<DealCards>(msg);
@@ -1032,19 +1037,32 @@ auto handleDealCards(const Message& msg) -> void
 
 auto handlePlayerTurn(const Message& msg) -> void
 {
+    using enum GameStage;
     auto playerTurn = makeMethod<PlayerTurn>(msg);
     if (not playerTurn) { return; }
     ctx().turnPlayerId = playerTurn->player_id();
     ctx().stage = playerTurn->stage();
-    const auto& minBid = playerTurn->min_bid();
-    PREF_I("turnPlayerId: {}, stage: {}{}", ctx().turnPlayerId, GameStage_Name(ctx().stage), PREF_M(minBid));
-    if (not std::empty(minBid)) {
-        if (const auto rank = bidRank(minBid); ctx().bidding.rank == AllRanks or ctx().bidding.rank < rank) {
-            ctx().bidding.rank = rank;
-        }
+    auto& minBid = *playerTurn->mutable_min_bid();
+    const auto passRound = playerTurn->pass_round();
+    PREF_I(
+        "turnPlayerId: {}, stage: {}, {}{}",
+        ctx().turnPlayerId,
+        GameStage_Name(ctx().stage),
+        PREF_V(minBid),
+        PREF_B(passRound));
+    assert(not std::empty(minBid));
+    const auto minRank = std::invoke([&] {
+        if (minBid == PREF_SIX) { return AllRanks; }
+        if (minBid == PREF_SEVEN) { return bidRank(PREF_SIX); }
+        return bidRank(PREF_SEVEN);
+    });
+    if (minRank != AllRanks) {
+        auto& rank = ctx().bidding.rank;
+        rank = (rank == AllRanks) ? minRank : std::max(minRank, rank);
     }
+    ctx().bidding.passRound = passRound;
     const auto isMyTurn = pref::isMyTurn();
-    if (ctx().stage == GameStage::TALON_PICKING) {
+    if (ctx().stage == TALON_PICKING) {
         for (const auto& cardName : playerTurn->talon()) {
             const auto& card = getCard(cardName);
             ctx().lastTrickOrTalon.push_back(card.name);
@@ -1054,16 +1072,21 @@ auto handlePlayerTurn(const Message& msg) -> void
         return;
     }
     if (not isMyTurn) { return; }
-    if (ctx().stage == GameStage::BIDDING) {
+    if (ctx().stage == WITHOUT_TALON) {
+        ctx().bidding.rank -= 7;
         ctx().bidding.isVisible = true;
         return;
     }
-    if (ctx().stage == GameStage::WHISTING) {
+    if (ctx().stage == BIDDING) {
+        ctx().bidding.isVisible = true;
+        return;
+    }
+    if (ctx().stage == WHISTING) {
         ctx().whisting.canHalfWhist = playerTurn->can_half_whist();
         ctx().whisting.isVisible = true;
         return;
     }
-    if (ctx().stage == GameStage::HOW_TO_PLAY) {
+    if (ctx().stage == HOW_TO_PLAY) {
         ctx().howToPlay.isVisible = true;
         return;
     }
@@ -1075,7 +1098,8 @@ auto handleBidding(const Message& msg) -> void
     if (not bidding) { return; }
     const auto& playerId = bidding->player_id();
     const auto& bid = bidding->bid();
-    const auto rank = bidRank(bid);
+    auto rank = bidRank(bid);
+    if (ctx().myPlayerId == ctx().forehandId and rank != 0) { --rank; }
     if (bid != PREF_PASS) { ctx().bidding.rank = rank; }
     ctx().bidding.bid = bid;
     ctx().player(playerId).bid = bid;
@@ -1144,7 +1168,6 @@ auto handleTrickFinished(const Message& msg) -> void
             auto _ = gsl::finally([&] { delete trickFinished; });
             if (not ctx().isGameFreezed) { return; }
             if (std::empty(ctx().myPlayer().hand)) {
-                // TODO: show scoreSheet when the deal finished with Pass or Half-Whist
                 ctx().scoreSheet.isVisible = true;
             } else {
                 ctx().isGameFreezed = false;
@@ -1180,6 +1203,7 @@ auto handleDealFinished(const Message& msg) -> void
                 return std::pair{id, whist.values() | rng::to_vector};
         })) | rng::to<std::map>}};
     })) | rng::to<ScoreSheet>; // clang-format on
+    if (not std::empty(ctx().myPlayer().hand)) { ctx().scoreSheet.isVisible = true; }
 }
 
 auto handleSpeechBubble(const Message& msg) -> void
@@ -1274,19 +1298,6 @@ auto updateWindowSize() -> void
 {
     EmscriptenFullscreenChangeEvent f;
     emscripten_get_fullscreen_status(&f);
-    const auto t = fmt::format(
-        "isFullscreen: {}, fullscreenEnabled: {}, nodeName {}, id: {}, elementWidth: {}, elementHeight: {}, "
-        "screenWidth: {}, screenHeight: {}",
-        f.isFullscreen,
-        f.fullscreenEnabled,
-        f.nodeName,
-        f.id,
-        f.elementWidth,
-        f.elementHeight,
-        f.screenWidth,
-        f.screenHeight);
-    PREF_I("{}", t);
-
     auto canvasCssW = 0.0;
     auto canvasCssH = 0.0;
     if (emscripten_get_element_css_size("#canvas", &canvasCssW, &canvasCssH) != EMSCRIPTEN_RESULT_SUCCESS) { return; }
@@ -1300,28 +1311,31 @@ auto updateWindowSize() -> void
     ctx().scale = std::fminf(windowW / VirtualW, windowH / VirtualH);
     ctx().offsetX = (windowW - VirtualW * ctx().scale) * 0.5f;
     ctx().offsetY = (windowH - VirtualH * ctx().scale) * 0.5f;
-    // FIXME: fix incorrect mouse scaling/offset when entering fullscreen mode on mobile devices
-    auto text = fmt::format(
-        "[updateWindowSize] cssW: {}, cssH: {}, dpr: {}, w: {}, h: {}, scale: {}, offX: {}, "
-        "offY: {}",
-        canvasCssW,
-        canvasCssH,
-        dpr,
-        ctx().windowWidth,
-        ctx().windowHeight,
-        ctx().scale,
-        ctx().offsetX,
-        ctx().offsetY);
-    PREF_I("{}", text);
     r::Mouse::SetOffset(static_cast<int>(-ctx().offsetX), static_cast<int>(-ctx().offsetY));
     r::Mouse::SetScale(1.f / ctx().scale, 1.f / ctx().scale);
 }
 
 // clang-format off
-#define PREF_METHODS                                                                                                   \
-    PREF_X(LoginResponse) PREF_X(AuthResponse) PREF_X(PlayerJoined) PREF_X(PlayerLeft) PREF_X(DealCards) PREF_X(PlayerTurn) \
-    PREF_X(Bidding) PREF_X(Whisting) PREF_X(OpenWhistPlay) PREF_X(HowToPlay) PREF_X(PlayCard) PREF_X(TrickFinished) \
-    PREF_X(DealFinished) PREF_X(SpeechBubble) PREF_X(PingPong) PREF_X(UserGames) PREF_X(OpenTalon) PREF_X(MiserCards)
+#define PREF_METHODS \
+    PREF_X(AuthResponse) \
+    PREF_X(Bidding) \
+    PREF_X(DealCards) \
+    PREF_X(DealFinished) \
+    PREF_X(Forehand) \
+    PREF_X(HowToPlay) \
+    PREF_X(LoginResponse) \
+    PREF_X(MiserCards) \
+    PREF_X(OpenTalon) \
+    PREF_X(OpenWhistPlay) \
+    PREF_X(PingPong) \
+    PREF_X(PlayCard) \
+    PREF_X(PlayerJoined) \
+    PREF_X(PlayerLeft) \
+    PREF_X(PlayerTurn) \
+    PREF_X(SpeechBubble) \
+    PREF_X(TrickFinished) \
+    PREF_X(UserGames) \
+    PREF_X(Whisting)
 // clang-format on
 
 auto dispatchMessage(const std::optional<Message>& msg) -> void
@@ -1329,7 +1343,10 @@ auto dispatchMessage(const std::optional<Message>& msg) -> void
     if (not msg) { return; }
     const auto& method = msg->method();
 #define PREF_X(PREF_MSG_NAME)                                                                                          \
-    if (method == std::string_view{#PREF_MSG_NAME}) { return handle##PREF_MSG_NAME(*msg); }
+    if (method == std::string_view{#PREF_MSG_NAME}) {                                                                  \
+        ctx().needsDraw = true;                                                                                        \
+        return handle##PREF_MSG_NAME(*msg);                                                                            \
+    }
     PREF_METHODS;
 #undef PREF_X
     PREF_W("error: unknown {}", PREF_V(method));
@@ -1618,7 +1635,7 @@ auto drawLogoutMessage() -> void
         messageBoxHeight};
     const auto clicked = withGuiFont(ctx().fontS, [&] {
         const auto logoutText = ctx().localizeText(GameText::LogOut);
-        const auto areYouSureText = ctx().localizeText(GameText::AreYouSureYouWantToLogOut);
+        const auto areYouSureText = ctx().localizeText(GameText::LogOutOfTheAccount);
         const auto yesNoText = std::format(
             "{};{}", //
             ctx().localizeText(GameText::Yes),
@@ -1637,37 +1654,50 @@ auto drawLogoutMessage() -> void
     ctx().logoutMessage.isVisible = false;
 }
 
-auto drawConnectedPlayersPanel() -> void
+auto drawConnectedPlayers() -> void
 {
     if (not ctx().isLoggedIn or ctx().areAllPlayersJoined()) { return; }
-    static constexpr auto pad = VirtualH / 108.f;
-    static constexpr auto minWidth = VirtualW / 9.6f;
-    static constexpr auto minHeight = VirtualH / 13.5f;
-    const auto fontSize = ctx().fontSizeS();
-    const auto lineGap = fontSize * 1.2f;
-    const auto headerGap = fontSize * .5f;
-    const auto headerText = ctx().localizeText(GameText::CurrentPlayers);
-    const auto headerSize = ctx().fontS.MeasureText(headerText, fontSize, FontSpacing);
-    auto maxWidth = headerSize.x;
-    for (const auto& player : ctx().players | rv::values) {
-        const auto sz = ctx().fontS.MeasureText(player.name, fontSize, FontSpacing);
-        if (sz.x > maxWidth) maxWidth = sz.x;
+    static constexpr auto pad = VirtualH * 0.007f;
+    static constexpr auto fontSpacingX = VirtualH * 0.02f;
+    static const auto& fontName = ctx().fontM;
+    static const auto& fontAvatar = ctx().fontL;
+    static const auto fontNameSize = ctx().fontSizeM();
+    static const auto fontAvatarSize = ctx().fontSizeL() * 1.2f;
+    const auto [rectColor, textColor] = std::invoke([&] {
+        const auto light = getGuiColor(BACKGROUND_COLOR);
+        const auto dark = getGuiColor(LABEL, TEXT_COLOR_NORMAL);
+        return (ctx().settingsMenu.loadedColorScheme == "bluish") ? std::pair{light, dark} : std::pair{dark, light};
+    });
+    static constexpr auto avatars = std::array{PREF_MOUSE_FACE, PREF_MONKEY_FACE, PREF_COW_FACE, PREF_CAT_FACE};
+    const auto players = rv::zip(ctx().players | rv::values | rv::transform(&Player::name), avatars);
+    auto contentSizes = std::vector<r::Vector2>(std::size(players));
+    auto maxSide = 0.0f;
+    for (auto&& [i, player] : players | rv::enumerate) {
+        const auto& [name, avatar] = player;
+        const auto nameSize = fontName.MeasureText(name, fontNameSize, FontSpacing);
+        const auto avatarSize = fontAvatar.MeasureText(avatar, fontAvatarSize, FontSpacing);
+        const auto contentWidth = std::max(nameSize.x, avatarSize.x);
+        const auto contentHeight = nameSize.y + avatarSize.y + pad * 1.5f;
+        const auto requiredSide = std::max(contentWidth, contentHeight) + pad * 2.0f;
+        contentSizes[i] = r::Vector2{contentWidth, contentHeight};
+        maxSide = std::max(maxSide, requiredSide);
     }
-    const auto rows = std::size(ctx().players);
-    const auto contentW = pad * 2.f + maxWidth;
-    const auto contentH = pad * 2.f + headerSize.y + headerGap + static_cast<float>(rows) * lineGap;
-    const auto panelW = std::max(minWidth, contentW);
-    const auto panelH = std::max(minHeight, contentH);
-    const auto r = r::Rectangle{{BorderMargin, BorderMargin}, {panelW, panelH}};
-    GuiPanel(r, nullptr);
-    auto textPos = r.GetPosition() + pad;
-    ctx().fontS.DrawText(headerText, textPos, fontSize, FontSpacing, getGuiColor(LABEL, TEXT_COLOR_NORMAL));
-    textPos.y += headerSize.y + headerGap;
-    for (const auto& [id, player] : ctx().players) {
-        const auto color = (id == ctx().myPlayerId) ? getGuiColor(TEXT_COLOR_NORMAL) : getGuiColor(TEXT_COLOR_DISABLED);
-        ctx().fontS.DrawText(player.name, textPos, fontSize, FontSpacing, color);
-        textPos.y += lineGap;
+    const auto playerSize = static_cast<float>(std::size(players));
+    const auto totalWidth = maxSide * playerSize + fontSpacingX * (playerSize - 1.0f);
+    const auto startX = (VirtualW - totalWidth) / 2.0f;
+    const auto y = (VirtualH - maxSide) / 2.0f;
+    for (auto x = startX; auto&& [name, avatar] : players) {
+        r::Rectangle{x, y, maxSide, maxSide}.Draw(rectColor);
+        const auto nameSize = fontName.MeasureText(name, fontNameSize, FontSpacing);
+        const auto namePos = r::Vector2{x + (maxSide - nameSize.x) / 2.0f, y + maxSide - pad - nameSize.y};
+        fontName.DrawText(name, namePos, fontNameSize, FontSpacing, textColor);
+        const auto avatarSize = fontAvatar.MeasureText(avatar, fontAvatarSize, FontSpacing);
+        const auto avatarPos = r::Vector2{x + (maxSide - avatarSize.x) * 0.5f, y + (maxSide - avatarSize.y) * 0.5f};
+        fontAvatar.DrawText(avatar, avatarPos, fontAvatarSize, FontSpacing, textColor);
+        x += maxSide + fontSpacingX;
     }
+    drawGuiLabelCentered(
+        ctx().localizeText(GameText::CurrentPlayers), {VirtualW * 0.5f, y - fontSpacingX - ctx().fontSizeM()});
 }
 
 [[nodiscard]] auto isCardPlayable(const std::list<const Card*>& hand, const CardNameView clickedCardName) -> bool
@@ -1792,7 +1822,7 @@ auto drawCards(const r::Vector2& pos, Player& player, const Shift shift, const i
     const auto text = std::string{gameText};
     const auto textSize = measureGuiText(text);
     const auto sign = hasShift(shift, Negative) ? -1.f : 1.f;
-    const auto shiftX = sign * (textSize.x * 0.5f + textSize.y * 0.5f);
+    const auto shiftX = sign * (textSize.x * 0.44f + textSize.y * 0.5f);
     const auto shiftY = sign * textSize.y;
     const auto anchor = hasShift(shift, Horizont) ? r::Vector2{pos.x + shiftX, pos.y} //
                                                   : r::Vector2{pos.x, pos.y + shiftY};
@@ -1807,14 +1837,30 @@ auto drawCards(const r::Vector2& pos, Player& player, const Shift shift, const i
         "{}{}{}",
         ctx().turnPlayerId == player.id and not ctx().isGameFreezed ? fmt::format("{} ", PREF_ARROW_RIGHT) : "",
         player.name,
-        player.tricksTaken != 0 ? fmt::format(" {}", prettifyTricksTaken(player.tricksTaken)) : "");
+        player.id == ctx().forehandId ? fmt::format(" {}", PREF_FOREHAND_SIGN) : "");
 }
 
 [[nodiscard]] auto drawPlayerName(const r::Vector2& pos, const Player& player, const Shift shift) -> r::Vector2
 {
-    return withGuiStyle(LABEL, TEXT_COLOR_NORMAL, TEXT_COLOR_PRESSED, player.id == ctx().turnPlayerId, [&] {
+    const auto turnColor = std::invoke([&] {
+        const auto& scheme = ctx().settingsMenu.loadedColorScheme;
+        if (scheme == "jungle") { return TEXT_COLOR_PRESSED; }
+        if (scheme == "jungle") { return BORDER_COLOR_PRESSED; }
+        if (scheme == "lavanda") { return BASE_COLOR_FOCUSED; }
+        if (scheme == "bluish") { return TEXT_COLOR_PRESSED; }
+        return BASE_COLOR_PRESSED;
+    });
+    const auto trick = player.tricksTaken != 0 ? fmt::format(" {}", prettifyNumber(player.tricksTaken)) : "";
+    auto anchor = withGuiStyle(LABEL, TEXT_COLOR_NORMAL, turnColor, player.id == ctx().turnPlayerId, [&] {
         return drawGameText(pos, composePlayerName(player), shift).second;
     });
+    withGuiFont(ctx().fontL, [&] {
+        withGuiStyle(DEFAULT, TEXT_SIZE, static_cast<int>(ctx().fontSizeL() * 0.85f), [&] {
+            const auto y = player.id != ctx().myPlayerId ? (CardHeight * 0.6f) : (CardHeight * 0.15f);
+            return drawGameText({anchor.x, anchor.y - y}, trick, Shift::None);
+        });
+    });
+    return anchor;
 }
 
 [[nodiscard]] auto getCodepoint(const char* text) -> int
@@ -1868,9 +1914,20 @@ template<typename... Args>
     return drawGameText(pos, ctx().localizeText(whistingChoiceToGameText(player.whistingChoice)), shift).first;
 }
 
-auto drawBid(const r::Vector2& pos, const Player& player, const Shift shift) -> bool
+[[nodiscard]] auto cardCount(const std::list<const Card*>& hand, const DrawPosition drawPosition) -> int
 {
-    return drawGameText(pos, ctx().localizeBid(player.bid), shift).first;
+    return not std::empty(hand) ? std::ssize(hand)
+                                : (isRight(drawPosition) ? ctx().rightCardCount : ctx().leftCardCount);
+}
+
+auto drawBid(const r::Vector2& pos, const Player& player, const DrawPosition drawPosition, const Shift shift) -> bool
+{
+    return withGuiFont(ctx().fontL, [&] {
+        const auto scale = cardCount(player.hand, drawPosition) < 10 ? 1.5f : 1.f;
+        return withGuiStyle(DEFAULT, TEXT_SIZE, static_cast<int>(ctx().fontSizeM() * scale), [&] {
+            return drawGameText(pos, ctx().localizeBid(player.bid), shift).first;
+        });
+    });
 }
 
 auto drawSpeechBubble(const r::Vector2& pos, const PlayerId& playerId, const DrawPosition drawPosition) -> void
@@ -1906,7 +1963,7 @@ auto drawMyHand() -> void
     const auto playerNameCenter = drawPlayerName(cardFirstLeftCenterPos, player, Negative | Horizont);
     const auto yourTurnTopY = drawYourTurn(cardFirstLeftTopPos, gap, totalWidth, ctx().myPlayerId);
     drawWhist(cardLastRightCenterPos, player, Positive | Horizont) //
-        or drawBid(cardLastRightCenterPos, player, Positive | Horizont);
+        or drawBid(cardLastRightCenterPos, player, {}, Positive | Horizont);
     drawSpeechBubble({playerNameCenter.x, yourTurnTopY + gap * 2}, ctx().myPlayerId, Left);
     // drawDebugHorzLine(cardCenterY, "cardCenterY");
     // drawDebugDot(cardFirstLeftCenterPos, "cardFirstLeftCenterPos");
@@ -1925,10 +1982,7 @@ auto drawOpponentHand(const DrawPosition drawPosition) -> void
         return isRight(drawPosition) ? rightId : leftId;
     });
     auto& player = ctx().player(playerId);
-    const auto cardCount = std::invoke([&] {
-        return not std::empty(player.hand) ? std::ssize(player.hand)
-                                           : (isRight(drawPosition) ? ctx().rightCardCount : ctx().leftCardCount);
-    });
+    const auto cardCount = pref::cardCount(player.hand, drawPosition);
     const auto totalHeight = (static_cast<float>(cardCount) - 1.f) * CardOverlapY + CardHeight;
     const auto cardFirstLeftTopPos = r::Vector2{
         isRight(drawPosition) ? VirtualW - CardWidth - CardBorderMargin : CardBorderMargin,
@@ -1939,7 +1993,7 @@ auto drawOpponentHand(const DrawPosition drawPosition) -> void
     drawCards(cardFirstLeftTopPos, player, (isRight(drawPosition) ? Negative : Positive) | Vertical, cardCount);
     const auto playerNameCenter = drawPlayerName(cardFirstCenterTopPos, player, Negative | Vertical);
     drawWhist(cardLastCenterBottomPos, player, Positive | Vertical) //
-        or drawBid(cardLastCenterBottomPos, player, Positive | Vertical);
+        or drawBid(cardLastCenterBottomPos, player, drawPosition, Positive | Vertical);
     drawSpeechBubble({playerNameCenter.x, cardFirstLeftTopPos.y - VirtualH / 11.f}, playerId, drawPosition);
     // drawDebugVertLine(cardCenterX, "cardCenterX");
     // drawDebugDot(cardFirstCenterTopPos, "cardFirstCenterTopPos");
@@ -2013,19 +2067,58 @@ auto drawPlayedCards() -> void
         or ((myBid == PREF_MISER or myBid == PREF_MISER_WT) // Non-final bid restrictions for Miser/Miser WT
             and not finalBid
             and bid != PREF_MISER_WT
-            and bid != PREF_PASS);
+            and bid != PREF_PASS)
+        or ((myBid == PREF_NINE_WT) and finalBid and (bid == PREF_NINE_WT or bid == PREF_PASS));
 }
 
-// TODO: don't draw BiddingMenu if there is only one choice
+auto drawRankAndSuitText(
+    const std::string_view text,
+    const r::Font& font,
+    const float fontSize,
+    const r::Vector2& pos,
+    const r::Color rankColor,
+    const r::Color suitColor) -> void
+{
+    if (std::size(text) < 2) [[unlikely]] { return; }
+    const auto [rankText, suitText] = text.starts_with(PREF_TEN)
+        ? std::pair{std::string{text.substr(0, 2)}, std::string{text.substr(2)}}
+        : std::pair{std::string{text.substr(0, 1)}, std::string{text.substr(1)}};
+    const auto rankSize = font.MeasureText(rankText, fontSize, FontSpacing);
+    font.DrawText(rankText, pos, fontSize, FontSpacing, rankColor);
+    font.DrawText(suitText, {pos.x + rankSize.x, pos.y}, fontSize, FontSpacing, suitColor);
+}
+
+auto sendBid(const std::string& bid, const bool finalBid, const std::size_t rank) -> void
+{
+    ctx().bidding.bid = bid;
+    ctx().myPlayer().bid = bid;
+    if (bid != PREF_PASS) { ctx().bidding.rank = rank; }
+    ctx().bidding.isVisible = false;
+    if (finalBid) {
+        sendDiscardTalon(bid);
+    } else {
+        sendBidding(bid);
+    }
+}
+
 auto drawBiddingMenu() -> void
 {
     if (not ctx().bidding.isVisible) { return; }
+    const auto finalBid = (std::size(ctx().discardedTalon) == 2) or (ctx().stage == WITHOUT_TALON);
+    auto enabled = BidTable | rv::join | rv::filter([&](const std::string_view bid) {
+                       return not std::empty(bid)
+                           and not isBidDisabled(bid, ctx().myPlayer().bid, bidRank(bid), ctx().bidding.rank, finalBid);
+                   });
+    if (rng::distance(enabled) == 1U) {
+        const auto bid = std::string{rng::back(enabled)};
+        sendBid(bid, finalBid, bidRank(bid));
+        return;
+    }
     for (int r = 0; r < BidRows; ++r) {
         for (int c = 0; c < BidCols; ++c) {
             const auto& bid = BidTable[static_cast<std::size_t>(r)][static_cast<std::size_t>(c)];
             if (std::empty(bid)) { continue; }
             const auto rank = bidRank(bid);
-            const auto finalBid = std::size(ctx().discardedTalon) == 2;
             auto state = isBidDisabled(bid, ctx().myPlayer().bid, rank, ctx().bidding.rank, finalBid)
                 ? GuiState{STATE_DISABLED}
                 : GuiState{STATE_NORMAL};
@@ -2048,36 +2141,13 @@ auto drawBiddingMenu() -> void
             const auto textX = cell.x + (cell.width - textSize.x) * 0.5f;
             const auto textY = cell.y + (cell.height - textSize.y) * 0.5f;
             if (isRedSuit(text)) {
-                auto count = 0;
-                auto codepoints = LoadCodepoints(text.c_str(), &count);
-                auto _ = gsl::finally([&] { UnloadCodepoints(codepoints); });
-                auto rankText = std::string{};
-                for (int i = 0; i < count - 1; ++i) {
-                    auto size = 0;
-                    auto str = CodepointToUTF8(codepoints[i], &size);
-                    rankText += std::string(str, static_cast<std::size_t>(size));
-                }
-                auto size = 0;
-                auto str = CodepointToUTF8(codepoints[count - 1], &size);
-                auto suitText = std::string(str, gsl::narrow_cast<std::size_t>(size));
-                ctx().fontM.DrawText(rankText, {textX, textY}, ctx().fontSizeM(), FontSpacing, textColor);
-                const auto rankSize = ctx().fontM.MeasureText(rankText, ctx().fontSizeM(), FontSpacing);
                 const auto suitColor = state == STATE_DISABLED ? r::Color::Red().Alpha(0.4f) : r::Color::Red();
-                ctx().fontM.DrawText(
-                    suitText.c_str(), {textX + rankSize.x, textY}, ctx().fontSizeM(), FontSpacing, suitColor);
+                drawRankAndSuitText(text, ctx().fontM, ctx().fontSizeM(), {textX, textY}, textColor, suitColor);
             } else {
                 ctx().fontM.DrawText(text, {textX, textY}, ctx().fontSizeM(), FontSpacing, textColor);
             }
             if (clicked and (state != STATE_DISABLED)) {
-                ctx().bidding.bid = bid;
-                ctx().myPlayer().bid = bid;
-                if (bid != PREF_PASS) { ctx().bidding.rank = rank; }
-                ctx().bidding.isVisible = false;
-                if (finalBid) {
-                    sendDiscardTalon(std::string{bid});
-                } else {
-                    sendBidding(std::string{bid});
-                }
+                sendBid(std::string{bid}, finalBid, rank);
                 return;
             }
         }
@@ -2201,8 +2271,9 @@ auto drawMiserCards() -> void
 
 auto drawWhistingOrMiserMenu() -> void
 {
-    const auto checkHalfWhist
-        = [&](const GameText text) { return ctx().whisting.canHalfWhist or text != GameText::HalfWhist; };
+    const auto checkHalfWhist = [&](const GameText text) {
+        return ctx().whisting.canHalfWhist ? text != GameText::Pass : text != GameText::HalfWhist;
+    };
     const auto click = [&](GameText buttonName) {
         ctx().whisting.isVisible = false;
         ctx().whisting.choice = localizeText(buttonName, GameLang::English);
@@ -2212,8 +2283,31 @@ auto drawWhistingOrMiserMenu() -> void
     if (isMiser()) {
         drawMenu(MiserButtons, ctx().whisting.isVisible, click, checkHalfWhist);
     } else {
-        // TODO: Don't draw Pass if can Half-Whist
         drawMenu(WhistingButtons, ctx().whisting.isVisible, click, checkHalfWhist);
+    }
+    // TODO: draw player's name whose bid is
+    static const auto& font = ctx().fontL;
+    static const auto fontSize = ctx().fontSizeL();
+    static const auto pos = r::Vector2{VirtualW * 0.5f, BorderMargin + fontSize * 0.5f};
+    const auto bids = ctx().players | rv::values | rv::transform(&Player::bid);
+    const auto ranks = bids
+        | rv::filter(notEqualTo(PREF_PASS))
+        | rv::filter(notEqualTo(""))
+        | rv::transform(&bidRank)
+        | rng::to_vector;
+    const auto bid = std::empty(ranks) ? ctx().bidding.bid : BidsRank[rng::max(ranks)];
+    const auto isPassGame = rng::all_of(bids, equalTo(PREF_PASS));
+    const auto text = isPassGame and ctx().bidding.passRound != 0
+        ? ctx().localizeText(GameText::Passing) + prettifyNumber(ctx().bidding.passRound)
+        : std::string{ctx().localizeBid(bid)};
+    if (isRedSuit(text)) {
+        const auto textSize = font.MeasureText(text, fontSize, FontSpacing);
+        const auto textPos = r::Vector2{pos.x - textSize.x * 0.5f, pos.y - textSize.y * 0.5f};
+        drawRankAndSuitText(text, font, fontSize, textPos, getGuiColor(TEXT_COLOR_NORMAL), r::Color::Red());
+    } else {
+        withGuiFont(font, [&] {
+            withGuiStyle(DEFAULT, TEXT_SIZE, static_cast<int>(fontSize), [&] { drawGuiLabelCentered(text, pos); });
+        });
     }
 }
 
@@ -2260,10 +2354,11 @@ auto handleCardClick(std::list<const Card*>& hand, std::invocable<const Card&> a
     const auto ascii = rv::closed_iota(0x20, 0x7E); // space..~
     const auto cyrillic = rv::closed_iota(0x0410, 0x044F); // А..я
     const auto extras = makeCodepoints( // clang-format off
-        "Ё", "ё", "Ґ", "ґ", "Є", "є", "І", "і", "Ї", "ї", "è", "’", "—",
-        PREF_SPADE, PREF_CLUB, PREF_HEART, PREF_DIAMOND, PREF_ARROW_RIGHT,
-        PREF_TRICKS_01, PREF_TRICKS_02, PREF_TRICKS_03, PREF_TRICKS_04, PREF_TRICKS_05,
-        PREF_TRICKS_06, PREF_TRICKS_07, PREF_TRICKS_08, PREF_TRICKS_09, PREF_TRICKS_10
+        "Ё", "ё", "Ґ", "ґ", "Є", "є", "І", "і", "Ї", "ї", "è", "é",
+        "♠", "♣", "♦", "♥", "’", "—",
+        PREF_SPADE, PREF_CLUB, PREF_HEART, PREF_DIAMOND, PREF_ARROW_RIGHT, PREF_FOREHAND_SIGN,
+        PREF_NUMBER_01, PREF_NUMBER_02, PREF_NUMBER_03, PREF_NUMBER_04, PREF_NUMBER_05,
+        PREF_NUMBER_06, PREF_NUMBER_07, PREF_NUMBER_08, PREF_NUMBER_09, PREF_NUMBER_10
     ); // clang-format on
     return rv::concat(ascii, cyrillic, extras) | rng::to_vector;
 }
@@ -2271,8 +2366,9 @@ auto handleCardClick(std::list<const Card*>& hand, std::invocable<const Card&> a
 [[nodiscard]] auto makeCodepointsLarge() -> std::vector<int>
 {
     const auto codepoints = makeCodepoints();
-    const auto cards = rv::closed_iota(0x1F0A1, 0x1F0DE);
-    return rv::concat(codepoints, cards) | rng::to_vector;
+    const auto cards = rv::closed_iota(PREF_ACE_OF_SPADES_CARD, PREF_KING_OF_CLUBS_CARD);
+    const auto avatars = makeCodepoints(PREF_MOUSE_FACE, PREF_COW_FACE, PREF_CAT_FACE, PREF_MONKEY_FACE);
+    return rv::concat(codepoints, cards, avatars) | rng::to_vector;
 }
 
 [[nodiscard]] auto makeAwesomeCodepoints()
@@ -2321,6 +2417,7 @@ auto loadFonts() -> void
 
 auto loadColorScheme(const std::string_view style) -> void
 {
+    // TODO: highlighted a loaded scheme at startup
     const auto name = style | ToLower | ToString;
     const auto stylePath = resources("styles", fmt::format("style_{}.rgs", name));
     GuiLoadStyle(stylePath.c_str());
@@ -2912,7 +3009,7 @@ auto handleMousePress() -> void
     ctx().bidding.isVisible = true;
 }
 
-// Prevent interaction with other buttons during settings menu movement
+// TODO: Prevent interaction with other buttons during settings menu movement
 template<typename Menu>
 auto updateMenuPosition(Menu& menu) -> void
 {
@@ -2936,8 +3033,31 @@ auto updateMenuPosition(Menu& menu) -> void
     if (r::Mouse::IsButtonReleased(MOUSE_LEFT_BUTTON)) { menu.moving = false; };
 }
 
+auto needsDraw() -> bool
+{
+    const auto deltaMouse = r::Mouse::GetDelta();
+    const auto now = emscripten_get_now();
+    const auto timeToDraw = now >= ctx().tick;
+    static constexpr auto fps = 36.0;
+    static constexpr auto deltaTime = 1.0 / fps * 1000.0;
+    if (timeToDraw) { ctx().tick = now + deltaTime; }
+    if (not ctx().needsDraw
+        && ((deltaMouse.x != 0.0f or deltaMouse.y != 0.0f)
+            or timeToDraw
+            or r::Mouse::IsButtonPressed(MOUSE_LEFT_BUTTON)
+            or r::Mouse::IsButtonReleased(MOUSE_LEFT_BUTTON)
+            or r::Mouse::IsButtonDown(MOUSE_LEFT_BUTTON)
+            or r::Keyboard::IsKeyPressed(KEY_ENTER)
+            or r::Keyboard::IsKeyPressed(KEY_ESCAPE)
+            or ctx().window.IsResized())) {
+        ctx().needsDraw = true;
+    }
+    return ctx().needsDraw;
+}
+
 auto updateDrawFrame([[maybe_unused]] void* ud) -> void
 {
+    if (not needsDraw()) { return; }
     if (GuiIsLocked()
         and not ctx().settingsMenu.moving
         and not ctx().speechBubbleMenu.moving
@@ -2969,7 +3089,7 @@ auto updateDrawFrame([[maybe_unused]] void* ud) -> void
         drawSpeechBubbleButton();
         drawOverallScoreboardButton();
     } else {
-        drawConnectedPlayersPanel();
+        drawConnectedPlayers();
     }
     drawSettingsButton();
     drawFullScreenButton();
@@ -2991,6 +3111,7 @@ auto updateDrawFrame([[maybe_unused]] void* ud) -> void
             -static_cast<float>(ctx().target.GetTexture().height)}, // flip vertically
         r::Rectangle{ctx().offsetX, ctx().offsetY, VirtualW * ctx().scale, VirtualH * ctx().scale});
     ctx().window.EndDrawing();
+    ctx().needsDraw = false;
 }
 
 constexpr auto usage = R"(
@@ -3011,6 +3132,7 @@ int main(const int argc, const char* const argv[])
     spdlog::set_pattern("[%^%l%$][%!] %v");
     auto& ctx = pref::ctx();
     pref::updateWindowSize();
+    EnableEventWaiting();
     SetTextureFilter(ctx.target.texture, TEXTURE_FILTER_BILINEAR);
     pref::loadFromLocalStoragePlayerId();
     pref::loadFromLocalStorageAuthToken();
@@ -3026,30 +3148,18 @@ int main(const int argc, const char* const argv[])
     ctx.initialFont = GuiGetFont();
     pref::loadFonts();
     pref::loadCards();
-    emscripten_set_resize_callback(
-        EMSCRIPTEN_EVENT_TARGET_WINDOW,
-        nullptr,
-        true,
-        [](const int eventType, [[maybe_unused]] const EmscriptenUiEvent* e, [[maybe_unused]] void* ud) {
-            PREF_I("{}", pref::htmlEvent(eventType));
-            pref::updateWindowSize();
-            return EM_TRUE;
-        });
-    emscripten_set_fullscreenchange_callback(
-        EMSCRIPTEN_EVENT_TARGET_WINDOW,
-        nullptr,
-        true,
-        [](const int eventType, [[maybe_unused]] const EmscriptenFullscreenChangeEvent* e, [[maybe_unused]] void* ud) {
-            PREF_I("{}", pref::htmlEvent(eventType));
-            pref::updateWindowSize();
-            return EM_FALSE;
-        });
-
+    const auto resize
+        = []([[maybe_unused]] const int eventType, [[maybe_unused]] const auto* e, [[maybe_unused]] void* ud) {
+              pref::updateWindowSize();
+              return EM_TRUE;
+          };
+    emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, true, resize);
+    emscripten_set_fullscreenchange_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, true, resize);
     if (not std::empty(ctx.myPlayerId) and not std::empty(ctx.authToken)) {
         ctx.isLoginInProgress = true;
         pref::setupWebsocket();
     }
-    emscripten_set_main_loop_arg(pref::updateDrawFrame, nullptr, 0, true);
+    emscripten_set_main_loop_arg(pref::updateDrawFrame, nullptr, 60, true);
     emscripten_websocket_deinitialize();
     return 0;
 }
