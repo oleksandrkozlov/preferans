@@ -55,6 +55,7 @@ struct Player {
     std::string whistingChoice;
     std::string howToPlayChoice;
     int tricksTaken{};
+    ReadyCheckState readyCheckState = ReadyCheckState::NOT_REQUESTED;
 
     auto clear() -> void
     {
@@ -64,6 +65,7 @@ struct Player {
         whistingChoice.clear();
         howToPlayChoice.clear();
         tricksTaken = 0;
+        readyCheckState = ReadyCheckState::NOT_REQUESTED;
     }
 };
 

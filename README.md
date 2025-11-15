@@ -123,7 +123,7 @@ Bundled assets keep their original licenses and are **not** covered by AGPL.
 
 - **Cards**: [Public Domain](client/resources/cards/LICENSE)
 - **Fonts**: [DejaVu / Font Awesome Free (OFL)](client/resources/fonts/LICENSE)
-- **Styles**: [zlib](client/resources/styles/LICENSE)
 - **Shell**: [MIT](client/resources/html/LICENSE)
+- **Styles**: [zlib](client/resources/styles/LICENSE)
 
 © 2025 Oleksandr Kozlov — AGPL-3.0-only

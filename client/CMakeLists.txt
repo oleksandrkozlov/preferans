@@ -66,14 +66,21 @@ if(NOT DEFINED CMAKE_WEBSOCKET_URL)
 endif()
 configure_file(${PREF_INDEX_HTML}.in ${PREF_INDEX_HTML} @ONLY)
 configure_file(resources/cards/favicon.png ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/favicon.ico COPYONLY)
-target_compile_options(client PRIVATE -fno-exceptions)
+
+if(CMAKE_BUILD_TYPE STREQUAL Debug)
+    target_link_options(client PRIVATE -sDISABLE_EXCEPTION_CATCHING=0)
+else()
+    target_link_options(client PRIVATE -sDISABLE_EXCEPTION_CATCHING=1)
+    target_compile_options(client PRIVATE -fno-exceptions)
+endif()
+
 target_link_options(
     client
     PRIVATE
+    -sSTACK_SIZE=1048576
     -sINITIAL_MEMORY=128MB
     -sALLOW_MEMORY_GROWTH=0
-    -sDISABLE_EXCEPTION_CATCHING
-    -sEXPORTED_RUNTIME_METHODS=requestFullscreen
+    -sEXPORTED_RUNTIME_METHODS=requestFullscreen,HEAPF32
     --shell-file
     ${PREF_INDEX_HTML}
     --preload-file

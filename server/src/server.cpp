@@ -12,6 +12,7 @@
 #include "serialization.hpp"
 
 #include <boost/beast.hpp>
+#include <range/v3/algorithm/all_of.hpp>
 #include <range/v3/all.hpp>
 
 #include <algorithm>
@@ -417,9 +418,9 @@ auto dealFinished() -> Awaitable<>
     return GameStage::BIDDING;
 }
 
-auto maybeStartGame() -> Awaitable<>
+auto startGame() -> Awaitable<>
 {
-    if (std::size(ctx().players) != NumberOfPlayers) { co_return; }
+    assert(std::size(ctx().players) == NumberOfPlayers);
     // TODO: use UTC on the server and local time zone on the client
     ctx().gameStarted = localTimeSinceEpochInSec();
     ++ctx().gameId;
@@ -476,7 +477,6 @@ auto handleLoginRequest(const Message& msg, const ChannelPtr& ch) -> Awaitable<P
         co_return session;
     }
     co_await sendPlayerJoined(session);
-    co_await maybeStartGame();
     co_return session;
 }
 
@@ -506,7 +506,6 @@ auto handleAuthRequest(const Message& msg, const ChannelPtr& ch) -> Awaitable<Pl
         co_return session;
     }
     co_await sendPlayerJoined(session);
-    co_await maybeStartGame();
     co_return session;
 }
 
@@ -519,6 +518,25 @@ auto handleLogout(const Message& msg) -> Awaitable<>
     revokeAuthToken(ctx().gameData, playerId, toServerAuthToken(logout->auth_token()));
     storeGameData(ctx().gameDataPath, ctx().gameData);
     co_await removePlayer(playerId);
+}
+
+auto handleReadyCheck(const Message& msg) -> Awaitable<>
+{
+    auto readyCheck = makeMethod<ReadyCheck>(msg);
+    if (not readyCheck) { co_return; }
+    const auto& playerId = readyCheck->player_id();
+    const auto& state = readyCheck->state();
+    PREF_I("{}, state: {}", PREF_V(playerId), ReadyCheckState_Name(state));
+    if (state == ReadyCheckState::REQUESTED) {
+        for (auto& readyCheckState : ctx().players | rv::values | rv::transform(&Player::readyCheckState)) {
+            readyCheckState = ReadyCheckState::NOT_REQUESTED;
+        }
+    }
+    ctx().player(playerId).readyCheckState = (state == ReadyCheckState::REQUESTED) ? ReadyCheckState::ACCEPTED : state;
+    co_await forwardToAllExcept(msg, playerId);
+    if (rng::all_of(ctx().players | rv::values, equalTo(ReadyCheckState::ACCEPTED), &Player::readyCheckState)) {
+        co_await startGame();
+    }
 }
 
 auto handleBidding(const Message& msg) -> Awaitable<>
@@ -778,6 +796,7 @@ auto dispatchMessage(const ChannelPtr& ch, PlayerSession& session, std::optional
     if (method == "AuthRequest") { session = co_await handleAuthRequest(*msg, ch); co_return; }
     if (session.id == 0) { co_return; }
     if (method == "Logout") { co_await handleLogout(*msg); co_return; }
+    if (method == "ReadyCheck") { co_await handleReadyCheck(*msg); co_return; }
     if (method == "Bidding") { co_await handleBidding(*msg); co_return; }
     if (method == "DiscardTalon") { co_await handleDiscardTalon(*msg); co_return; }
     if (method == "Whisting") { co_await handleWhisting(*msg); co_return; }

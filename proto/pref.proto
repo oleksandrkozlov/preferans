@@ -47,6 +47,18 @@ message PlayerLeft {
   string player_id = 1;
 }
 
+enum ReadyCheckState {
+  NOT_REQUESTED = 0;
+  REQUESTED = 1;
+  ACCEPTED = 2;
+  DECLINED = 3;
+}
+
+message ReadyCheck {
+  string player_id = 1;
+  ReadyCheckState state = 2;
+}
+
 message Forehand {
   string player_id = 1;
 }

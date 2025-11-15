@@ -111,6 +111,9 @@ inline constexpr auto PREF_ACE_OF_HEARTS_CARD = 0x1F0B1;
 #define PREF_ACE_OF_DIAMONDS PREF_ACE PREF_OF_ PREF_DIAMONDS
 #define PREF_ACE_OF_HEARTS PREF_ACE PREF_OF_ PREF_HEARTS
 
+#define PREF_OK_CLICK 1
+#define PREF_NO_CLICK -1
+
 // clang-format off
 #define PREF_CARDS \
     PREF_X(PREF_SEVEN_OF_SPADES) PREF_X(PREF_SEVEN_OF_CLUBS) PREF_X(PREF_SEVEN_OF_DIAMONDS) PREF_X(PREF_SEVEN_OF_HEARTS) \
@@ -205,6 +208,7 @@ enum class GameLang : std::size_t {
 
 #define PREF_GAME_TEXT                                                                                                 \
     PREF_X(None, "", "", "")                                                                                           \
+    PREF_X(ACCEPT, "ACCEPT", "ПРИЙНЯТИ", "ПРИНЯТЬ")                                                                    \
     PREF_X(Alternative, "Alternative", "Альтернативна", "Альтернативный")                                              \
     PREF_X(Amber, "Amber", "Бурштин", "Янтарь")                                                                        \
     PREF_X(Bluish, "Bluish", "Блакитний", "Голубоватый")                                                               \
@@ -215,6 +219,7 @@ enum class GameLang : std::size_t {
     PREF_X(Cyber, "Cyber", "Кібер", "Кибер")                                                                           \
     PREF_X(Dark, "Dark", "Темний", "Тёмный")                                                                           \
     PREF_X(Date, "DATE", "ДАТА", "ДАТА")                                                                               \
+    PREF_X(DECLINE, "DECLINE", "ВІДХИЛИТИ", "ОТКЛОНИТЬ")                                                               \
     PREF_X(Draw, "Draw", "Нічия", "Ничья")                                                                             \
     PREF_X(Duration, "DURATION", "ТРИВАЛІСТЬ", "ДЛИТЕЛЬНОСТЬ")                                                         \
     PREF_X(English, "English", "Англійська", "Английский")                                                             \
@@ -245,6 +250,7 @@ enum class GameLang : std::size_t {
     PREF_X(Send, "Send", "Надіслати", "Отправить")                                                                     \
     PREF_X(Settings, "SETTINGS", "НАЛАШТУВАННЯ", "НАСТРОЙКИ")                                                          \
     PREF_X(ShowFps, "Show Ping & FPS", "Показувати пінг та част. кадрів", "Показывать пинг и част. кадров")            \
+    PREF_X(PLAY, "PLAY", "ГРАТИ", "ИГРАТЬ")                                                                            \
     PREF_X(Time, "TIME", "ЧАС", "ВРЕМЯ")                                                                               \
     PREF_X(Total, "TOTAL", "УСЬОГО", "ВСЕГО")                                                                          \
     PREF_X(Trust, PREF_TRUST, "Довіряю", "Доверяю")                                                                    \

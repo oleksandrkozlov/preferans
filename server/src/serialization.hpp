@@ -88,6 +88,15 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
     return makeMessage(result).SerializeAsString();
 }
 
+[[nodiscard]] inline auto makeReadyCheck(const PlayerId& playerId, const ReadyCheckState state) -> std::string
+{
+    PREF_I("{}, state: {}", PREF_V(playerId), ReadyCheckState_Name(state));
+    auto result = ReadyCheck{};
+    result.set_player_id(playerId);
+    result.set_state(state);
+    return makeMessage(result).SerializeAsString();
+}
+
 [[nodiscard]] inline auto makeForehand(const PlayerId& playerId) -> std::string
 {
     PREF_DI(playerId);

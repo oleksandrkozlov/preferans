@@ -13,6 +13,8 @@
 #include <emscripten/val.h>
 #include <emscripten/websocket.h>
 #include <range/v3/all.hpp>
+
+#include <utility>
 #define RAYGUI_TEXTSPLIT_MAX_ITEMS 128
 #define RAYGUI_TEXTSPLIT_MAX_TEXT_SIZE 8192
 #define RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT 36
@@ -98,10 +100,7 @@ enum class Shift : std::uint8_t {
     return (value & flag) == flag;
 }
 
-enum class DrawPosition {
-    Left,
-    Right,
-};
+enum class DrawPosition { Left, Right };
 
 [[nodiscard]] constexpr auto isRight(const DrawPosition drawPosition) noexcept -> bool
 {
@@ -117,6 +116,16 @@ template<typename... Args>
 [[nodiscard]] auto resources(Args&&... args) -> std::string
 {
     return (fs::path("resources") / ... / std::forward<Args>(args)).string();
+}
+
+[[nodiscard]] auto sounds(const std::string_view name) -> std::string
+{
+    return resources("sounds", name);
+}
+
+[[nodiscard]] auto fonts(const std::string_view name) -> std::string
+{
+    return resources("fonts", name);
 }
 
 struct Card {
@@ -183,6 +192,7 @@ struct Player {
     std::string howToPlayChoice;
     PlayerId playsOnBehalfOf;
     int tricksTaken{};
+    ReadyCheckState readyCheckState = ReadyCheckState::NOT_REQUESTED;
 };
 
 struct BiddingMenu {
@@ -420,7 +430,7 @@ struct MiserCardsPanel {
 };
 
 struct Ping {
-    static constexpr auto IntervalInMs = 15'000; // 15s;
+    static constexpr auto Interval = 15s; // 15s;
     static constexpr auto InvalidRtt = -1;
     std::unordered_map<std::int32_t, double> sentAt;
     double rtt = static_cast<double>(InvalidRtt);
@@ -481,6 +491,25 @@ struct PassGameTalon {
     }
 };
 
+struct StartGameButton {
+    bool isVisible{};
+};
+
+struct ReadyCheckPopUp {
+    bool isVisible{};
+};
+
+struct Sound {
+    r::Sound gameAboutToStarted{sounds("game_about_to_start.mp3")};
+    r::Sound gameStarted{sounds("game_started.mp3")};
+    r::Sound messageReceived{sounds("message_received.mp3")};
+    r::Sound readyCheckAccepted{sounds("ready_check_accepted.mp3")};
+    r::Sound readyCheckDeclined{sounds("ready_check_declined.mp3")};
+    r::Sound readyCheckReceived{sounds("ready_check_received.mp3")};
+    r::Sound readyCheckRequested{sounds("ready_check_requested.mp3")};
+    r::Sound readyCheckSucceeded{sounds("ready_check_succeeded.mp3")};
+};
+
 struct Context {
     r::Font fontS;
     r::Font fontM;
@@ -495,6 +524,8 @@ struct Context {
     int windowHeight = static_cast<int>(VirtualH);
     r::Window window{windowWidth, windowHeight, "Preferans"};
     r::RenderTexture target{static_cast<int>(VirtualW), static_cast<int>(VirtualH)};
+    r::AudioDevice audio;
+    Sound sound;
     PlayerId myPlayerId;
     PlayerName myPlayerName;
     std::string password;
@@ -523,12 +554,15 @@ struct Context {
     OverallScoreboard overallScoreboard;
     MiserCardsPanel miserCardsPanel;
     LogoutMessage logoutMessage;
+    StartGameButton startGameButton;
+    ReadyCheckPopUp readyCheckPopUp;
     Ping ping;
     std::string url;
     std::map<CardNameView, r::Vector2> cardPositions;
     bool isGameFreezed{};
     bool needsDraw = true;
     double tick = 0.0;
+    bool isGameStarted{};
 
     auto clear() -> void
     {
@@ -616,6 +650,11 @@ struct Context {
     return ctx;
 }
 
+[[nodiscard]] auto players() -> decltype(auto)
+{
+    return ctx().players | rv::values;
+}
+
 [[nodiscard]] auto loadFromLocalStorage(const std::string_view key) -> std::string
 {
     char buffer[128] = {};
@@ -701,8 +740,7 @@ auto removeFromLocalStorageAuthToken() -> void
 
 [[nodiscard]] auto isSomeonePlayingOnBehalfOf(const PlayerId& playerId) -> bool
 {
-    return not std::empty(playerId)
-        and rng::any_of(ctx().players | rv::values, equalTo(playerId), &Player::playsOnBehalfOf);
+    return not std::empty(playerId) and rng::any_of(players(), equalTo(playerId), &Player::playsOnBehalfOf);
 }
 
 [[nodiscard]] auto isSomeonePlayingOnMyBehalf() -> bool
@@ -789,6 +827,14 @@ auto sendMessage(const EMSCRIPTEN_WEBSOCKET_T ws, const Message& msg) -> bool
     auto result = Logout{};
     result.set_player_id(playerId);
     result.set_auth_token(authToken);
+    return result;
+}
+
+[[nodiscard]] auto makeReadyCheck(const PlayerId& playerId, const ReadyCheckState& state) -> ReadyCheck
+{
+    auto result = ReadyCheck{};
+    result.set_player_id(playerId);
+    result.set_state(state);
     return result;
 }
 
@@ -879,6 +925,11 @@ auto sendLogout() -> void
     sendMessage(ctx().ws, makeMessage(makeLogout(ctx().myPlayerId, ctx().authToken)));
 }
 
+auto sendReadyCheck(const ReadyCheckState state) -> void
+{
+    sendMessage(ctx().ws, makeMessage(makeReadyCheck(ctx().myPlayerId, state)));
+}
+
 auto sendBidding(const std::string& bid) -> void
 {
     sendMessage(ctx().ws, makeMessage(makeBidding(ctx().myPlayerId, bid)));
@@ -919,11 +970,31 @@ auto sendSpeechBubble(const std::string& text) -> void
     return sendMessage(ctx().ws, makeMessage(makePingPong(id)));
 }
 
+template<typename Rep, typename Period, typename Func>
+auto waitFor(const std::chrono::duration<Rep, Period> duration, Func func, void* ud) -> void
+{
+    emscripten_async_call(
+        func, ud, static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(duration).count()));
+}
+
+template<typename Rep, typename Period, typename Func>
+auto waitFor(const std::chrono::duration<Rep, Period> duration, Func func) -> void
+{
+    waitFor(
+        duration,
+        [](void* ud) {
+            auto* f = static_cast<std::function<void()>*>(ud);
+            const auto _ = gsl::finally([&] { delete f; });
+            (*f)();
+        },
+        new std::function<void()>{std::move(func)});
+}
+
 auto repeatPingPong() -> void;
 
 auto shedulePingPong() -> void
 {
-    emscripten_async_call([]([[maybe_unused]] void* ud) { repeatPingPong(); }, nullptr, Ping::IntervalInMs);
+    waitFor(Ping::Interval, [] { repeatPingPong(); });
 }
 
 auto repeatPingPong() -> void
@@ -945,6 +1016,7 @@ auto finishLogin(auto& response) -> void
         auto player = Player{*p.mutable_player_id(), std::move(*p.mutable_player_name())};
         ctx().players.insert_or_assign(std::move(*p.mutable_player_id()), std::move(player));
     }
+    if (ctx().areAllPlayersJoined()) { ctx().startGameButton.isVisible = true; }
     repeatPingPong();
     ctx().isLoggedIn = true;
     ctx().isLoginInProgress = false;
@@ -964,6 +1036,80 @@ auto handleLoginResponse(const Message& msg) -> void
     saveToLocalStoragePlayerId();
     saveToLocalStorageAuthToken();
     finishLogin(*loginResponse);
+}
+
+[[nodiscard]] auto isReadyCheckSucceeded() -> bool
+{
+    return rng::all_of(players(), equalTo(ReadyCheckState::ACCEPTED), &Player::readyCheckState);
+}
+
+auto resetReadyCehck() -> void
+{
+    for (auto& player : players()) { player.readyCheckState = ReadyCheckState::NOT_REQUESTED; }
+}
+
+auto startReadyCheck(const PlayerId& playerId) -> void
+{
+    ctx().startGameButton.isVisible = false;
+    resetReadyCehck();
+    ctx().player(playerId).readyCheckState = ReadyCheckState::ACCEPTED;
+    if (playerId == ctx().myPlayerId) {
+        ctx().sound.readyCheckRequested.Play();
+    } else {
+        ctx().sound.readyCheckReceived.Play();
+    }
+}
+
+auto whenReadyCheckDeclined(const PlayerId& playerId) -> void
+{
+    if (ctx().player(playerId).readyCheckState != ReadyCheckState::DECLINED) { return; }
+    ctx().startGameButton.isVisible = true;
+    ctx().readyCheckPopUp.isVisible = false;
+    ctx().sound.readyCheckAccepted.Stop();
+    ctx().sound.readyCheckReceived.Stop();
+    ctx().sound.readyCheckRequested.Stop();
+    ctx().sound.readyCheckDeclined.Play();
+}
+
+auto readyCheckSucceeded() -> void
+{
+    assert(not ctx().startGameButton.isVisible);
+    assert(not ctx().readyCheckPopUp.isVisible);
+    ctx().sound.readyCheckAccepted.Stop();
+    ctx().sound.readyCheckReceived.Stop();
+    ctx().sound.readyCheckRequested.Stop();
+    ctx().sound.readyCheckSucceeded.Play();
+}
+
+[[nodiscard]] auto isReadyCheckAccepted(const PlayerId& playerId) -> bool
+{
+    return ctx().player(playerId).readyCheckState == ReadyCheckState::ACCEPTED;
+}
+
+auto evaluateReadyCheck(const PlayerId& playerId) -> void
+{
+    if (isReadyCheckSucceeded()) {
+        readyCheckSucceeded();
+    } else if (isReadyCheckAccepted(playerId) and not ctx().sound.readyCheckReceived.IsPlaying()) {
+        ctx().sound.readyCheckAccepted.Play();
+    } else {
+        whenReadyCheckDeclined(playerId);
+    }
+}
+
+auto handleReadyCheck(const Message& msg) -> void
+{
+    auto readyCheck = makeMethod<ReadyCheck>(msg);
+    if (not readyCheck) { return; }
+    const auto& playerId = readyCheck->player_id();
+    ctx().player(playerId).readyCheckState = readyCheck->state();
+    PREF_I("{}, state: {}", PREF_V(playerId), ReadyCheckState_Name(ctx().player(playerId).readyCheckState));
+    if (ctx().player(playerId).readyCheckState == ReadyCheckState::REQUESTED) {
+        ctx().readyCheckPopUp.isVisible = true;
+        startReadyCheck(playerId);
+        return;
+    }
+    evaluateReadyCheck(playerId);
 }
 
 auto handleAuthResponse(const Message& msg) -> void
@@ -993,6 +1139,7 @@ auto handlePlayerJoined(const Message& msg) -> void
     PREF_I("New player playerJoined: {} ({})", playerJoinedName, playerJoinedId);
     auto player = Player{playerJoinedId, std::move(playerJoinedName)};
     ctx().players.insert_or_assign(std::move(playerJoinedId), std::move(player));
+    if (ctx().areAllPlayersJoined()) { ctx().startGameButton.isVisible = true; }
 }
 
 auto handlePlayerLeft(const Message& msg) -> void
@@ -1004,8 +1151,7 @@ auto handlePlayerLeft(const Message& msg) -> void
 
 [[nodiscard]] auto isMiser() -> bool
 {
-    return rng::any_of(
-        ctx().players | rv::values, [](const std::string_view bid) { return bid.contains(PREF_MIS); }, &Player::bid);
+    return rng::any_of(players(), [](const std::string_view bid) { return bid.contains(PREF_MIS); }, &Player::bid);
 }
 
 auto handleForehand(const Message& msg) -> void
@@ -1019,6 +1165,14 @@ auto handleForehand(const Message& msg) -> void
 
 auto handleDealCards(const Message& msg) -> void
 {
+    if (not ctx().isGameStarted) {
+        waitFor(1s, [] { ctx().sound.gameAboutToStarted.Play(); });
+        waitFor(3s, [] {
+            ctx().isGameStarted = true;
+            resetReadyCehck();
+            ctx().sound.gameStarted.Play();
+        });
+    }
     auto dealCards = makeMethod<DealCards>(msg);
     if (not dealCards) { return; }
     const auto& playerId = dealCards->player_id();
@@ -1161,7 +1315,8 @@ auto handleTrickFinished(const Message& msg) -> void
     const auto trickFinished = makeMethod<TrickFinished>(msg);
     if (not trickFinished) { return; }
     ctx().isGameFreezed = true;
-    emscripten_async_call(
+    waitFor(
+        1s,
         [](void* ud) {
             assert(ud != nullptr);
             auto trickFinished = static_cast<TrickFinished*>(ud);
@@ -1186,8 +1341,7 @@ auto handleTrickFinished(const Message& msg) -> void
             rng::sort(ctx().lastTrickOrTalon, cardLess());
             ctx().cardsOnTable.clear();
         },
-        new TrickFinished{*trickFinished},
-        1000);
+        new TrickFinished{*trickFinished});
 }
 
 auto handleDealFinished(const Message& msg) -> void
@@ -1211,6 +1365,7 @@ auto handleSpeechBubble(const Message& msg) -> void
     const auto speechBubble = makeMethod<SpeechBubble>(msg);
     if (not speechBubble) { return; }
     ctx().speechBubbleMenu.text.insert_or_assign(speechBubble->player_id(), speechBubble->text());
+    ctx().sound.messageReceived.Play();
 }
 
 auto handlePingPong(const Message& msg) -> void
@@ -1332,6 +1487,7 @@ auto updateWindowSize() -> void
     PREF_X(PlayerJoined) \
     PREF_X(PlayerLeft) \
     PREF_X(PlayerTurn) \
+    PREF_X(ReadyCheck) \
     PREF_X(SpeechBubble) \
     PREF_X(TrickFinished) \
     PREF_X(UserGames) \
@@ -1404,7 +1560,7 @@ auto onWsClosed([[maybe_unused]] const int eventType, const EmscriptenWebSocketC
     }
     // TODO: draw error message: e.g., server is down, etc.
     if (not e->wasClean and ctx().isLoggedIn) {
-        emscripten_async_call([]([[maybe_unused]] void* ud) { setupWebsocket(); }, nullptr, 2000);
+        waitFor(2s, [] { setupWebsocket(); });
         // TODO: stop reconnection attempts at some point
     }
     return EM_TRUE;
@@ -1533,9 +1689,9 @@ auto drawSpeechBubbleText(const r::Vector2& p3, const std::string& text, const D
     ctx().fontM.DrawText(text.c_str(), {rect.x + padding, rect.y + padding}, fontSize, FontSpacing, colorText);
 }
 
-auto drawGameplayScreen() -> void
+auto drawWelcomeScreen() -> void
 {
-    if (ctx().areAllPlayersJoined()) { return; }
+    if (ctx().isGameStarted) { return; }
     const auto title = ctx().localizeText(GameText::Preferans);
     const auto textSize = ctx().fontL.MeasureText(title, ctx().fontSizeL(), FontSpacing);
     const auto x = (VirtualW - textSize.x) * 0.5f;
@@ -1642,8 +1798,8 @@ auto drawLogoutMessage() -> void
             ctx().localizeText(GameText::No));
         return GuiMessageBox(messageBox, logoutText.c_str(), areYouSureText.c_str(), yesNoText.c_str());
     });
-    if (clicked == -1) { return; }
-    if (clicked == 1) {
+    if (clicked == PREF_NO_CLICK) { return; }
+    if (clicked == PREF_OK_CLICK) {
         sendLogout();
         ctx().authToken.clear();
         removeFromLocalStoragePlayerId();
@@ -1654,26 +1810,47 @@ auto drawLogoutMessage() -> void
     ctx().logoutMessage.isVisible = false;
 }
 
+[[maybe_unused]] auto drawMessageBox(
+    const r::Vector2& pos, const std::string& title, const std::string& message, const std::string& buttons) -> int
+{
+    static constexpr auto boxWidth = VirtualW / 5.f;
+    static constexpr auto boxHeight = RAYGUI_TEXTINPUTBOX_HEIGHT;
+    static constexpr auto messageBoxWidth = boxWidth + RAYGUI_TEXTINPUTBOX_BUTTON_PADDING * 2.f;
+    static constexpr auto messageBoxHeight = boxHeight * 4.5f;
+    const auto rect = r::Rectangle{
+        pos.x - messageBoxWidth * 0.5f, pos.y - messageBoxHeight * 0.5f, messageBoxWidth, messageBoxHeight};
+    return withGuiFont(
+        ctx().fontS, [&] { return GuiMessageBox(rect, title.c_str(), message.c_str(), buttons.c_str()); });
+}
+
 auto drawConnectedPlayers() -> void
 {
-    if (not ctx().isLoggedIn or ctx().areAllPlayersJoined()) { return; }
+    if (not ctx().isLoggedIn or ctx().isGameStarted) { return; }
     static constexpr auto pad = VirtualH * 0.007f;
     static constexpr auto fontSpacingX = VirtualH * 0.02f;
     static const auto& fontName = ctx().fontM;
     static const auto& fontAvatar = ctx().fontL;
     static const auto fontNameSize = ctx().fontSizeM();
     static const auto fontAvatarSize = ctx().fontSizeL() * 1.2f;
-    const auto [rectColor, textColor] = std::invoke([&] {
-        const auto light = getGuiColor(BACKGROUND_COLOR);
-        const auto dark = getGuiColor(LABEL, TEXT_COLOR_NORMAL);
-        return (ctx().settingsMenu.loadedColorScheme == "bluish") ? std::pair{light, dark} : std::pair{dark, light};
+    const auto [rectColorDefault, textColorDefault] = std::invoke([&] -> std::pair<r::Color, r::Color> {
+        const auto& scheme = ctx().settingsMenu.loadedColorScheme;
+        if (scheme == "genesis") { return {getGuiColor(BORDER_COLOR_DISABLED), getGuiColor(TEXT_COLOR_FOCUSED)}; }
+        if (scheme == "amber") { return {getGuiColor(TEXT_COLOR_NORMAL), getGuiColor(TEXT_COLOR_PRESSED)}; }
+        if (scheme == "dark") { return {getGuiColor(BASE_COLOR_FOCUSED), getGuiColor(BASE_COLOR_NORMAL)}; }
+        if (scheme == "cyber") { return {getGuiColor(TEXT_COLOR_NORMAL), getGuiColor(BASE_COLOR_DISABLED)}; }
+        if (scheme == "jungle") { return {getGuiColor(TEXT_COLOR_NORMAL), getGuiColor(BASE_COLOR_NORMAL)}; }
+        if (scheme == "lavanda") { return {getGuiColor(TEXT_COLOR_NORMAL), getGuiColor(BASE_COLOR_NORMAL)}; }
+        if (scheme == "bluish") { return {getGuiColor(BASE_COLOR_PRESSED), getGuiColor(BORDER_COLOR_NORMAL)}; }
+        return {getGuiColor(TEXT_COLOR_NORMAL), getGuiColor(BASE_COLOR_NORMAL)};
     });
     static constexpr auto avatars = std::array{PREF_MOUSE_FACE, PREF_MONKEY_FACE, PREF_COW_FACE, PREF_CAT_FACE};
-    const auto players = rv::zip(ctx().players | rv::values | rv::transform(&Player::name), avatars);
+    const auto players = rv::zip(
+        pref::players() | rv::transform([](const auto& player) { return std::pair{player.id, player.name}; }), avatars);
     auto contentSizes = std::vector<r::Vector2>(std::size(players));
     auto maxSide = 0.0f;
-    for (auto&& [i, player] : players | rv::enumerate) {
-        const auto& [name, avatar] = player;
+    for (auto&& [i, playerWithAvatar] : players | rv::enumerate) {
+        const auto& [player, avatar] = playerWithAvatar;
+        const auto& [id, name] = player;
         const auto nameSize = fontName.MeasureText(name, fontNameSize, FontSpacing);
         const auto avatarSize = fontAvatar.MeasureText(avatar, fontAvatarSize, FontSpacing);
         const auto contentWidth = std::max(nameSize.x, avatarSize.x);
@@ -1686,8 +1863,31 @@ auto drawConnectedPlayers() -> void
     const auto totalWidth = maxSide * playerSize + fontSpacingX * (playerSize - 1.0f);
     const auto startX = (VirtualW - totalWidth) / 2.0f;
     const auto y = (VirtualH - maxSide) / 2.0f;
-    for (auto x = startX; auto&& [name, avatar] : players) {
-        r::Rectangle{x, y, maxSide, maxSide}.Draw(rectColor);
+    auto x = startX;
+    for (auto&& [player, avatar] : players) {
+        const auto& [id, name] = player;
+        const auto [rectColor, textColor] = std::invoke([&]() -> std::pair<r::Color, r::Color> {
+            const auto& scheme = ctx().settingsMenu.loadedColorScheme;
+            const auto state = ctx().player(id).readyCheckState;
+            if (state == ReadyCheckState::ACCEPTED) {
+                if (scheme == "genesis") { return {getGuiColor(TEXT_COLOR_PRESSED), getGuiColor(TEXT_COLOR_FOCUSED)}; }
+                if (scheme == "amber") { return {getGuiColor(BASE_COLOR_PRESSED), getGuiColor(TEXT_COLOR_PRESSED)}; }
+                if (scheme == "dark") { return {getGuiColor(BASE_COLOR_PRESSED), getGuiColor(TEXT_COLOR_FOCUSED)}; }
+                if (scheme == "cyber") { return {getGuiColor(BASE_COLOR_PRESSED), getGuiColor(BASE_COLOR_DISABLED)}; }
+                if (scheme == "jungle") { return {getGuiColor(TEXT_COLOR_FOCUSED), getGuiColor(BASE_COLOR_NORMAL)}; }
+                if (scheme == "lavanda") { return {getGuiColor(BASE_COLOR_PRESSED), getGuiColor(BASE_COLOR_NORMAL)}; }
+                if (scheme == "bluish") { return {getGuiColor(BASE_COLOR_PRESSED), getGuiColor(TEXT_COLOR_PRESSED)}; }
+                return {getGuiColor(BASE_COLOR_PRESSED), getGuiColor(TEXT_COLOR_PRESSED)};
+            }
+            if (state == ReadyCheckState::DECLINED) {
+                if (rng::contains(std::array{"genesis", "cyber", "jungle", "lavanda"}, scheme)) {
+                    return {getGuiColor(TEXT_COLOR_DISABLED), getGuiColor(BASE_COLOR_DISABLED)};
+                }
+                return {getGuiColor(BASE_COLOR_DISABLED), getGuiColor(TEXT_COLOR_DISABLED)};
+            }
+            return {rectColorDefault, textColorDefault};
+        });
+        drawRectangleWithBorder({x, y, maxSide, maxSide}, rectColor, textColor);
         const auto nameSize = fontName.MeasureText(name, fontNameSize, FontSpacing);
         const auto namePos = r::Vector2{x + (maxSide - nameSize.x) / 2.0f, y + maxSide - pad - nameSize.y};
         fontName.DrawText(name, namePos, fontNameSize, FontSpacing, textColor);
@@ -1696,8 +1896,33 @@ auto drawConnectedPlayers() -> void
         fontAvatar.DrawText(avatar, avatarPos, fontAvatarSize, FontSpacing, textColor);
         x += maxSide + fontSpacingX;
     }
-    drawGuiLabelCentered(
-        ctx().localizeText(GameText::CurrentPlayers), {VirtualW * 0.5f, y - fontSpacingX - ctx().fontSizeM()});
+    drawGuiLabelCentered(ctx().localizeText(GameText::CurrentPlayers), {VirtualW * 0.5f, y - ctx().fontSizeM()});
+    static const auto buttonW = (maxSide * static_cast<float>(NumberOfPlayers)) //
+        + (fontSpacingX * (static_cast<float>(NumberOfPlayers) - 1.f));
+    static const auto buttonH = maxSide * 0.5f;
+    static const auto acceptDenyButtonsW = (buttonW - fontSpacingX) * 0.5f;
+    static const auto buttonY = y + maxSide + (fontSpacingX * 2.f);
+    if (ctx().startGameButton.isVisible
+        and GuiButton(
+            {(VirtualW * 0.5f) - (buttonW * 0.5f), buttonY, buttonW, buttonH},
+            ctx().localizeText(GameText::PLAY).c_str())) {
+        sendReadyCheck(ReadyCheckState::REQUESTED);
+        startReadyCheck(ctx().myPlayerId);
+        return;
+    }
+    if (not ctx().readyCheckPopUp.isVisible) { return; }
+    const auto isAccepted
+        = GuiButton({startX, buttonY, acceptDenyButtonsW, buttonH}, ctx().localizeText(GameText::ACCEPT).c_str());
+    const auto isDeclined = GuiButton(
+        {startX + acceptDenyButtonsW + fontSpacingX, buttonY, acceptDenyButtonsW, buttonH},
+        ctx().localizeText(GameText::DECLINE).c_str());
+    if (not isAccepted and not isDeclined) { return; }
+    ctx().readyCheckPopUp.isVisible = false;
+    ctx().myPlayer().readyCheckState = (isAccepted) //
+        ? ReadyCheckState::ACCEPTED
+        : ReadyCheckState::DECLINED;
+    sendReadyCheck(ctx().myPlayer().readyCheckState);
+    evaluateReadyCheck(ctx().myPlayerId);
 }
 
 [[nodiscard]] auto isCardPlayable(const std::list<const Card*>& hand, const CardNameView clickedCardName) -> bool
@@ -1936,14 +2161,14 @@ auto drawSpeechBubble(const r::Vector2& pos, const PlayerId& playerId, const Dra
         return;
     }
     drawSpeechBubbleText(pos, ctx().speechBubbleMenu.text[playerId], drawPosition);
-    emscripten_async_call(
+    waitFor(
+        5s,
         [](void* ud) {
             auto id = static_cast<PlayerId*>(ud);
             auto _ = gsl::finally([&] { delete id; });
             ctx().speechBubbleMenu.text.erase(*id);
         },
-        new PlayerId{playerId},
-        5'000); // 5s
+        new PlayerId{playerId});
 }
 
 auto drawMyHand() -> void
@@ -1970,7 +2195,7 @@ auto drawMyHand() -> void
     // drawDebugDot(cardLastRightCenterPos, "cardLastRightCenterPos");
     // drawDebugVertLine(playerNameCenter.x, "playerNameCenterX");
     // drawDebugHorzLine(yourTurnTopY, "yourTurnTopY");
-    // drawDebugVertLine(VirtualW * 0.5f, "screenCnter");
+    // drawDebugVertLine(VirtualW * 0.5f, "screenCenter");
     // drawDebugHorzLine(VirtualH * 0.5f, "screnCenter");
 }
 
@@ -2289,7 +2514,7 @@ auto drawWhistingOrMiserMenu() -> void
     static const auto& font = ctx().fontL;
     static const auto fontSize = ctx().fontSizeL();
     static const auto pos = r::Vector2{VirtualW * 0.5f, BorderMargin + fontSize * 0.5f};
-    const auto bids = ctx().players | rv::values | rv::transform(&Player::bid);
+    const auto bids = players() | rv::transform(&Player::bid);
     const auto ranks = bids
         | rv::filter(notEqualTo(PREF_PASS))
         | rv::filter(notEqualTo(""))
@@ -2394,8 +2619,8 @@ auto loadFonts() -> void
     static constexpr auto FontSizeM = static_cast<int>(VirtualH / 30.f);
     static constexpr auto FontSizeL = static_cast<int>(VirtualH / 11.25f);
     static constexpr auto FontSizeXL = static_cast<int>(VirtualH / 6.f);
-    const auto fontPath = resources("fonts", "DejaVuSans.ttf");
-    const auto fontAwesomePath = resources("fonts", "Font-Awesome-7-Free-Solid-900.otf");
+    const auto fontPath = fonts("DejaVuSans.ttf");
+    const auto fontAwesomePath = fonts("Font-Awesome-7-Free-Solid-900.otf");
     auto codepoints = makeCodepoints();
     auto codepointsLarge = makeCodepointsLarge();
     auto awesomeCodepoints = makeAwesomeCodepoints();
@@ -2452,7 +2677,7 @@ auto loadLang(const std::string_view lang) -> void
     saveToLocalStorage("language", name);
 }
 
-auto drawToolbarButton(const int indexFromRight, const char* icon, const auto onClick, bool isButtom = true) -> void
+auto drawToolbarButton(const int indexFromRight, const char* icon, const auto onClick, bool isBottom = true) -> void
 {
     assert(indexFromRight >= 1);
     static constexpr auto buttonW = VirtualW / 30.f;
@@ -2461,7 +2686,7 @@ auto drawToolbarButton(const int indexFromRight, const char* icon, const auto on
     const auto i = static_cast<float>(indexFromRight);
     const auto bounds = r::Rectangle{
         VirtualW - buttonW * i - BorderMargin - gapBetweenButtons * (i - 1),
-        isButtom ? VirtualH - buttonH - BorderMargin : BorderMargin,
+        isBottom ? VirtualH - buttonH - BorderMargin : BorderMargin,
         buttonW,
         buttonH};
     withGuiFont(ctx().fontAwesome, [&] {
@@ -2469,10 +2694,10 @@ auto drawToolbarButton(const int indexFromRight, const char* icon, const auto on
     });
 }
 
-auto drawMenuButton(auto& menu, const int pos, const char* icon) -> void
+auto drawMenuButton(auto& menu, const int pos, const char* icon, bool isBottom = true) -> void
 {
     withGuiState(STATE_PRESSED, menu.isVisible, [&] {
-        drawToolbarButton(pos, icon, [&] { menu.isVisible = not menu.isVisible; });
+        drawToolbarButton(pos, icon, [&] { menu.isVisible = not menu.isVisible; }, isBottom);
     });
 }
 
@@ -2520,18 +2745,15 @@ auto drawLogoutButton() -> void
 
 auto speechBubbleCooldown() -> void
 {
-    emscripten_async_call(
-        []([[maybe_unused]] void* ud) {
-            --ctx().speechBubbleMenu.cooldown;
-            if (ctx().speechBubbleMenu.cooldown <= 0) {
-                ctx().speechBubbleMenu.cooldown = SpeechBubbleMenu::SendCooldownInSec;
-                ctx().speechBubbleMenu.isSendButtonActive = true;
-                return;
-            }
-            speechBubbleCooldown();
-        },
-        nullptr,
-        1'000); // 1s
+    waitFor(1s, [] {
+        --ctx().speechBubbleMenu.cooldown;
+        if (ctx().speechBubbleMenu.cooldown <= 0) {
+            ctx().speechBubbleMenu.cooldown = SpeechBubbleMenu::SendCooldownInSec;
+            ctx().speechBubbleMenu.isSendButtonActive = true;
+            return;
+        }
+        speechBubbleCooldown();
+    });
 }
 
 auto drawSpeechBubbleMenu() -> void
@@ -3071,10 +3293,10 @@ auto updateDrawFrame([[maybe_unused]] void* ud) -> void
 
     ctx().target.BeginMode();
     ctx().window.ClearBackground(getGuiColor(BACKGROUND_COLOR));
-    drawGameplayScreen();
+    drawWelcomeScreen();
     drawLoginScreen();
     drawLogoutButton();
-    if (ctx().areAllPlayersJoined() and ctx().isLoggedIn) {
+    if (ctx().isLoggedIn and ctx().isGameStarted) {
         drawWhistingOrMiserMenu();
         drawHowToPlayMenu();
         drawBiddingMenu();
@@ -3094,7 +3316,7 @@ auto updateDrawFrame([[maybe_unused]] void* ud) -> void
     drawSettingsButton();
     drawFullScreenButton();
     drawPingAndFps();
-    if (ctx().areAllPlayersJoined() and ctx().isLoggedIn) {
+    if (ctx().isGameStarted and ctx().isLoggedIn) {
         drawOverallScoreboard();
         drawSpeechBubbleMenu();
     }
