@@ -158,6 +158,15 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
     return makeMessage(result).SerializeAsString();
 }
 
+[[nodiscard]] inline auto makeHowToPlay(const PlayerId& playerId, const std::string& choice) -> std::string
+{
+    PREF_DI(playerId, choice);
+    auto result = HowToPlay{};
+    result.set_player_id(playerId);
+    result.set_choice(choice);
+    return makeMessage(result).SerializeAsString();
+}
+
 [[nodiscard]] inline auto makeOpenWhistPlay(const PlayerId& activeWhisterId, const PlayerId& passiveWhisterId)
     -> std::string
 {
@@ -182,6 +191,36 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
     auto result = MiserCards{};
     moveVectorToRepeated(remainingCards, *result.mutable_remaining_cards());
     moveVectorToRepeated(playedCards, *result.mutable_played_cards());
+    return makeMessage(result).SerializeAsString();
+}
+
+[[nodiscard]] inline auto makePlayCard(const PlayerId& playerId, const CardName& cardName) -> std::string
+{
+    PREF_DI(playerId, cardName);
+    auto result = PlayCard{};
+    result.set_player_id(playerId);
+    result.set_card(cardName);
+    return makeMessage(result).SerializeAsString();
+}
+
+[[nodiscard]] inline auto makeGameState(
+    const std::span<const CardName> lastTrick,
+    const std::span<const std::pair<PlayerId, int>> playersTakenTricks,
+    const std::span<const std::pair<PlayerId, int>> playersCardsLeft) -> std::string
+{
+    PREF_DI(lastTrick, playersTakenTricks, playersCardsLeft);
+    auto result = GameState{};
+    for (const auto& card : lastTrick) { result.add_last_trick(card); }
+    for (const auto& [playerId, tricksTaken] : playersTakenTricks) {
+        auto* tricks = result.add_taken_tricks();
+        tricks->set_player_id(playerId);
+        tricks->set_taken(tricksTaken);
+    }
+    for (const auto& [playerId, cardsLeft] : playersCardsLeft) {
+        auto* left = result.add_cards_left();
+        left->set_player_id(playerId);
+        left->set_count(cardsLeft);
+    }
     return makeMessage(result).SerializeAsString();
 }
 

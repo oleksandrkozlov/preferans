@@ -178,6 +178,7 @@ struct Context {
     {
         talon.clear();
         trick.clear();
+        lastTrick.clear();
         trump.clear();
         passGame.clear();
         isDeclarerFirstMiserTurn = false;
@@ -189,9 +190,11 @@ struct Context {
         players.clear();
     }
 
+    GameStage stage = GameStage::UNKNOWN;
     mutable Players players;
     Players::const_iterator whoseTurnIt;
     Talon talon;
+    std::vector<CardName> lastTrick;
     std::vector<PlayedCard> trick;
     std::string trump;
     PassGame passGame;

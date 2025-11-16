@@ -132,6 +132,7 @@ inline constexpr auto PREF_ACE_OF_HEARTS_CARD = 0x1F0B1;
     if (cardName == (PREF_CARD_NAME)) { return PREF_CARD_NAME##_CARD; }
     PREF_CARDS
 #undef PREF_X
+    PREF_DE(cardName);
     std::unreachable();
 }
 

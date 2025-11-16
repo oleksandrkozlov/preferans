@@ -161,6 +161,11 @@ template<typename Projection = std::identity>
     };
 }
 
+[[nodiscard]] auto areAllUnique(const auto& r) -> bool
+{
+    return std::ssize(r | rng::to<std::set<std::string_view>>()) == rng::distance(r);
+}
+
 struct Player {
     Player() = default;
     Player(PlayerId i, PlayerName n)
@@ -171,6 +176,7 @@ struct Player {
 
     auto sortCards() -> void
     {
+        assert(areAllUnique(hand | rv::transform(&Card::name)));
         hand.sort(cardLess(&Card::name));
     }
 
@@ -1031,6 +1037,7 @@ auto handleLoginResponse(const Message& msg) -> void
         ctx().isLoginInProgress = false;
         return;
     }
+    PREF_I("playerId: {}", loginResponse->player_id());
     ctx().myPlayerId = std::move(*loginResponse->mutable_player_id());
     ctx().authToken = std::move(*loginResponse->mutable_auth_token());
     saveToLocalStoragePlayerId();
@@ -1043,7 +1050,7 @@ auto handleLoginResponse(const Message& msg) -> void
     return rng::all_of(players(), equalTo(ReadyCheckState::ACCEPTED), &Player::readyCheckState);
 }
 
-auto resetReadyCehck() -> void
+auto resetReadyCheck() -> void
 {
     for (auto& player : players()) { player.readyCheckState = ReadyCheckState::NOT_REQUESTED; }
 }
@@ -1051,7 +1058,7 @@ auto resetReadyCehck() -> void
 auto startReadyCheck(const PlayerId& playerId) -> void
 {
     ctx().startGameButton.isVisible = false;
-    resetReadyCehck();
+    resetReadyCheck();
     ctx().player(playerId).readyCheckState = ReadyCheckState::ACCEPTED;
     if (playerId == ctx().myPlayerId) {
         ctx().sound.readyCheckRequested.Play();
@@ -1126,6 +1133,7 @@ auto handleAuthResponse(const Message& msg) -> void
         return;
     }
     ctx().myPlayerName = std::move(*authResponse->mutable_player_name());
+    PREF_I("playerName: {}", ctx().myPlayerName);
     saveToLocalStoragePlayerName();
     finishLogin(*authResponse);
 }
@@ -1134,11 +1142,11 @@ auto handlePlayerJoined(const Message& msg) -> void
 {
     auto playerJoined = makeMethod<PlayerJoined>(msg);
     if (not playerJoined) { return; }
-    auto& playerJoinedId = *playerJoined->mutable_player_id();
-    auto& playerJoinedName = *playerJoined->mutable_player_name();
-    PREF_I("New player playerJoined: {} ({})", playerJoinedName, playerJoinedId);
-    auto player = Player{playerJoinedId, std::move(playerJoinedName)};
-    ctx().players.insert_or_assign(std::move(playerJoinedId), std::move(player));
+    auto& playerId = *playerJoined->mutable_player_id();
+    auto& playerName = *playerJoined->mutable_player_name();
+    PREF_DI(playerId, playerName);
+    auto player = Player{playerId, std::move(playerName)};
+    ctx().players.insert_or_assign(std::move(playerId), std::move(player));
     if (ctx().areAllPlayersJoined()) { ctx().startGameButton.isVisible = true; }
 }
 
@@ -1146,6 +1154,7 @@ auto handlePlayerLeft(const Message& msg) -> void
 {
     const auto playerLeft = makeMethod<PlayerLeft>(msg);
     if (not playerLeft) { return; }
+    PREF_I("playerId: {}", playerLeft->player_id());
     ctx().players.erase(playerLeft->player_id());
 }
 
@@ -1169,14 +1178,13 @@ auto handleDealCards(const Message& msg) -> void
         waitFor(1s, [] { ctx().sound.gameAboutToStarted.Play(); });
         waitFor(3s, [] {
             ctx().isGameStarted = true;
-            resetReadyCehck();
+            resetReadyCheck();
             ctx().sound.gameStarted.Play();
         });
     }
     auto dealCards = makeMethod<DealCards>(msg);
     if (not dealCards) { return; }
     const auto& playerId = dealCards->player_id();
-    assert(std::size(dealCards->cards()) == 10);
     auto& player = std::invoke([&] -> Player& {
         if (playerId == ctx().myPlayerId) {
             ctx().clear();
@@ -1186,6 +1194,7 @@ auto handleDealCards(const Message& msg) -> void
         return ctx().player(playerId);
     });
     for (const auto& cardName : dealCards->cards()) { player.hand.emplace_back(&getCard(cardName)); }
+    PREF_I("{}, hand: {}", PREF_V(player.id), player.hand | rv::transform(&Card::name));
     player.sortCards();
 }
 
@@ -1216,12 +1225,17 @@ auto handlePlayerTurn(const Message& msg) -> void
     }
     ctx().bidding.passRound = passRound;
     const auto isMyTurn = pref::isMyTurn();
+    // FIXME: On reconnection during talon picking, previously discarded cards are incorrectly restored to the hand
     if (ctx().stage == TALON_PICKING) {
         for (const auto& cardName : playerTurn->talon()) {
             const auto& card = getCard(cardName);
-            ctx().lastTrickOrTalon.push_back(card.name);
-            if (isMyTurn) { ctx().myPlayer().hand.emplace_back(&card); }
+            // Note: On reconnection, the cards are already sent by DealCards, so they must not be inserted twice
+            if (not rng::contains(ctx().lastTrickOrTalon, card.name)) { ctx().lastTrickOrTalon.push_back(card.name); }
+            if (isMyTurn and not rng::contains(ctx().myPlayer().hand, &card)) {
+                ctx().myPlayer().hand.emplace_back(&card);
+            }
         }
+        // TODO: Sorting should be skipped if no cards were added above
         if (isMyTurn) { ctx().myPlayer().sortCards(); }
         return;
     }
@@ -1252,12 +1266,13 @@ auto handleBidding(const Message& msg) -> void
     if (not bidding) { return; }
     const auto& playerId = bidding->player_id();
     const auto& bid = bidding->bid();
-    auto rank = bidRank(bid);
-    if (ctx().myPlayerId == ctx().forehandId and rank != 0) { --rank; }
-    if (bid != PREF_PASS) { ctx().bidding.rank = rank; }
-    ctx().bidding.bid = bid;
+    auto newRank = bidRank(bid);
+    auto& curRank = ctx().bidding.rank;
+    if (ctx().myPlayerId == ctx().forehandId and newRank != 0) { --newRank; }
+    if (newRank >= curRank or curRank == AllRanks) { ctx().bidding.bid = bid; }
+    if (bid != PREF_PASS and (newRank > curRank or curRank == AllRanks)) { curRank = newRank; }
     ctx().player(playerId).bid = bid;
-    PREF_DI(playerId, bid, rank);
+    PREF_DI(playerId, bid, curRank, newRank);
 }
 
 auto handleWhisting(const Message& msg) -> void
@@ -1310,10 +1325,43 @@ auto handlePlayCard(const Message& msg) -> void
     ctx().cardsOnTable.emplace(std::move(playerId), &getCard(cardName));
 }
 
+auto handleGameState(const Message& msg) -> void
+{
+    auto gameState = makeMethod<GameState>(msg);
+    if (not gameState) { return; }
+    ctx().lastTrickOrTalon.clear();
+    for (auto&& cardName : gameState->last_trick()) {
+        PREF_DI(cardName);
+        const auto& card = getCard(cardName);
+        ctx().lastTrickOrTalon.push_back(card.name);
+    }
+    for (auto&& tricks : gameState->taken_tricks()) {
+        auto&& playerId = tricks.player_id();
+        auto&& tricksTaken = tricks.taken();
+        PREF_DI(playerId, tricksTaken);
+        ctx().player(playerId).tricksTaken = tricksTaken;
+    }
+    const auto [leftOpponentId, rightOpponentId] = getOpponentIds();
+    for (auto&& cardsLeft : gameState->cards_left()) {
+        auto&& playerId = cardsLeft.player_id();
+        auto&& cardsLeftCount = cardsLeft.count();
+        PREF_DI(playerId, cardsLeftCount);
+        if (leftOpponentId == playerId) {
+            ctx().leftCardCount = cardsLeftCount;
+            continue;
+        }
+        if (rightOpponentId == playerId) {
+            ctx().rightCardCount = cardsLeftCount;
+            continue;
+        }
+    }
+}
+
 auto handleTrickFinished(const Message& msg) -> void
 {
     const auto trickFinished = makeMethod<TrickFinished>(msg);
     if (not trickFinished) { return; }
+    PREF_I();
     ctx().isGameFreezed = true;
     waitFor(
         1s,
@@ -1348,6 +1396,7 @@ auto handleDealFinished(const Message& msg) -> void
 {
     const auto dealFinished = makeMethod<DealFinished>(msg);
     if (not dealFinished) { return; }
+    PREF_I();
     ctx().scoreSheet.score = dealFinished->score_sheet() // clang-format off
         | rv::transform(unpair([](const auto& playerId, const auto& score) {
         return std::pair{playerId, Score{
@@ -1364,6 +1413,7 @@ auto handleSpeechBubble(const Message& msg) -> void
 {
     const auto speechBubble = makeMethod<SpeechBubble>(msg);
     if (not speechBubble) { return; }
+    PREF_I("playerId: {}, text: {}", speechBubble->player_id(), speechBubble->text());
     ctx().speechBubbleMenu.text.insert_or_assign(speechBubble->player_id(), speechBubble->text());
     ctx().sound.messageReceived.Play();
 }
@@ -1427,6 +1477,7 @@ auto handleUserGames(const Message& msg) -> void
 {
     auto userGames = makeMethod<UserGames>(msg);
     if (not userGames) { return; }
+    PREF_I();
     ctx().overallScoreboard.userGames = std::move(*userGames);
     updateOverallScoreboardTable();
 }
@@ -1436,6 +1487,7 @@ auto handleOpenTalon(const Message& msg) -> void
     auto openTalon = makeMethod<OpenTalon>(msg);
     if (not openTalon) { return; }
     auto& cardName = *openTalon->mutable_card();
+    PREF_DI(cardName);
     ctx().leadSuit = cardSuit(cardName);
     ctx().passGameTalon.push(getCard(cardName));
 }
@@ -1477,6 +1529,7 @@ auto updateWindowSize() -> void
     PREF_X(DealCards) \
     PREF_X(DealFinished) \
     PREF_X(Forehand) \
+    PREF_X(GameState) \
     PREF_X(HowToPlay) \
     PREF_X(LoginResponse) \
     PREF_X(MiserCards) \
@@ -1663,6 +1716,7 @@ auto drawRectangleRoundedWithBorder(
 
 auto drawSpeechBubbleText(const r::Vector2& p3, const std::string& text, const DrawPosition drawPosition) -> void
 {
+    // TODO: ensure the text doesn't cover taken tricks
     using enum DrawPosition;
     static constexpr auto roundness = 0.7f;
     const auto fontSize = ctx().fontSizeM();
@@ -1902,6 +1956,8 @@ auto drawConnectedPlayers() -> void
     static const auto buttonH = maxSide * 0.5f;
     static const auto acceptDenyButtonsW = (buttonW - fontSpacingX) * 0.5f;
     static const auto buttonY = y + maxSide + (fontSpacingX * 2.f);
+
+    // FIXME: After reconnection, startGameButton is incorectly always visible
     if (ctx().startGameButton.isVisible
         and GuiButton(
             {(VirtualW * 0.5f) - (buttonW * 0.5f), buttonY, buttonW, buttonH},
