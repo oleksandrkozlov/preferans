@@ -25,7 +25,7 @@ inline constexpr auto OriginalCardWidth = 500.f;
 inline constexpr auto CardAspectRatio = OriginalCardWidth / OriginalCardHeight;
 inline constexpr auto CardHeight = VirtualH / 5.f;
 inline constexpr auto CardWidth = CardHeight * CardAspectRatio;
-inline constexpr auto CardOverlapX = CardWidth * 0.54f;
+inline constexpr auto CardOverlapX = CardWidth * 0.51f;
 inline constexpr auto CardOverlapY = CardHeight * 0.26f;
 inline constexpr auto CardBorderMargin = VirtualW / 30.f;
 inline constexpr auto MyCardBorderMarginY = CardHeight / 10.8f;
@@ -42,6 +42,7 @@ inline constexpr auto ExitFullScreenIcon = "";
 inline constexpr auto SpeechBubbleIcon = "";
 inline constexpr auto OverallScoreboardIcon = "";
 inline constexpr auto LogoutIcon = "";
+inline constexpr auto HandshakeIcon = "";
 inline constexpr int LeftArrowIcon = 0xF112;
 inline constexpr int RightArrowIcon = 0xF064;
 
@@ -207,8 +208,8 @@ enum class GameLang : std::size_t {
     Count,
 };
 
+// clang-format off
 #define PREF_GAME_TEXT                                                                                                 \
-    PREF_X(None, "", "", "")                                                                                           \
     PREF_X(ACCEPT, "ACCEPT", "ПРИЙНЯТИ", "ПРИНЯТЬ")                                                                    \
     PREF_X(Alternative, "Alternative", "Альтернативна", "Альтернативный")                                              \
     PREF_X(Amber, "Amber", "Бурштин", "Янтарь")                                                                        \
@@ -218,9 +219,9 @@ enum class GameLang : std::size_t {
     PREF_X(ColorScheme, "Color scheme", "Кольорова схема", "Цветовая схема")                                           \
     PREF_X(CurrentPlayers, "Current players:", "Поточні гравці:", "Текущие игроки:")                                   \
     PREF_X(Cyber, "Cyber", "Кібер", "Кибер")                                                                           \
+    PREF_X(DECLINE, "DECLINE", "ВІДХИЛИТИ", "ОТКЛОНИТЬ")                                                               \
     PREF_X(Dark, "Dark", "Темний", "Тёмный")                                                                           \
     PREF_X(Date, "DATE", "ДАТА", "ДАТА")                                                                               \
-    PREF_X(DECLINE, "DECLINE", "ВІДХИЛИТИ", "ОТКЛОНИТЬ")                                                               \
     PREF_X(Draw, "Draw", "Нічия", "Ничья")                                                                             \
     PREF_X(Duration, "DURATION", "ТРИВАЛІСТЬ", "ДЛИТЕЛЬНОСТЬ")                                                         \
     PREF_X(English, "English", "Англійська", "Английский")                                                             \
@@ -232,26 +233,32 @@ enum class GameLang : std::size_t {
     PREF_X(Language, "Language", "Мова", "Язык")                                                                       \
     PREF_X(Lavanda, "Lavanda", "Лаванда", "Лаванда")                                                                   \
     PREF_X(LogOut, "LOG OUT", "ВИХІД", "ВЫХОД")                                                                        \
+    PREF_X(LogOutOfTheAccount, "Log out of the account?", "Вийти з облікового запису?", "Выйти из учётной записи?")    \
     PREF_X(Login, "LOG IN", "ЛОГІН", "ЛОГИН")                                                                          \
     PREF_X(Lost, "Lost", "Поразка", "Поражение")                                                                       \
     PREF_X(MMR, "MMR", "РЕЙТИНГ", "РЕЙТИНГ")                                                                           \
     PREF_X(Miser, PREF_MISER, "Мізéр", "Мизéр")                                                                        \
+    PREF_X(Mute, "Mute", "Без звуку", "Без звука")                                                                     \
     PREF_X(No, "No", "Ні", "Нет")                                                                                      \
+    PREF_X(NoMoreForMe, "No more for me", "Більше не беру", "Моих больше нет")                                         \
+    PREF_X(None, "", "", "")                                                                                           \
     PREF_X(Normal, "Normal", "Звичайна", "Обычная")                                                                    \
     PREF_X(Openly, PREF_OPENLY, "У світлу", "В светлую")                                                               \
     PREF_X(Other, "Other", "Інше", "Другое")                                                                           \
-    PREF_X(OverallScoreboard, "OVERALL SCOREBOARD", "ЗАГАЛЬНА ТАБЛИЦЯ РЕЗУЛЬТАТІВ", "ОБЩАЯ ТАБЛИЦА РЕЗУЛЬТАТОВ")       \
+    PREF_X(OverallScoreboard, "SCOREBOARD", "ТАБЛИЦЯ РЕЗУЛЬТАТІВ", "ТАБЛИЦА РЕЗУЛЬТАТОВ")       \
     PREF_X(PDW, "P/D/W", "П/Г/В", "П/Г/В")                                                                             \
+    PREF_X(PLAY, "PLAY", "ГРАТИ", "ИГРАТЬ")                                                                            \
     PREF_X(Pass, PREF_PASS, "Пас", "Пас")                                                                              \
     PREF_X(Passing, "Passing", "Розпаси", "Распасы")                                                                   \
     PREF_X(Phrases, "PHRASES", "ФРАЗИ", "ФРАЗЫ")                                                                       \
     PREF_X(Preferans, "PREFERANS", "ПРЕФЕРАНС", "ПРЕФЕРАНС")                                                           \
     PREF_X(Ranked, "Ranked", "Рейтингова", "Рейтинговая")                                                              \
+    PREF_X(RemainingMine, "Remaining — mine", "Решта — мої", "Остальные — мои")                                        \
     PREF_X(Result, "RESULT", "РЕЗУЛЬТАТ", "РЕЗУЛЬТАТ")                                                                 \
+    PREF_X(RevealCardsAndOffer, "Reveal cards and offer", "Відкрити карти та запропонувати", "Открыть карты и предложить") \
     PREF_X(Send, "Send", "Надіслати", "Отправить")                                                                     \
     PREF_X(Settings, "SETTINGS", "НАЛАШТУВАННЯ", "НАСТРОЙКИ")                                                          \
     PREF_X(ShowFps, "Show Ping & FPS", "Показувати пінг та част. кадрів", "Показывать пинг и част. кадров")            \
-    PREF_X(PLAY, "PLAY", "ГРАТИ", "ИГРАТЬ")                                                                            \
     PREF_X(Time, "TIME", "ЧАС", "ВРЕМЯ")                                                                               \
     PREF_X(Total, "TOTAL", "УСЬОГО", "ВСЕГО")                                                                          \
     PREF_X(Trust, PREF_TRUST, "Довіряю", "Доверяю")                                                                    \
@@ -262,8 +269,8 @@ enum class GameLang : std::size_t {
     PREF_X(WinRate, "WIN RATE", "ПЕРЕМОГ", "ПОБЕД")                                                                    \
     PREF_X(Yes, "Yes", "Так", "Да")                                                                                    \
     PREF_X(YourTurn, "Your turn", "Ваш хід", "Ваш ход")                                                                \
-    PREF_X(YourTurnFor, "Your turn for", "Ваш хід за", "Ваш ход за")                                                   \
-    PREF_X(LogOutOfTheAccount, "Log out of the account?", "Вийти з облікового запису?", "Выйти из учётной записи?")
+    PREF_X(YourTurnFor, "Your turn for", "Ваш хід за", "Ваш ход за")
+// clang-format on
 
 enum class GameText : std::size_t {
 #define PREF_X(PREF_TEXT_ID, PREF_LANG_EN, PREF_LANG_UA, PREF_LANG_ALT) PREF_TEXT_ID,

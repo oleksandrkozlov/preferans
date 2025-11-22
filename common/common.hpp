@@ -96,6 +96,8 @@ using CardsNamesView = std::span<const CardName>;
 inline constexpr auto NumberOfPlayers = 3uz;
 inline constexpr auto WhistersCount = 2uz;
 inline constexpr auto DeclarerCount = 1uz;
+// TODO: don't hardcode `scoreTarget`
+inline constexpr auto ScoreTarget = 10;
 
 inline constexpr auto ToString = rng::to<std::string>;
 inline constexpr auto ToLower = rv::transform([](unsigned char c) { return std::tolower(c); });
@@ -205,12 +207,23 @@ template<typename Value>
     return std::bind_front(std::not_equal_to{}, std::forward<Value>(value));
 }
 
+template<typename T>
+concept use_refable = !std::is_trivially_copyable_v<T> && !std::is_reference_v<T>;
+
 template<typename Range, typename Value, typename ProjIn = rng::identity, typename ProjOut = rng::identity>
 // NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward)
 [[nodiscard]] auto find(Range&& range, const Value& value, ProjIn projIn = {}, ProjOut projOut = {})
 {
     const auto it = rng::find(range, value, projIn);
     return it != rng::cend(range) ? std::optional{std::ref(std::invoke(projOut, *it))} : std::nullopt;
+}
+
+template<typename Range, typename Value, typename ProjIn = rng::identity, typename ProjOut = rng::identity>
+// NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward)
+[[nodiscard]] auto find_value(Range&& range, const Value& value, ProjIn projIn = {}, ProjOut projOut = {})
+{
+    const auto it = rng::find(range, value, projIn);
+    return it != rng::cend(range) ? std::optional{std::invoke(projOut, *it)} : std::nullopt;
 }
 
 template<typename Range, typename Pred, typename ProjIn = rng::identity, typename ProjOut = rng::identity>
@@ -321,6 +334,7 @@ PREF_DEFINE_METHOD_NAME(Log)
 PREF_DEFINE_METHOD_NAME(LoginRequest)
 PREF_DEFINE_METHOD_NAME(LoginResponse)
 PREF_DEFINE_METHOD_NAME(Logout)
+PREF_DEFINE_METHOD_NAME(MakeOffer)
 PREF_DEFINE_METHOD_NAME(MiserCards)
 PREF_DEFINE_METHOD_NAME(OpenTalon)
 PREF_DEFINE_METHOD_NAME(OpenWhistPlay)

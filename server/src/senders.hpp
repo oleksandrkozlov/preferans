@@ -68,12 +68,17 @@ inline auto sendToAll(std::string payload) -> Awaitable<>
     co_await sendToMany(channels, std::move(payload));
 }
 
+inline auto forwardToOne(const Player::IdView playerId, const Message& msg) -> Awaitable<>
+{
+    return sendToOne(ctx().player(playerId).conn.ch, msg.SerializeAsString());
+}
+
 inline auto forwardToAll(const Message& msg) -> Awaitable<>
 {
     return sendToAll(msg.SerializeAsString());
 }
 
-inline auto sendToAllExcept(std::string payload, const Player::Id& excludedId) -> Awaitable<>
+inline auto sendToAllExcept(std::string payload, const Player::IdView excludedId) -> Awaitable<>
 {
     const auto channels = pref::players()
         | rv::filter(notEqualTo(excludedId), &Player::id)
@@ -82,22 +87,23 @@ inline auto sendToAllExcept(std::string payload, const Player::Id& excludedId) -
     co_await sendToMany(channels, std::move(payload));
 }
 
-inline auto forwardToAllExcept(const Message& msg, const Player::Id& excludedId) -> Awaitable<>
+inline auto forwardToAllExcept(const Message& msg, const Player::IdView excludedId) -> Awaitable<>
 {
     return sendToAllExcept(msg.SerializeAsString(), excludedId);
 }
 
 inline auto sendLoginResponse(
-    const ChannelPtr& ch, const std::string& error, const Player::Id& playerId = {}, const std::string& authToken = {})
+    const ChannelPtr& ch, std::string error, const Player::IdView playerId = {}, std::string authToken = {})
     -> Awaitable<>
 {
-    co_await sendToOne(ch, makeLoginResponse(playerId, authToken, playersIdents(), error));
+    co_await sendToOne(
+        ch, makeLoginResponse(ctx().stage, playerId, std::move(authToken), playersIdents(), std::move(error)));
 }
 
-inline auto sendAuthResponse(const ChannelPtr& ch, const std::string& errorMsg, const Player::Name& playerName = {})
+inline auto sendAuthResponse(const ChannelPtr& ch, std::string error, const Player::NameView playerName = {})
     -> Awaitable<>
 {
-    co_await sendToOne(ch, makeAuthResponse(playerName, playersIdents(), errorMsg));
+    co_await sendToOne(ch, makeAuthResponse(ctx().stage, playerName, playersIdents(), std::move(error)));
 }
 
 inline auto sendPlayerJoined(const PlayerSession& session) -> Awaitable<>
@@ -105,12 +111,12 @@ inline auto sendPlayerJoined(const PlayerSession& session) -> Awaitable<>
     return sendToAllExcept(makePlayerJoined(session.playerName, session.playerId), session.playerId);
 }
 
-inline auto sendPlayerLeft(const Player::Id& playerId) -> Awaitable<>
+inline auto sendPlayerLeft(Player::Id playerId) -> Awaitable<>
 {
-    return sendToAll(makePlayerLeft(playerId));
+    return sendToAll(makePlayerLeft(std::move(playerId)));
 }
 
-inline auto sendReadyCheckToOne(const ChannelPtr& ch, const Player::Id& playerId, const ReadyCheckState state)
+inline auto sendReadyCheckToOne(const ChannelPtr& ch, const Player::IdView playerId, const ReadyCheckState state)
     -> Awaitable<>
 {
     co_await sendToOne(ch, makeReadyCheck(playerId, state));
@@ -121,12 +127,12 @@ inline auto sendForehand() -> Awaitable<>
     return sendToAll(makeForehand(ctx().forehandId));
 }
 
-inline auto sendDealCardsExcept(const Player::Id& playerId, const Hand& hand) -> Awaitable<>
+inline auto sendDealCardsExcept(const Player::IdView playerId, const Hand& hand) -> Awaitable<>
 {
     return sendToAllExcept(makeDealCards(playerId, hand | rng::to_vector), playerId);
 }
 
-inline auto sendDealCardsFor(const ChannelPtr& ch, const Player::Id& playerId, const Hand& hand) -> Awaitable<>
+inline auto sendDealCardsFor(const ChannelPtr& ch, const Player::IdView playerId, const Hand& hand) -> Awaitable<>
 {
     co_await sendToOne(ch, makeDealCards(playerId, hand | rng::to_vector));
 }
@@ -137,40 +143,42 @@ inline auto sendPlayerTurn(const PlayerTurnData& playerTurn) -> Awaitable<>
     return sendToAll(makePlayerTurn(playerId, stage, minBid, canHalfWhist, passRound, talon));
 }
 
-inline auto sendBiddingToOne(const ChannelPtr& ch, const Player::Id& playerId, const std::string& bid) -> Awaitable<>
+inline auto sendBiddingToOne(const ChannelPtr& ch, const Player::IdView playerId, const std::string_view bid)
+    -> Awaitable<>
 {
     return sendToOne(ch, makeBidding(playerId, bid));
 }
 
-inline auto sendBidding(const Player::Id& playerId, const std::string& bid) -> Awaitable<>
+inline auto sendBidding(const Player::IdView playerId, const std::string_view bid) -> Awaitable<>
 {
     return sendToAllExcept(makeBidding(playerId, bid), playerId);
 }
 
-inline auto sendWhistingToOne(const ChannelPtr& ch, const Player::Id& playerId, const std::string& choice)
+inline auto sendWhistingToOne(const ChannelPtr& ch, const Player::IdView playerId, const std::string_view choice)
     -> Awaitable<>
 {
     return sendToOne(ch, makeWhisting(playerId, choice));
 }
 
-inline auto sendHowToPlayToOne(const ChannelPtr& ch, const Player::Id& playerId, const std::string& choice)
+inline auto sendHowToPlayToOne(const ChannelPtr& ch, const Player::IdView playerId, const std::string_view choice)
     -> Awaitable<>
 {
     return sendToOne(ch, makeHowToPlay(playerId, choice));
 }
 
-inline auto sendWhisting(const Player::Id& playerId, const std::string& choice) -> Awaitable<>
+inline auto sendWhisting(const Player::IdView playerId, const std::string_view choice) -> Awaitable<>
 {
     return sendToAll(makeWhisting(playerId, choice));
 }
 
 inline auto sendOpenWhistPlayToOne(
-    const ChannelPtr& ch, const Player::Id& activeWhisterId, const Player::Id& passiveWhisterId) -> Awaitable<>
+    const ChannelPtr& ch, const Player::IdView activeWhisterId, const Player::IdView passiveWhisterId) -> Awaitable<>
 {
     return sendToOne(ch, makeOpenWhistPlay(activeWhisterId, passiveWhisterId));
 }
 
-inline auto sendOpenWhistPlay(const Player::Id& activeWhisterId, const Player::Id& passiveWhisterId) -> Awaitable<>
+inline auto sendOpenWhistPlay(const Player::IdView activeWhisterId, const Player::IdView passiveWhisterId)
+    -> Awaitable<>
 {
     return sendToAll(makeOpenWhistPlay(activeWhisterId, passiveWhisterId));
 }
@@ -241,9 +249,9 @@ inline auto sendTrickFinished() -> Awaitable<>
     return sendToAll(makeTrickFinished(playersTakenTricks));
 }
 
-inline auto sendDealFinished() -> Awaitable<>
+inline auto sendDealFinished(const bool isGameOver) -> Awaitable<>
 {
-    return sendToAll(makeDealFinished(ctx().scoreSheet));
+    return sendToAll(makeDealFinished(ctx().scoreSheet, isGameOver));
 }
 
 inline auto sendPingPong(const Message& msg, const ChannelPtr& ch) -> Awaitable<>

@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2025 Oleksandr Kozlov
 
-syntax = "proto3";
+edition = "2024";
+
+import "google/protobuf/cpp_features.proto";
+
+option optimize_for = LITE_RUNTIME;
 
 package pref;
 
@@ -11,15 +15,16 @@ message PPlayer {
 }
 
 message LoginRequest {
-  string player_name = 1;
+  string player_name = 1 [features.(pb.cpp).string_type=STRING];
   string password = 2;
 }
 
 message LoginResponse {
-   optional string error = 1;
-   optional string player_id = 2;
-   optional string auth_token = 3;
+   string error = 1;
+   string player_id = 2;
+   string auth_token = 3;
    repeated PPlayer players = 4;
+   GameStage stage = 5;
 }
 
 message AuthRequest {
@@ -28,13 +33,14 @@ message AuthRequest {
 }
 
 message AuthResponse {
-  optional string error = 1;
-  optional string player_name = 2;
+  string error = 1;
+  string player_name = 2;
   repeated PPlayer players = 3;
+  GameStage stage = 4;
 }
 
 message Logout {
-  string player_id = 1;
+  string player_id = 1 [features.(pb.cpp).string_type=STRING];
   string auth_token = 2;
 }
 
@@ -70,7 +76,7 @@ message DealCards {
 
 message PlayCard {
   string player_id = 1;
-  string card = 2; // e.g. "queen_of_hearts"
+  string card = 2 [features.(pb.cpp).string_type=STRING]; // e.g. "queen_of_hearts"
 }
 
 enum GameStage {
@@ -87,20 +93,20 @@ message PlayerTurn {
   string player_id = 1;
   GameStage stage = 2;
   string min_bid = 3;
-  optional bool can_half_whist = 4 ; // only for the Whisting stage
+  bool can_half_whist = 4 ; // only for the Whisting stage
   repeated string talon = 5; // queen_of_hearts, etc.
-  optional int32 pass_round = 6; // equals to 0 unless PassGame
+  int32 pass_round = 6; // equals to 0 unless PassGame
 }
 
 message Bidding {
     string player_id = 1;
-    string bid = 2; // e.g., "8♠", "PASS", "MISER", etc.
+    string bid = 2 [features.(pb.cpp).string_type=STRING]; // e.g., "8♠", "PASS", "MISER", etc.
 }
 
 message DiscardTalon {
     string player_id = 1;
     repeated string cards = 2; // queen_of_hearts, etc.
-    string bid = 3;
+    string bid = 3 [features.(pb.cpp).string_type=STRING];
 }
 
 message Whisting {
@@ -119,7 +125,19 @@ message OpenTalon {
 
 message HowToPlay {
     string player_id = 1;
-    string choice = 3; // "", "Openly", or "Closed"
+    string choice = 3 [features.(pb.cpp).string_type=STRING]; // "", "Openly", or "Closed"
+}
+
+enum Offer {
+  NO_OFFER = 0;
+  OFFER_REQUESTED = 2;
+  OFFER_ACCEPTED = 3;
+  OFFER_DECLINED = 4;
+}
+
+message MakeOffer {
+    string player_id = 1;
+    Offer offer = 2;
 }
 
 message MiserCards {
@@ -159,6 +177,7 @@ message ScoreData {
 
 message DealFinished {
   map<string /*player_id*/, ScoreData> score_sheet = 1;
+  bool is_game_over = 2;
 }
 
 message Log {
@@ -208,6 +227,7 @@ message GameData {
 message UserGames {
   repeated UserGame games = 1;
 }
+
 
 message Message {
   string method = 1;

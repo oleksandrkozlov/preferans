@@ -17,7 +17,6 @@
 #include <exception>
 #include <filesystem>
 #include <map>
-#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -56,6 +55,7 @@ struct Player {
     std::string howToPlayChoice;
     int tricksTaken{};
     ReadyCheckState readyCheckState = ReadyCheckState::NOT_REQUESTED;
+    Offer offer = Offer::NO_OFFER;
 
     auto clear() -> void
     {
@@ -66,6 +66,7 @@ struct Player {
         howToPlayChoice.clear();
         tricksTaken = 0;
         readyCheckState = ReadyCheckState::NOT_REQUESTED;
+        offer = Offer::NO_OFFER;
     }
 };
 
@@ -161,18 +162,18 @@ struct PassGame {
 };
 
 struct Context {
-    using Players = std::map<Player::Id, Player>;
+    using Players = std::map<Player::Id, Player, std::less<>>;
 
-    [[nodiscard]] auto whoseTurnId() const -> const Player::Id&;
-    [[nodiscard]] auto player(const Player::Id& playerId) const -> Player&;
-    [[nodiscard]] auto playerName(const Player::Id& playerId) const -> Player::NameView;
-    [[nodiscard]] auto areWhistersPass() const -> bool;
-    [[nodiscard]] auto areWhistersWhist() const -> bool;
-    [[nodiscard]] auto areWhistersPassAndWhist() const -> bool;
-    [[nodiscard]] auto isHalfWhistAfterPass() const -> bool;
-    [[nodiscard]] auto isPassAfterHalfWhist() const -> bool;
-    [[nodiscard]] auto isWhistAfterHalfWhist() const -> bool;
-    [[nodiscard]] auto countWhistingChoice(WhistingChoice choice) const -> std::ptrdiff_t;
+    [[nodiscard]] auto whoseTurnId() const -> Player::IdView;
+    [[nodiscard]] auto player(Player::IdView playerId) const -> Player&;
+    [[nodiscard]] auto playerName(Player::IdView playerId) const -> Player::NameView;
+    [[nodiscard]] static auto areWhistersPass() -> bool;
+    [[nodiscard]] static auto areWhistersWhist() -> bool;
+    [[nodiscard]] static auto areWhistersPassAndWhist() -> bool;
+    [[nodiscard]] static auto isHalfWhistAfterPass() -> bool;
+    [[nodiscard]] static auto isPassAfterHalfWhist() -> bool;
+    [[nodiscard]] static auto isWhistAfterHalfWhist() -> bool;
+    [[nodiscard]] static auto countWhistingChoice(WhistingChoice choice) -> std::ptrdiff_t;
 
     auto clear() -> void
     {

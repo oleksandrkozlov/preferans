@@ -21,14 +21,16 @@ DOCKER_BUILDKIT=0 docker build --tag preferans .
 #### Linux
 
 ```
-docker run --privileged -ti -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix \
+docker run --privileged -ti -e DISPLAY=$DISPLAY \
+    -v /tmp/.X11-unix:/tmp/.X11-unix \
     -v $HOME:$HOME -w $PWD --network host --name preferans preferans
 ```
 
 #### macOS
 
 ```
-docker run --privileged -ti -e DISPLAY=host.docker.internal:0 -v /tmp/.X11-unix:/tmp/.X11-unix \
+docker run --privileged -ti -e DISPLAY=host.docker.internal:0 \
+    -v /tmp/.X11-unix:/tmp/.X11-unix \
     -v $HOME:$HOME -w $PWD -p 8000:8000 -p 8080:8080 --name preferans preferans
 ```
 
@@ -43,20 +45,25 @@ Example:
 ```
 Equivalent to:
 ```
-./build.sh 0.0.0.0 ws 8080 Release
+./build.sh 0.0.0.0 ws 8080 Debug
 ```
 Which runs:
 ```
-cmake -S server -B build-server -GNinja -DCMAKE_BUILD_TYPE=Release
+cmake -S server -B build-server -GNinja -DCMAKE_BUILD_TYPE=Debug
 cmake --build build-server --target server
 mkdir -p ./server/data
 touch ./server/data/game.dat
-source /usr/local/share/emsdk/emsdk_env.sh
-emcmake cmake -S client -B build-client -GNinja -DCMAKE_BUILD_TYPE=Release \
+source /etc/profile.d/emscripten.sh
+emcmake cmake -S client -B build-client -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Debug \
     -Dprotobuf_BUILD_TESTS=OFF -DPLATFORM=Web \
-    -DCMAKE_WEBSOCKET_URL=ws://0.0.0.0:8080
-cmake --build build-client --target docopt fmt libprotobuf libprotobuf-lite raylib spdlog
-cmake --build build-client --target client
+    -DCMAKE_WEBSOCKET_URL=ws://0.0.0.0:8080 \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake --build build-client -j `nproc` --target docopt fmt libprotobuf-lite raylib spdlog
+cmake --build build-client -j `nproc` --target client
+```
+For Release:
+```
+./build.sh yoursite.com wss 8080 Release
 ```
 
 ### Add User
@@ -82,12 +89,26 @@ Equivalent to:
 ```
 Which runs:
 ```
-./build-server/bin/server 0.0.0.0 8080 ./server/data/game.dat &
-python3 -m http.server -d build-client/bin -b 0.0.0.0 8000 &
+./build-server/bin/server 0.0.0.0 8080 ./server/data/game.dat
+python3 -m http.server -d build-client/bin -b 0.0.0.0 8000
+```
+For Release:
+* Obtain and install your TLS certificates using [Certbot Instructions | Certbot](https://certbot.eff.org/instructions?ws=nginx&os=pip) and [configure](server/config/yoursite.com) Nginx accordingly.
+* Start the HTTPS server:
+```
+nginx
+```
+* Start the WebSocket server:
+```
+./build-server/bin/server <ip-address> 8080 ./server/data/game.dat \
+    --cert=/path/to/fullchain.pem \
+    --key=/path/to/privkey.pem \
+    --dh=/path/to/ssl-dhparams.pem
 ```
 
-### Test (Debug)
+### Test
 
+Requires a Debug build.
 ```
 cmake --build build-server --target test_server
 ./build-server/bin/test_server

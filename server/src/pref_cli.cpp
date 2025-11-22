@@ -88,8 +88,8 @@ auto removeTokens(GameData& data, const PlayerIdView playerId, const std::option
 {
     userByPlayerId(data, playerId) | LogOnNone(playerId) | OnValue([&authToken, playerId](User& user) {
         authToken | OnNone([&user, playerId] {
+            PREF_I("Removed {} tokens for {}", user.auth_tokens_size(), PREF_V(playerId));
             user.clear_auth_tokens();
-            PREF_I("Removed all tokens for {}", PREF_V(playerId));
         }) | OnValue([&user, playerId](const std::string& token) {
             auto& tokens = *user.mutable_auth_tokens();
             const auto it = rng::remove(tokens, token);

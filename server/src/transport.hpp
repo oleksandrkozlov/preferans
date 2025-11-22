@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "common/common.hpp"
 #include "common/logger.hpp"
 
 #include <boost/asio.hpp>
@@ -117,7 +118,8 @@ struct Connection {
 inline auto payloadSender(Stream& ws, ChannelPtr ch) -> Awaitable<>
 {
     while (true) {
-        const auto [receiveError, payload] = co_await ch->async_receive(net::as_tuple);
+        auto [receiveError, data] = co_await ch->async_receive(net::as_tuple);
+        const auto payload = std::string{std::move(data)};
         if (receiveError) {
             PREF_DW(receiveError);
             co_return;

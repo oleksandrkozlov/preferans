@@ -1,74 +1,70 @@
-# SPDX-License-Identifier: AGPL-3.0-only
-# Copyright (c) 2025 Oleksandr Kozlov
+FROM archlinux@sha256:c136b06a4f786b84c1cc0d2494fabdf9be8811d15051cd4404deb5c3dc0b2e57
+# or archlinux:latest
 
-FROM ubuntu:25.04
-
-ARG DEBIAN_FRONTEND=noninteractive
-
-RUN apt update && apt install -y \
-    build-essential \
-    ccache \
-    clang-format \
-    clang-tidy \
-    clangd \
+# Release
+RUN pacman -Syu --noconfirm \
+    && pacman -S --noconfirm \
+    boost \
+    botan \
+    chrono-date \
     cmake \
-    cmake-format \
-    git \
-    iwyu \
-    libasound2-dev \
-    libboost1.88-dev \
-    libbotan-3-dev \
-    libcatch2-dev \
-    libdocopt-dev \
-    libgl1-mesa-dev \
-    libglfw3-dev \
-    libglu1-mesa-dev \
-    libhowardhinnant-date-dev \
-    libmsgsl-dev \
-    libprotobuf-dev \
-    librange-v3-dev \
-    libssl-dev \
-    libwayland-dev \
-    libx11-dev \
-    libxcursor-dev \
-    libxi-dev \
-    libxinerama-dev \
-    libxkbcommon-dev \
-    libxrandr-dev \
+    docopt \
+    emscripten \
+    fmt \
+    gcc \
+    make \
+    microsoft-gsl \
     nginx \
-    ninja-build \
-    pkg-config \
-    protobuf-compiler \
-    python3 \
-    python3-dev \
-    python3-pip \
-    python3-protobuf \
-    python3-pytest \
-    python3-pytest-asyncio \
-    python3-pytest-timeout \
-    python3-websockets \
+    ninja \
+    openssl \
+    protobuf \
+    range-v3 \
+    spdlog \
     sudo \
-    valgrind \
-    vim-gtk3 \
-    xsel
+    && pacman -Scc --noconfirm \
+    && ln -sf /usr/share/zoneinfo/Europe/Berlin /etc/localtime
 
-RUN git clone --depth=1 --branch 4.0.17 https://github.com/emscripten-core/emsdk.git /usr/local/share/emsdk \
-    && cd /usr/local/share/emsdk \
-    && ./emsdk install latest \
-    && ./emsdk activate latest
+# Debug/Develop
+RUN pacman -S --noconfirm \
+    catch2 \
+    ccache \
+    clang \
+    debugedit \
+    fakeroot \
+    gdb \
+    git \
+    less \
+    openssh \
+    pkgfile \
+    python \
+    python-protobuf \
+    python-pytest \
+    python-pytest-asyncio \
+    python-pytest-timeout \
+    python-websockets \
+    vim \
+    && pacman -Scc --noconfirm \
+    && pkgfile --update
 
-RUN git clone --depth=1 --branch 12.1.0 git@github.com:fmtlib/fmt.git \
-    && cmake -Hfmt -Bfmt/build -GNinja -DCMAKE_BUILD_TYPE=Release -DFMT_TEST=OFF \
-    && cmake --build fmt/build --target install --parallel \
-    && rm -rf fmt
+RUN useradd -m -G wheel archuser \
+    && echo 'archuser ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
-RUN git clone --depth=1 --branch v1.16.0 git@github.com:gabime/spdlog.git \
-    && cmake -Hspdlog -Bspdlog/build -GNinja -DCMAKE_BUILD_TYPE=Release -DSPDLOG_BUILD_EXAMPLE=OFF -DSPDLOG_FMT_EXTERNAL=ON \
-    && cmake --build spdlog/build --target install --parallel \
-    && rm -rf spdlog
+USER archuser
 
-RUN echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
+RUN cd /tmp \
+    && git clone --depth=1 https://aur.archlinux.org/include-what-you-use.git \
+    && cd include-what-you-use \
+    && makepkg -si --noconfirm \
+    && cd - \
+    && rm -rf include-what-you-use \
+    && cd -
 
-USER ubuntu
+RUN cd /tmp \
+    && git clone --depth=1 https://aur.archlinux.org/cmake-format.git \
+    && cd cmake-format \
+    && makepkg -si --noconfirm \
+    && cd - \
+    && rm -rf cmake-format \
+    && cd -
 
 CMD ["/bin/bash"]

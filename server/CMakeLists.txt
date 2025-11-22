@@ -10,28 +10,12 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
-option(ENABLE_SANITIZERS "Enable undefined behavior, leak, and address sanitizers" OFF)
-option(ENABLE_THREAD_SANITIZER "Enable the thread sanitizer" OFF)
+if(CMAKE_BUILD_TYPE STREQUAL Debug)
+    option(ENABLE_SANITIZERS "Enable undefined behavior, leak, and address sanitizers" OFF)
+    option(ENABLE_THREAD_SANITIZER "Enable the thread sanitizer" OFF)
+endif()
 
 include(flags)
-include(sanitizers)
-
-find_package(PkgConfig REQUIRED)
-find_package(boost_headers REQUIRED)
-find_package(Protobuf REQUIRED)
-find_package(spdlog REQUIRED)
-find_package(docopt REQUIRED)
-find_package(Catch2 REQUIRED)
-find_package(date REQUIRED)
-pkg_check_modules(botan-3 REQUIRED IMPORTED_TARGET "botan-3")
-
-file(GLOB_RECURSE PREF_PROTO_FILES ${PROJECT_SOURCE_DIR}/../proto/*.proto)
-protobuf_generate_cpp(
-    PREF_PROTO_CPP_SOURCES PREF_PROTO_CPP_HEADERS EXPORT_MACRO PROTOBUF_EXPORT ${PREF_PROTO_FILES} PROTOC_OUT_DIR
-                                                                               ${PROJECT_SOURCE_DIR}/../proto
-)
-protobuf_generate_python(PREF_PROTO_PY_FILES ${PREF_PROTO_FILES} PROTOC_OUT_DIR ${PROJECT_SOURCE_DIR}/../tests)
-add_custom_target(pref_proto_py_files DEPENDS ${PREF_PROTO_PY_FILES})
 
 if(CMAKE_BUILD_TYPE STREQUAL Debug)
     include(ccache)
@@ -39,7 +23,48 @@ if(CMAKE_BUILD_TYPE STREQUAL Debug)
     include(clang-tidy)
     include(cmake-format)
     include(iwyu)
+    include(sanitizers)
 endif()
+
+find_package(Microsoft.GSL REQUIRED)
+find_package(boost_headers REQUIRED)
+find_package(botan REQUIRED)
+find_package(date REQUIRED)
+find_package(docopt REQUIRED)
+find_package(fmt REQUIRED)
+find_package(protobuf CONFIG REQUIRED)
+find_package(range-v3 REQUIRED)
+find_package(spdlog REQUIRED)
+
+if(CMAKE_BUILD_TYPE STREQUAL Debug)
+    find_package(Catch2 REQUIRED)
+endif()
+if(PREF_SSL)
+    find_package(OpenSSL REQUIRED)
+    message(STATUS "PREF_SSL: ${PREF_SSL}")
+endif()
+
+add_library(proto-objects OBJECT ${PROJECT_SOURCE_DIR}/../proto/pref.proto)
+protobuf_generate(
+    TARGET
+    proto-objects
+    IMPORT_DIRS
+    ${PROJECT_SOURCE_DIR}/../proto
+    PROTOC_OUT_DIR
+    ${PROJECT_SOURCE_DIR}/../proto
+    LANGUAGE
+    cpp
+)
+protobuf_generate(
+    TARGET
+    proto-objects
+    IMPORT_DIRS
+    ${PROJECT_SOURCE_DIR}/../proto
+    PROTOC_OUT_DIR
+    ${PROJECT_SOURCE_DIR}/../tests
+    LANGUAGE
+    python
+)
 
 add_library(
     serverlib STATIC
@@ -51,22 +76,24 @@ add_library(
     src/serialization.cpp
     src/server.cpp
     src/transport.cpp
-    ${PREF_PROTO_CPP_SOURCES}
 )
-add_dependencies(serverlib pref_proto_py_files)
+
 target_link_libraries(
     serverlib
     PUBLIC Boost::headers
-           protobuf::libprotobuf
-           spdlog::spdlog
-           docopt
+           Microsoft.GSL::GSL
+           botan::botan
            date::date
            date::date-tz
-           PkgConfig::botan-3
+           docopt
+           fmt::fmt
+           proto-objects
+           protobuf::libprotobuf-lite
+           range-v3::range-v3
+           spdlog::spdlog
 )
+
 if(PREF_SSL)
-    find_package(OpenSSL REQUIRED)
-    message(STATUS "PREF_SSL: ${PREF_SSL}")
     add_compile_definitions("PREF_SSL")
     target_link_libraries(serverlib PUBLIC OpenSSL::SSL)
 endif()

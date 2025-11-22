@@ -199,6 +199,7 @@ struct Player {
     PlayerId playsOnBehalfOf;
     int tricksTaken{};
     ReadyCheckState readyCheckState = ReadyCheckState::NOT_REQUESTED;
+    Offer offer = Offer::NO_OFFER;
 };
 
 struct BiddingMenu {
@@ -383,6 +384,7 @@ struct SettingsMenu {
     std::string loadedColorScheme;
     std::string loadedLang;
     bool showPingAndFps{};
+    bool mute{};
     r::Vector2 grabOffset{};
     bool moving{};
     r::Vector2 windowBoxPos{MenuX - windowBoxW, BorderMargin};
@@ -391,6 +393,11 @@ struct SettingsMenu {
 struct ScoreSheetMenu {
     ScoreSheet score;
     bool isVisible{};
+
+    auto clear() -> void
+    {
+        score.clear();
+    }
 };
 
 struct SpeechBubbleMenu {
@@ -505,6 +512,21 @@ struct ReadyCheckPopUp {
     bool isVisible{};
 };
 
+struct OfferButton {
+    bool isPossible{};
+    bool isVisible{};
+
+    auto clear() -> void
+    {
+        isPossible = {};
+        isVisible = {};
+    }
+};
+
+struct OfferPopUp {
+    bool isVisible{};
+};
+
 struct Sound {
     r::Sound gameAboutToStarted{sounds("game_about_to_start.mp3")};
     r::Sound gameStarted{sounds("game_started.mp3")};
@@ -514,6 +536,23 @@ struct Sound {
     r::Sound readyCheckReceived{sounds("ready_check_received.mp3")};
     r::Sound readyCheckRequested{sounds("ready_check_requested.mp3")};
     r::Sound readyCheckSucceeded{sounds("ready_check_succeeded.mp3")};
+    r::Sound dealCards{sounds("deal_cards.wav")};
+    r::Sound placeCard{sounds("place_card.wav")};
+
+    auto mute() -> void
+    {
+        // TODO: add sounds to a container and replace with a loop
+        gameAboutToStarted.Stop();
+        gameStarted.Stop();
+        messageReceived.Stop();
+        readyCheckAccepted.Stop();
+        readyCheckDeclined.Stop();
+        readyCheckReceived.Stop();
+        readyCheckRequested.Stop();
+        readyCheckSucceeded.Stop();
+        dealCards.Stop();
+        placeCard.Stop();
+    }
 };
 
 struct Context {
@@ -562,6 +601,8 @@ struct Context {
     LogoutMessage logoutMessage;
     StartGameButton startGameButton;
     ReadyCheckPopUp readyCheckPopUp;
+    OfferButton offerButton;
+    OfferPopUp offerPopUp;
     Ping ping;
     std::string url;
     std::map<CardNameView, r::Vector2> cardPositions;
@@ -589,6 +630,8 @@ struct Context {
         miserCardsPanel.clear();
         cardPositions.clear();
         isGameFreezed = false;
+        offerButton.clear();
+        offerPopUp.isVisible = false;
         for (auto& p : players | rv::values) { p.clear(); }
     }
 
@@ -654,6 +697,12 @@ struct Context {
 {
     static auto ctx = Context{};
     return ctx;
+}
+
+auto playSound(r::Sound& sound) -> void
+{
+    if (ctx().settingsMenu.mute) { return; }
+    sound.Play();
 }
 
 [[nodiscard]] auto players() -> decltype(auto)
@@ -786,12 +835,6 @@ auto sendMessage(const EMSCRIPTEN_WEBSOCKET_T ws, const Message& msg) -> bool
         return false;
     }
     ctx().needsDraw = true;
-    // unsigned short readyState = 0;
-    // if (const auto result = emscripten_websocket_get_ready_state(ws, &readyState);
-    //     result != EMSCRIPTEN_RESULT_SUCCESS and readyState != 1) {
-    //     PREF_W("error: {}, method: {}, {}", emResult(result), msg.method(), PREF_V(readyState));
-    //     return false;
-    // }
     auto data = msg.SerializeAsString();
     if (const auto result = emscripten_websocket_send_binary(ws, data.data(), std::size(data));
         result != EMSCRIPTEN_RESULT_SUCCESS) {
@@ -879,6 +922,14 @@ auto sendMessage(const EMSCRIPTEN_WEBSOCKET_T ws, const Message& msg) -> bool
     return result;
 }
 
+[[nodiscard]] auto makeOffer(const std::string& playerId, const Offer offer) -> MakeOffer
+{
+    auto result = MakeOffer{};
+    result.set_player_id(playerId);
+    result.set_offer(offer);
+    return result;
+}
+
 [[nodiscard]] auto makePlayCard(const std::string& playerId, const CardNameView cardName) -> PlayCard
 {
     auto result = PlayCard{};
@@ -956,6 +1007,11 @@ auto sendHowToPlay(const std::string& choice) -> void
     sendMessage(ctx().ws, makeMessage(makeHowToPlay(ctx().myPlayerId, choice)));
 }
 
+auto sendMakeOffer(const Offer offer) -> void
+{
+    sendMessage(ctx().ws, makeMessage(makeOffer(ctx().myPlayerId, offer)));
+}
+
 auto sendPlayCard(const PlayerId& playerId, const CardNameView cardName) -> void
 {
     sendMessage(ctx().ws, makeMessage(makePlayCard(playerId, cardName)));
@@ -1018,9 +1074,10 @@ auto repeatPingPong() -> void
 auto finishLogin(auto& response) -> void
 {
     ctx().players.clear();
-    for (auto& p : *(response.mutable_players())) {
-        auto player = Player{*p.mutable_player_id(), std::move(*p.mutable_player_name())};
-        ctx().players.insert_or_assign(std::move(*p.mutable_player_id()), std::move(player));
+    for (const auto& p : response.players()) {
+        auto playerId = std::string{p.player_id()};
+        auto player = Player{playerId, std::string{p.player_name()}};
+        ctx().players.insert_or_assign(std::move(playerId), std::move(player));
     }
     if (ctx().areAllPlayersJoined()) { ctx().startGameButton.isVisible = true; }
     repeatPingPong();
@@ -1030,16 +1087,18 @@ auto finishLogin(auto& response) -> void
 
 auto handleLoginResponse(const Message& msg) -> void
 {
-    auto loginResponse = makeMethod<LoginResponse>(msg);
+    const auto loginResponse = makeMethod<LoginResponse>(msg);
     if (not loginResponse) { return; }
     if (const auto& error = loginResponse->error(); not std::empty(error)) {
         PREF_DW(error);
         ctx().isLoginInProgress = false;
         return;
     }
-    PREF_I("playerId: {}", loginResponse->player_id());
-    ctx().myPlayerId = std::move(*loginResponse->mutable_player_id());
-    ctx().authToken = std::move(*loginResponse->mutable_auth_token());
+    ctx().stage = loginResponse->stage();
+    if (ctx().stage != GameStage::UNKNOWN) { ctx().isGameStarted = true; }
+    PREF_I("playerId: {}, stage: {}", loginResponse->player_id(), GameStage_Name(ctx().stage));
+    ctx().myPlayerId = std::string{loginResponse->player_id()};
+    ctx().authToken = std::string{loginResponse->auth_token()};
     saveToLocalStoragePlayerId();
     saveToLocalStorageAuthToken();
     finishLogin(*loginResponse);
@@ -1061,9 +1120,9 @@ auto startReadyCheck(const PlayerId& playerId) -> void
     resetReadyCheck();
     ctx().player(playerId).readyCheckState = ReadyCheckState::ACCEPTED;
     if (playerId == ctx().myPlayerId) {
-        ctx().sound.readyCheckRequested.Play();
+        playSound(ctx().sound.readyCheckRequested);
     } else {
-        ctx().sound.readyCheckReceived.Play();
+        playSound(ctx().sound.readyCheckReceived);
     }
 }
 
@@ -1075,7 +1134,7 @@ auto whenReadyCheckDeclined(const PlayerId& playerId) -> void
     ctx().sound.readyCheckAccepted.Stop();
     ctx().sound.readyCheckReceived.Stop();
     ctx().sound.readyCheckRequested.Stop();
-    ctx().sound.readyCheckDeclined.Play();
+    playSound(ctx().sound.readyCheckDeclined);
 }
 
 auto readyCheckSucceeded() -> void
@@ -1085,7 +1144,7 @@ auto readyCheckSucceeded() -> void
     ctx().sound.readyCheckAccepted.Stop();
     ctx().sound.readyCheckReceived.Stop();
     ctx().sound.readyCheckRequested.Stop();
-    ctx().sound.readyCheckSucceeded.Play();
+    playSound(ctx().sound.readyCheckSucceeded);
 }
 
 [[nodiscard]] auto isReadyCheckAccepted(const PlayerId& playerId) -> bool
@@ -1098,17 +1157,36 @@ auto evaluateReadyCheck(const PlayerId& playerId) -> void
     if (isReadyCheckSucceeded()) {
         readyCheckSucceeded();
     } else if (isReadyCheckAccepted(playerId) and not ctx().sound.readyCheckReceived.IsPlaying()) {
-        ctx().sound.readyCheckAccepted.Play();
+        playSound(ctx().sound.readyCheckAccepted);
     } else {
         whenReadyCheckDeclined(playerId);
     }
 }
 
+auto resetOffer() -> void
+{
+    for (auto& player : players()) { player.offer = Offer::NO_OFFER; }
+}
+
+auto evaluateOffer(const PlayerId& playerId) -> void
+{
+    ctx().offerButton.isPossible = false;
+    ctx().offerButton.isVisible = false;
+    resetOffer();
+    ctx().player(playerId).offer = Offer::OFFER_ACCEPTED;
+}
+
+auto whenOfferDeclined(const PlayerId& playerId) -> void
+{
+    if (ctx().player(playerId).offer != Offer::OFFER_DECLINED) { return; }
+    ctx().offerPopUp.isVisible = false;
+}
+
 auto handleReadyCheck(const Message& msg) -> void
 {
-    auto readyCheck = makeMethod<ReadyCheck>(msg);
+    const auto readyCheck = makeMethod<ReadyCheck>(msg);
     if (not readyCheck) { return; }
-    const auto& playerId = readyCheck->player_id();
+    const auto playerId = std::string{readyCheck->player_id()};
     ctx().player(playerId).readyCheckState = readyCheck->state();
     PREF_I("{}, state: {}", PREF_V(playerId), ReadyCheckState_Name(ctx().player(playerId).readyCheckState));
     if (ctx().player(playerId).readyCheckState == ReadyCheckState::REQUESTED) {
@@ -1121,7 +1199,7 @@ auto handleReadyCheck(const Message& msg) -> void
 
 auto handleAuthResponse(const Message& msg) -> void
 {
-    auto authResponse = makeMethod<AuthResponse>(msg);
+    const auto authResponse = makeMethod<AuthResponse>(msg);
     if (not authResponse) { return; }
     if (const auto& error = authResponse->error(); not std::empty(error)) {
         PREF_DW(error);
@@ -1132,8 +1210,10 @@ auto handleAuthResponse(const Message& msg) -> void
         removeFromLocalStorageAuthToken();
         return;
     }
-    ctx().myPlayerName = std::move(*authResponse->mutable_player_name());
-    PREF_I("playerName: {}", ctx().myPlayerName);
+    ctx().stage = authResponse->stage();
+    if (ctx().stage != GameStage::UNKNOWN) { ctx().isGameStarted = true; }
+    ctx().myPlayerName = std::string{authResponse->player_name()};
+    PREF_I("playerName: {}, stage: {}", ctx().myPlayerName, GameStage_Name(ctx().stage));
     saveToLocalStoragePlayerName();
     finishLogin(*authResponse);
 }
@@ -1142,8 +1222,8 @@ auto handlePlayerJoined(const Message& msg) -> void
 {
     auto playerJoined = makeMethod<PlayerJoined>(msg);
     if (not playerJoined) { return; }
-    auto& playerId = *playerJoined->mutable_player_id();
-    auto& playerName = *playerJoined->mutable_player_name();
+    auto playerId = std::string{playerJoined->player_id()};
+    auto playerName = std::string{playerJoined->player_name()};
     PREF_DI(playerId, playerName);
     auto player = Player{playerId, std::move(playerName)};
     ctx().players.insert_or_assign(std::move(playerId), std::move(player));
@@ -1155,7 +1235,7 @@ auto handlePlayerLeft(const Message& msg) -> void
     const auto playerLeft = makeMethod<PlayerLeft>(msg);
     if (not playerLeft) { return; }
     PREF_I("playerId: {}", playerLeft->player_id());
-    ctx().players.erase(playerLeft->player_id());
+    ctx().players.erase(std::string{playerLeft->player_id()});
 }
 
 [[nodiscard]] auto isMiser() -> bool
@@ -1167,7 +1247,7 @@ auto handleForehand(const Message& msg) -> void
 {
     auto forehand = makeMethod<Forehand>(msg);
     if (not forehand) { return; }
-    auto& playerId = *forehand->mutable_player_id();
+    auto playerId = std::string{forehand->player_id()};
     PREF_DI(playerId);
     ctx().forehandId = std::move(playerId);
 }
@@ -1175,21 +1255,21 @@ auto handleForehand(const Message& msg) -> void
 auto handleDealCards(const Message& msg) -> void
 {
     if (not ctx().isGameStarted) {
-        waitFor(1s, [] { ctx().sound.gameAboutToStarted.Play(); });
+        waitFor(1s, [] { playSound(ctx().sound.gameAboutToStarted); });
         waitFor(3s, [] {
             ctx().isGameStarted = true;
             resetReadyCheck();
-            ctx().sound.gameStarted.Play();
+            playSound(ctx().sound.gameStarted);
+            playSound(ctx().sound.dealCards);
         });
     }
     auto dealCards = makeMethod<DealCards>(msg);
     if (not dealCards) { return; }
-    const auto& playerId = dealCards->player_id();
+    const auto playerId = std::string{dealCards->player_id()};
     auto& player = std::invoke([&] -> Player& {
         if (playerId == ctx().myPlayerId) {
+            if (ctx().isGameStarted) { playSound(ctx().sound.dealCards); }
             ctx().clear();
-        } else if (isMiser()) {
-            ctx().miserCardsPanel.isVisible = true;
         }
         return ctx().player(playerId);
     });
@@ -1205,7 +1285,7 @@ auto handlePlayerTurn(const Message& msg) -> void
     if (not playerTurn) { return; }
     ctx().turnPlayerId = playerTurn->player_id();
     ctx().stage = playerTurn->stage();
-    auto& minBid = *playerTurn->mutable_min_bid();
+    const auto minBid = playerTurn->min_bid();
     const auto passRound = playerTurn->pass_round();
     PREF_I(
         "turnPlayerId: {}, stage: {}, {}{}",
@@ -1239,6 +1319,9 @@ auto handlePlayerTurn(const Message& msg) -> void
         if (isMyTurn) { ctx().myPlayer().sortCards(); }
         return;
     }
+    ctx().offerButton.isPossible = //
+        isMyTurn and ctx().stage == GameStage::PLAYING and ctx().myPlayer().bid != PREF_PASS;
+    if (not ctx().offerButton.isPossible) { ctx().offerButton.isVisible = false; }
     if (not isMyTurn) { return; }
     if (ctx().stage == WITHOUT_TALON) {
         ctx().bidding.rank -= 7;
@@ -1262,47 +1345,63 @@ auto handlePlayerTurn(const Message& msg) -> void
 
 auto handleBidding(const Message& msg) -> void
 {
-    const auto bidding = makeMethod<Bidding>(msg);
+    auto bidding = makeMethod<Bidding>(msg);
     if (not bidding) { return; }
-    const auto& playerId = bidding->player_id();
-    const auto& bid = bidding->bid();
+    const auto playerId = std::string{bidding->player_id()};
+    auto bid = std::string{bidding->bid()};
     auto newRank = bidRank(bid);
     auto& curRank = ctx().bidding.rank;
     if (ctx().myPlayerId == ctx().forehandId and newRank != 0) { --newRank; }
     if (newRank >= curRank or curRank == AllRanks) { ctx().bidding.bid = bid; }
     if (bid != PREF_PASS and (newRank > curRank or curRank == AllRanks)) { curRank = newRank; }
-    ctx().player(playerId).bid = bid;
     PREF_DI(playerId, bid, curRank, newRank);
+    ctx().player(playerId).bid = std::move(bid);
 }
 
 auto handleWhisting(const Message& msg) -> void
 {
-    const auto whisting = makeMethod<Whisting>(msg);
+    auto whisting = makeMethod<Whisting>(msg);
     if (not whisting) { return; }
-    const auto& playerId = whisting->player_id();
-    const auto& choice = whisting->choice();
-    ctx().player(playerId).whistingChoice = choice;
+    const auto playerId = std::string{whisting->player_id()};
+    auto choice = std::string{whisting->choice()};
     PREF_DI(playerId, choice);
+    ctx().player(playerId).whistingChoice = std::move(choice);
 }
 
 auto handleOpenWhistPlay(const Message& msg) -> void
 {
     auto openWhistPlay = makeMethod<OpenWhistPlay>(msg);
     if (not openWhistPlay) { return; }
-    const auto& activeWhisterId = openWhistPlay->active_whister_id();
-    auto& passiveWhisterId = *(openWhistPlay->mutable_passive_whister_id());
+    const auto activeWhisterId = std::string{openWhistPlay->active_whister_id()};
+    auto passiveWhisterId = std::string{openWhistPlay->passive_whister_id()};
     PREF_DI(activeWhisterId, passiveWhisterId);
-    ctx().player(activeWhisterId).playsOnBehalfOf = std::move(passiveWhisterId);
+    auto& activeWhister = ctx().player(activeWhisterId);
+    activeWhister.playsOnBehalfOf = std::move(passiveWhisterId);
 }
 
 auto handleHowToPlay(const Message& msg) -> void
 {
     const auto howToPlay = makeMethod<HowToPlay>(msg);
     if (not howToPlay) { return; }
-    const auto& playerId = howToPlay->player_id();
-    const auto& choice = howToPlay->choice();
+    const auto playerId = std::string{howToPlay->player_id()};
+    const auto choice = howToPlay->choice();
     ctx().player(playerId).howToPlayChoice = choice;
     PREF_DI(playerId, choice);
+}
+
+auto handleMakeOffer(const Message& msg) -> void
+{
+    const auto makeOffer = makeMethod<MakeOffer>(msg);
+    if (not makeOffer) { return; }
+    const auto playerId = std::string{makeOffer->player_id()};
+    ctx().player(playerId).offer = makeOffer->offer();
+    PREF_I("{}, state: {}", PREF_V(playerId), Offer_Name(ctx().player(playerId).offer));
+    if (ctx().player(playerId).offer == Offer::OFFER_REQUESTED) {
+        ctx().offerPopUp.isVisible = true;
+        evaluateOffer(playerId);
+        return;
+    }
+    whenOfferDeclined(playerId);
 }
 
 auto handlePlayCard(const Message& msg) -> void
@@ -1310,8 +1409,8 @@ auto handlePlayCard(const Message& msg) -> void
     auto playCard = makeMethod<PlayCard>(msg);
     if (not playCard) { return; }
     auto [leftOpponentId, rightOpponentId] = getOpponentIds();
-    auto& playerId = *(playCard->mutable_player_id());
-    auto& cardName = *(playCard->mutable_card());
+    auto playerId = std::string{playCard->player_id()};
+    const auto cardName = playCard->card();
     PREF_DI(playerId, cardName);
 
     if (playerId == leftOpponentId) {
@@ -1323,6 +1422,7 @@ auto handlePlayCard(const Message& msg) -> void
     ctx().player(playerId).hand |= rng::actions::remove_if(equalTo(cardName), &Card::name);
     if (std::empty(ctx().cardsOnTable) and not ctx().passGameTalon.exists()) { ctx().leadSuit = cardSuit(cardName); }
     ctx().cardsOnTable.emplace(std::move(playerId), &getCard(cardName));
+    playSound(ctx().sound.placeCard);
 }
 
 auto handleGameState(const Message& msg) -> void
@@ -1336,22 +1436,22 @@ auto handleGameState(const Message& msg) -> void
         ctx().lastTrickOrTalon.push_back(card.name);
     }
     for (auto&& tricks : gameState->taken_tricks()) {
-        auto&& playerId = tricks.player_id();
+        const auto playerId = std::string{tricks.player_id()};
         auto&& tricksTaken = tricks.taken();
         PREF_DI(playerId, tricksTaken);
         ctx().player(playerId).tricksTaken = tricksTaken;
     }
     const auto [leftOpponentId, rightOpponentId] = getOpponentIds();
     for (auto&& cardsLeft : gameState->cards_left()) {
-        auto&& playerId = cardsLeft.player_id();
+        const auto playerId = std::string{cardsLeft.player_id()};
         auto&& cardsLeftCount = cardsLeft.count();
         PREF_DI(playerId, cardsLeftCount);
         if (leftOpponentId == playerId) {
-            ctx().leftCardCount = cardsLeftCount;
+            ctx().leftCardCount = std::min(cardsLeftCount, 10);
             continue;
         }
         if (rightOpponentId == playerId) {
-            ctx().rightCardCount = cardsLeftCount;
+            ctx().rightCardCount = std::min(cardsLeftCount, 10);
             continue;
         }
     }
@@ -1376,7 +1476,7 @@ auto handleTrickFinished(const Message& msg) -> void
                 ctx().isGameFreezed = false;
             }
             for (auto&& tricks : trickFinished->tricks()) {
-                auto&& playerId = tricks.player_id();
+                const auto playerId = std::string{tricks.player_id()};
                 auto&& tricksTaken = tricks.taken();
                 PREF_DI(playerId, tricksTaken);
                 ctx().player(playerId).tricksTaken = tricksTaken;
@@ -1396,7 +1496,8 @@ auto handleDealFinished(const Message& msg) -> void
 {
     const auto dealFinished = makeMethod<DealFinished>(msg);
     if (not dealFinished) { return; }
-    PREF_I();
+    const auto isGameOver = dealFinished->is_game_over();
+    PREF_DI(isGameOver);
     ctx().scoreSheet.score = dealFinished->score_sheet() // clang-format off
         | rv::transform(unpair([](const auto& playerId, const auto& score) {
         return std::pair{playerId, Score{
@@ -1407,6 +1508,14 @@ auto handleDealFinished(const Message& msg) -> void
         })) | rng::to<std::map>}};
     })) | rng::to<ScoreSheet>; // clang-format on
     if (not std::empty(ctx().myPlayer().hand)) { ctx().scoreSheet.isVisible = true; }
+    if (isGameOver) {
+        waitFor(10s, [] {
+            ctx().clear();
+            ctx().scoreSheet.clear();
+            ctx().isGameStarted = false;
+            if (ctx().areAllPlayersJoined()) { ctx().startGameButton.isVisible = true; }
+        });
+    }
 }
 
 auto handleSpeechBubble(const Message& msg) -> void
@@ -1414,8 +1523,10 @@ auto handleSpeechBubble(const Message& msg) -> void
     const auto speechBubble = makeMethod<SpeechBubble>(msg);
     if (not speechBubble) { return; }
     PREF_I("playerId: {}, text: {}", speechBubble->player_id(), speechBubble->text());
-    ctx().speechBubbleMenu.text.insert_or_assign(speechBubble->player_id(), speechBubble->text());
-    ctx().sound.messageReceived.Play();
+    ctx().speechBubbleMenu.text.insert_or_assign(
+        std::string{speechBubble->player_id()}, std::string{speechBubble->text()});
+    // TODO: replace sound with a different one
+    // playSound(ctx().sound.messageReceived);
 }
 
 auto handlePingPong(const Message& msg) -> void
@@ -1484,9 +1595,9 @@ auto handleUserGames(const Message& msg) -> void
 
 auto handleOpenTalon(const Message& msg) -> void
 {
-    auto openTalon = makeMethod<OpenTalon>(msg);
+    const auto openTalon = makeMethod<OpenTalon>(msg);
     if (not openTalon) { return; }
-    auto& cardName = *openTalon->mutable_card();
+    const auto cardName = openTalon->card();
     PREF_DI(cardName);
     ctx().leadSuit = cardSuit(cardName);
     ctx().passGameTalon.push(getCard(cardName));
@@ -1499,6 +1610,7 @@ auto handleMiserCards(const Message& msg) -> void
     ctx().miserCardsPanel.played = miserCards->played_cards() | rng::to_vector;
     ctx().miserCardsPanel.remaining = miserCards->remaining_cards() | rng::to_vector;
     PREF_DI(ctx().miserCardsPanel.played, ctx().miserCardsPanel.remaining);
+    ctx().miserCardsPanel.isVisible = true;
 }
 
 auto updateWindowSize() -> void
@@ -1532,6 +1644,7 @@ auto updateWindowSize() -> void
     PREF_X(GameState) \
     PREF_X(HowToPlay) \
     PREF_X(LoginResponse) \
+    PREF_X(MakeOffer) \
     PREF_X(MiserCards) \
     PREF_X(OpenTalon) \
     PREF_X(OpenWhistPlay) \
@@ -1714,9 +1827,8 @@ auto drawRectangleRoundedWithBorder(
     rect.DrawRoundedLines(roundness, segments, thick, borderColor);
 }
 
-auto drawSpeechBubbleText(const r::Vector2& p3, const std::string& text, const DrawPosition drawPosition) -> void
+auto drawSpeechBubbleText(r::Vector2 p3, const std::string& text, const DrawPosition drawPosition) -> void
 {
-    // TODO: ensure the text doesn't cover taken tricks
     using enum DrawPosition;
     static constexpr auto roundness = 0.7f;
     const auto fontSize = ctx().fontSizeM();
@@ -1724,6 +1836,8 @@ auto drawSpeechBubbleText(const r::Vector2& p3, const std::string& text, const D
     const auto padding = textSize.y * 0.5f;
     const auto bubbleWidth = textSize.x + padding * 2.f;
     const auto bubbleHeight = textSize.y + padding * 2.f;
+    static constexpr auto shift = VirtualH / 28.8f;
+    p3 = isRight(drawPosition) ? r::Vector2{p3.x - shift, p3.y} : r::Vector2{p3.x + shift, p3.y};
     const auto pos = isRight(drawPosition) ? r::Vector2{p3.x - textSize.y - bubbleWidth, p3.y - bubbleHeight * 0.5f}
                                            : r::Vector2{p3.x + textSize.y, p3.y - bubbleHeight * 0.5f};
     const auto rect = r::Rectangle{pos.x, pos.y, bubbleWidth, bubbleHeight};
@@ -2071,6 +2185,7 @@ auto drawCards(const r::Vector2 pos, Player& player, const Shift shift) -> void
 
 auto drawBackCard(const float x, const float y) -> void
 {
+    // TODO: draw 12 cards when a talon is in the hand
     const auto card = r::Rectangle{x, y, CardWidth, CardHeight};
     const auto roundness = 0.2f;
     const auto segments = 0; // auto
@@ -2156,6 +2271,55 @@ template<typename... Args>
     return std::array{getCodepoint(args)...};
 }
 
+[[nodiscard]] auto offerGameText() -> GameText
+{
+    return isMiser() ? GameText::NoMoreForMe : GameText::RemainingMine;
+}
+
+auto drawOfferButton() -> void
+{
+    if (ctx().myPlayer().whistingChoice == PREF_PASS) { return; }
+
+    static constexpr auto buttonH = VirtualH * 0.06f;
+    static constexpr auto shift = 450.f; // TOOD: make reative or calculate properly
+    static constexpr auto pad = VirtualH * 0.02f;
+    static constexpr auto buttonY = VirtualH - shift;
+    const auto textAccept = ctx().localizeText(GameText::ACCEPT);
+    const auto textDecline = ctx().localizeText(GameText::DECLINE);
+    const auto acceptDeclineW = (pad * 2.f)
+        + std::max(ctx().fontM.MeasureText(textAccept, ctx().fontSizeM(), FontSpacing).x,
+                   ctx().fontM.MeasureText(textDecline, ctx().fontSizeM(), FontSpacing).x);
+    const auto totalW = acceptDeclineW * 2.f + pad;
+    if (ctx().offerPopUp.isVisible) {
+        assert(not ctx().offerButton.isPossible);
+        const auto acceptX = (VirtualW * 0.5f) - (totalW * 0.5f);
+        const auto handleOffer = [&](Offer offer) {
+            ctx().offerPopUp.isVisible = false;
+            ctx().myPlayer().offer = offer;
+            sendMakeOffer(offer);
+            whenOfferDeclined(ctx().myPlayerId);
+        };
+        if (GuiButton({acceptX, buttonY, acceptDeclineW, buttonH}, textAccept.c_str())) {
+            handleOffer(Offer::OFFER_ACCEPTED);
+        } else if (GuiButton({acceptX + pad + acceptDeclineW, buttonY, acceptDeclineW, buttonH}, textDecline.c_str())) {
+            handleOffer(Offer::OFFER_DECLINED);
+        }
+        return;
+    }
+    if (ctx().offerButton.isVisible) {
+        assert(ctx().offerButton.isPossible);
+        assert(not ctx().offerPopUp.isVisible);
+        const auto offerText = fmt::format(
+            "{}: {}", ctx().localizeText(GameText::RevealCardsAndOffer), ctx().localizeText(offerGameText()));
+        const auto offerW = (pad * 2.0f) + ctx().fontM.MeasureText(offerText.c_str(), ctx().fontSizeM(), FontSpacing).x;
+        if (GuiButton({(VirtualW * 0.5f) - (offerW * 0.5f), VirtualH - shift, offerW, buttonH}, offerText.c_str())) {
+            sendMakeOffer(Offer::OFFER_REQUESTED);
+            evaluateOffer(ctx().myPlayerId);
+            return;
+        }
+    }
+}
+
 [[nodiscard]] auto drawYourTurn(
     const r::Vector2& pos, const float gap, const float totalWidth, const PlayerId& playerId) -> float
 {
@@ -2175,7 +2339,8 @@ template<typename... Args>
             and not isPlayerTurnOnBehalfOfSomeone)) {
         return textY;
     }
-    const auto rect = r::Rectangle{textX + gap * 0.5f, textY - gap * 0.5f, textSize.x + gap, textSize.y + gap};
+    static constexpr auto shift = 110.0f; // TOOD: make reative or calculate properly
+    const auto rect = r::Rectangle{textX + gap * 0.5f, textY - gap * 0.5f - shift, textSize.x + gap, textSize.y + gap};
     if (isPlayerTurnOnBehalfOfSomeone) {
         static const auto arrowSize = ctx().fontSizeXL();
         const auto [leftOpponentId, _] = getOpponentIds();
@@ -2246,6 +2411,17 @@ auto drawMyHand() -> void
     drawWhist(cardLastRightCenterPos, player, Positive | Horizont) //
         or drawBid(cardLastRightCenterPos, player, {}, Positive | Horizont);
     drawSpeechBubble({playerNameCenter.x, yourTurnTopY + gap * 2}, ctx().myPlayerId, Left);
+    static constexpr auto shift = 40.0f; // TOOD: make reative or calculate properly
+    if (ctx().offerPopUp.isVisible) {
+        const auto playerName = players()
+            | rv::filter([](const Player& player) { return player.bid != PREF_PASS; })
+            | rv::transform(&Player::name)
+            | rv::join
+            | ToString;
+        assert(not std::empty(playerName));
+        const auto offerText = fmt::format("{}: {}", playerName, ctx().localizeText(offerGameText()));
+        drawGuiLabelCentered(offerText, {VirtualW * 0.5f, yourTurnTopY - shift});
+    }
     // drawDebugHorzLine(cardCenterY, "cardCenterY");
     // drawDebugDot(cardFirstLeftCenterPos, "cardFirstLeftCenterPos");
     // drawDebugDot(cardLastRightCenterPos, "cardLastRightCenterPos");
@@ -2557,7 +2733,12 @@ auto drawWhistingOrMiserMenu() -> void
     };
     const auto click = [&](GameText buttonName) {
         ctx().whisting.isVisible = false;
-        ctx().whisting.choice = localizeText(buttonName, GameLang::English);
+        const auto choice = localizeText(buttonName, GameLang::English);
+        ctx().whisting.choice = std::invoke([&] {
+            if (choice == PREF_TRUST) { return std::string{PREF_PASS}; }
+            if (choice == PREF_CATCH) { return std::string{PREF_WHIST}; }
+            return std::string{choice};
+        });
         ctx().myPlayer().whistingChoice = ctx().whisting.choice;
         sendWhisting(ctx().whisting.choice);
     };
@@ -2625,6 +2806,7 @@ auto handleCardClick(std::list<const Card*>& hand, std::invocable<const Card&> a
         const auto _ = gsl::finally([&] {
             ctx().cardPositions.erase(cardName);
             hand.erase(it);
+            playSound(ctx().sound.placeCard);
         });
         act(**it);
     }
@@ -2661,7 +2843,8 @@ auto handleCardClick(std::list<const Card*>& hand, std::invocable<const Card&> a
         ExitFullScreenIcon,
         SpeechBubbleIcon,
         OverallScoreboardIcon,
-        LogoutIcon);
+        LogoutIcon,
+        HandshakeIcon);
 }
 
 [[nodiscard]] auto makeAwesomeLargeCodepoints()
@@ -2784,6 +2967,16 @@ auto drawSpeechBubbleButton() -> void
     drawMenuButton(ctx().speechBubbleMenu, 5, SpeechBubbleIcon);
 }
 
+auto drawHandshakeOfferButton() -> void
+{
+    if (const auto& bid = ctx().myPlayer().bid;
+        ctx().stage != GameStage::PLAYING or std::empty(bid) or bid == PREF_PASS) {
+        return;
+    }
+    withGuiState(
+        STATE_DISABLED, not ctx().offerButton.isPossible, [&] { drawMenuButton(ctx().offerButton, 6, HandshakeIcon); });
+}
+
 auto drawLogoutButton() -> void
 {
     if (not ctx().isLoggedIn) { return; }
@@ -2903,10 +3096,11 @@ auto drawSettingsMenu() -> void
     const auto colorSchemeGroupBox
         = r::Vector2{langListView.x - margin, langListView.y + langListViewH + margin * 2.5f};
     const auto colorSchemeListView = r::Vector2{colorSchemeGroupBox.x + margin, colorSchemeGroupBox.y + margin};
-    static constexpr auto otherGroupBoxH = margin * 3.f;
+    static constexpr auto otherGroupBoxH = margin * 4.f;
     const auto otherGroupBox
         = r::Vector2{colorSchemeListView.x - margin, colorSchemeListView.y + colorSchemeListViewH + margin * 2.5f};
     const auto fpsCheckbox = r::Vector2{otherGroupBox.x + margin, otherGroupBox.y + margin};
+    const auto muteCheckbox = r::Vector2{otherGroupBox.x + margin, fpsCheckbox.y + margin * 1.5f};
     static const auto windowBoxH = (fpsCheckbox.y + otherGroupBoxH) - ctx().settingsMenu.windowBoxPos.y;
     withGuiFont(ctx().fontS, [&] {
         const auto settingsText = ctx().localizeText(GameText::Settings);
@@ -2956,11 +3150,23 @@ auto drawSettingsMenu() -> void
         const auto showPingAndFps = ctx().settingsMenu.showPingAndFps;
         GuiCheckBox(
             {fpsCheckbox.x, fpsCheckbox.y, margin, margin}, fpsText.c_str(), &ctx().settingsMenu.showPingAndFps);
-        if (showPingAndFps == ctx().settingsMenu.showPingAndFps) { return; }
-        if (ctx().settingsMenu.showPingAndFps) {
-            saveToLocalStorage("show_ping_and_fps", "true");
-        } else {
-            removeFromLocalStorage("show_ping_and_fps");
+        if (showPingAndFps != ctx().settingsMenu.showPingAndFps) {
+            if (ctx().settingsMenu.showPingAndFps) {
+                saveToLocalStorage("show_ping_and_fps", "true");
+            } else {
+                removeFromLocalStorage("show_ping_and_fps");
+            }
+        }
+        const auto mute = ctx().settingsMenu.mute;
+        const auto muteText = ctx().localizeText(GameText::Mute);
+        GuiCheckBox({muteCheckbox.x, muteCheckbox.y, margin, margin}, muteText.c_str(), &ctx().settingsMenu.mute);
+        if (mute != ctx().settingsMenu.mute) {
+            if (ctx().settingsMenu.mute) {
+                saveToLocalStorage("mute", "true");
+                ctx().sound.mute();
+            } else {
+                removeFromLocalStorage("mute");
+            }
         }
     });
 }
@@ -3002,8 +3208,7 @@ auto drawScoreSheet() -> void
     r::Vector2{rl.x, center.y}.DrawLine({rm.x, center.y}, thick, borderColor);
     r::Vector2{rl.x + rl.width, center.y}.DrawLine({rm.x + rm.width, center.y}, thick, borderColor);
     r::Vector2{center.x, rl.y + rl.height}.DrawLine({center.x, rm.y + rm.height}, thick, borderColor);
-    // TODO: don't hardcode `scoreTarget`
-    static constexpr auto scoreTarget = "10";
+    static const auto scoreTarget = fmt::format("{}", ScoreTarget);
     static const auto scoreTargetSize = ctx().fontM.MeasureText(scoreTarget, ctx().fontSizeM(), fSpace);
     ctx().fontM.DrawText(
         scoreTarget,
@@ -3102,12 +3307,11 @@ auto drawScoreSheet() -> void
 
 auto drawOverallScoreboard() -> void
 {
-    if (not isVisible(ctx().overallScoreboard) or std::size(ctx().overallScoreboard.table) < 3) { return; }
+    if (not isVisible(ctx().overallScoreboard) or std::size(ctx().overallScoreboard.table) < 2) { return; }
     static constexpr auto maxVisibleRowCount = 13.f;
     static const auto cellSize = r::Vector2{VirtualW / 10.f, RAYGUI_WINDOWBOX_STATUSBAR_HEIGHT};
     static auto panelView = r::Rectangle{};
     static auto panelScroll = r::Vector2{};
-    assert(std::ssize(ctx().overallScoreboard.table) >= 3);
     const auto rowCount = std::max(2.f, static_cast<float>(std::size(ctx().overallScoreboard.table) - 2));
     const auto panel = cellSize
         * r::Vector2{
@@ -3358,6 +3562,7 @@ auto updateDrawFrame([[maybe_unused]] void* ud) -> void
         drawBiddingMenu();
         drawMiserCards();
         drawMyHand();
+        drawOfferButton();
         drawRightHand();
         drawLeftHand();
         drawPlayedCards();
@@ -3365,17 +3570,16 @@ auto updateDrawFrame([[maybe_unused]] void* ud) -> void
         drawScoreSheet();
         drawLastTrickOrTalon();
         drawSpeechBubbleButton();
-        drawOverallScoreboardButton();
+        drawHandshakeOfferButton();
     } else {
         drawConnectedPlayers();
     }
+    if (ctx().isLoggedIn) { drawOverallScoreboardButton(); }
     drawSettingsButton();
     drawFullScreenButton();
     drawPingAndFps();
-    if (ctx().isGameStarted and ctx().isLoggedIn) {
-        drawOverallScoreboard();
-        drawSpeechBubbleMenu();
-    }
+    if (ctx().isGameStarted and ctx().isLoggedIn) { drawSpeechBubbleMenu(); }
+    if (ctx().isLoggedIn) { drawOverallScoreboard(); }
     drawSettingsMenu();
     drawLogoutMessage();
     ctx().target.EndMode();
@@ -3416,6 +3620,7 @@ int main(const int argc, const char* const argv[])
     pref::loadFromLocalStorageAuthToken();
     pref::loadFromLocalStoragePlayerName();
     ctx.settingsMenu.showPingAndFps = not std::empty(pref::loadFromLocalStorage("show_ping_and_fps"));
+    ctx.settingsMenu.mute = not std::empty(pref::loadFromLocalStorage("mute"));
     const auto args = docopt::docopt(pref::usage, {std::next(argv), std::next(argv, argc)});
     ctx.url = args.at("--url").asString();
     const auto lang = pref::loadFromLocalStorage("language");

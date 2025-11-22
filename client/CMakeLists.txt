@@ -39,10 +39,54 @@ add_custom_command(
 
 target_link_libraries(client raylib fmt docopt)
 if(CMAKE_BUILD_TYPE STREQUAL Debug)
-    target_link_libraries(client ${CMAKE_BINARY_DIR}/lib/libprotobuf-lited.a ${CMAKE_BINARY_DIR}/lib/libprotobufd.a)
+    target_link_libraries(client ${CMAKE_BINARY_DIR}/lib/libprotobuf-lited.a)
 else()
-    target_link_libraries(client ${CMAKE_BINARY_DIR}/lib/libprotobuf-lite.a ${CMAKE_BINARY_DIR}/lib/libprotobuf.a)
+    target_link_libraries(client ${CMAKE_BINARY_DIR}/lib/libprotobuf-lite.a)
 endif()
+
+target_link_libraries(
+    client
+    ${CMAKE_BINARY_DIR}/lib/libabsl_log_internal_check_op.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_log_internal_message.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_log_internal_nullguard.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_examine_stack.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_log_internal_format.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_log_internal_log_sink_set.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_log_sink.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_log_internal_proto.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_log_internal_globals.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_log_globals.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_raw_hash_set.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_status.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_cord.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_cordz_info.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_cord_internal.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_hash.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_city.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_cordz_handle.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_crc_cord_state.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_crc32c.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_crc_internal.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_leak_check.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_strerror.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_str_format_internal.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_synchronization.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_stacktrace.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_symbolize.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_graphcycles_internal.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_kernel_timeout_internal.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_malloc_internal.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_time.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_time_zone.a
+    ${CMAKE_BINARY_DIR}/lib/libutf8_validity.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_strings.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_strings_internal.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_base.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_spinlock_wait.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_throw_delegate.a
+    ${CMAKE_BINARY_DIR}/lib/libabsl_raw_logging_internal.a
+)
+
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_BINARY_DIR}/_deps/raylib-build/raylib/include)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_BINARY_DIR}/_deps/absl-src)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/fmt/include/)
@@ -50,6 +94,7 @@ target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/GSL/inc
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/raylib-cpp/include)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/range-v3/include)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/protobuf/src)
+target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/protobuf/third_party/utf8_range)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/raygui/src)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/spdlog/include)
 target_include_directories(client SYSTEM PUBLIC ${CMAKE_SOURCE_DIR}/deps/gsl/include)

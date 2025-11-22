@@ -14,10 +14,10 @@ endif()
 
 find_package(Python3 3.8 COMPONENTS Interpreter REQUIRED)
 
-find_program(IWYU_TOOL_PROGRAM iwyu_tool)
+find_program(IWYU_TOOL_PROGRAM iwyu-tool)
 
 if(NOT IWYU_TOOL_PROGRAM)
-    message(FATAL_ERROR "No program 'iwyu_tool.py' found")
+    message(FATAL_ERROR "No program 'iwyu_tool' found")
 endif()
 
 add_custom_target(
@@ -29,10 +29,10 @@ add_custom_target(
     COMMENT "Analyzing code by 'iwyu'"
 )
 
-find_program(FIX_INCLUDES_PROGRAM fix_include)
+find_program(FIX_INCLUDES_PROGRAM iwyu-fix-includes)
 
 if(NOT FIX_INCLUDES_PROGRAM)
-    message(FATAL_ERROR "No program 'fix_include' found")
+    message(FATAL_ERROR "No program 'iwyu-fix-includes' found")
 endif()
 
 add_custom_target(

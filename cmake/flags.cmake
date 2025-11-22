@@ -35,7 +35,6 @@ set(COMPILE_OPTIONS
     -Wsign-conversion
     -Wswitch-enum
     -Wunused
-    -flto=auto
     -fstack-protector-all
 )
 set(GNU_COMPILE_OPTIONS

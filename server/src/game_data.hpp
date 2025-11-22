@@ -83,12 +83,12 @@ template<typename GameDataT>
 
 [[nodiscard]] inline auto userPlayerId(const GameData& data, const PlayerNameView playerName)
 {
-    return pref::find(data.users(), playerName, &User::player_name, &User::player_id);
+    return pref::find_value(data.users(), playerName, &User::player_name, &User::player_id);
 }
 
 [[nodiscard]] inline auto playerPasswordHash(const GameData& data, const PlayerNameView playerName)
 {
-    return pref::find(data.users(), playerName, &User::player_name, &User::password);
+    return pref::find_value(data.users(), playerName, &User::player_name, &User::password);
 }
 
 [[nodiscard]] inline auto verifyPlayerIdAndAuthToken(
@@ -105,7 +105,7 @@ template<typename GameDataT>
 {
     PREF_DI(playerName);
     return playerPasswordHash(data, playerName)
-        .transform([&](const std::string& hash) { return verifyPassword(password, hash); })
+        .transform([&](const std::string_view hash) { return verifyPassword(password, hash); })
         .value_or(false);
 }
 
@@ -167,6 +167,7 @@ inline auto revokeAuthToken(GameData& data, const PlayerIdView playerId, const s
     const std::int32_t whists,
     const std::int32_t mmr) -> UserGame
 {
+    PREF_DI(gameId, duration, pool, dump, whists, mmr);
     auto result = UserGame{};
     result.set_id(gameId);
     result.set_duration(duration);

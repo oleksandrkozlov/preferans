@@ -34,17 +34,21 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
 }
 
 [[nodiscard]] inline auto makeLoginResponse(
-    const PlayerId& playerId, const std::string& authToken, const PlayersIdentsView players, const std::string& error)
-    -> std::string
+    const GameStage stage,
+    const PlayerIdView playerId,
+    std::string authToken,
+    const PlayersIdentsView players,
+    std::string error) -> std::string
 {
-    PREF_I("{}, {}{}", PREF_V(players), PREF_V(playerId), PREF_M(error));
+    PREF_I("stage: {}, {}, {}{}", GameStage_Name(stage), PREF_V(players), PREF_V(playerId), PREF_M(error));
     auto result = LoginResponse{};
+    result.set_stage(stage);
     if (not std::empty(error)) {
-        result.set_error(error);
+        result.set_error(std::move(error));
         return makeMessage(result).SerializeAsString();
     }
     result.set_player_id(playerId);
-    result.set_auth_token(authToken);
+    result.set_auth_token(std::move(authToken));
     for (const auto& [id, name] : players) {
         auto* p = result.add_players();
         p->set_player_id(id);
@@ -54,12 +58,14 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
 }
 
 [[nodiscard]] inline auto makeAuthResponse(
-    const PlayerName& playerName, const PlayersIdentsView players, const std::string& error) -> std::string
+    const GameStage stage, const PlayerNameView playerName, const PlayersIdentsView players, std::string error)
+    -> std::string
 {
-    PREF_I("{}, {}{}", PREF_V(playerName), PREF_V(players), PREF_M(error));
+    PREF_I("stage: {}, {}, {}{}", GameStage_Name(stage), PREF_V(playerName), PREF_V(players), PREF_M(error));
     auto result = AuthResponse{};
+    result.set_stage(stage);
     if (not std::empty(error)) {
-        result.set_error(error);
+        result.set_error(std::move(error));
         return makeMessage(result).SerializeAsString();
     }
     result.set_player_name(playerName);
@@ -71,7 +77,7 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
     return makeMessage(result).SerializeAsString();
 }
 
-[[nodiscard]] inline auto makePlayerJoined(const PlayerName& playerName, const PlayerId& playerId) -> std::string
+[[nodiscard]] inline auto makePlayerJoined(const PlayerNameView playerName, const PlayerIdView playerId) -> std::string
 {
     PREF_DI(playerName, playerId);
     auto result = PlayerJoined{};
@@ -80,15 +86,15 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
     return makeMessage(result).SerializeAsString();
 }
 
-[[nodiscard]] inline auto makePlayerLeft(const PlayerId& playerId) -> std::string
+[[nodiscard]] inline auto makePlayerLeft(PlayerId playerId) -> std::string
 {
     PREF_DI(playerId);
     auto result = PlayerLeft{};
-    result.set_player_id(playerId);
+    result.set_player_id(std::move(playerId));
     return makeMessage(result).SerializeAsString();
 }
 
-[[nodiscard]] inline auto makeReadyCheck(const PlayerId& playerId, const ReadyCheckState state) -> std::string
+[[nodiscard]] inline auto makeReadyCheck(const PlayerIdView playerId, const ReadyCheckState state) -> std::string
 {
     PREF_I("{}, state: {}", PREF_V(playerId), ReadyCheckState_Name(state));
     auto result = ReadyCheck{};
@@ -97,7 +103,7 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
     return makeMessage(result).SerializeAsString();
 }
 
-[[nodiscard]] inline auto makeForehand(const PlayerId& playerId) -> std::string
+[[nodiscard]] inline auto makeForehand(const PlayerIdView playerId) -> std::string
 {
     PREF_DI(playerId);
     auto result = Forehand{};
@@ -105,19 +111,19 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
     return makeMessage(result).SerializeAsString();
 }
 
-[[nodiscard]] inline auto makeDealCards(const PlayerId& playerId, const CardsNamesView hand) -> std::string
+[[nodiscard]] inline auto makeDealCards(const PlayerIdView playerId, const CardsNamesView hand) -> std::string
 {
     PREF_DI(playerId, hand);
     auto result = DealCards{};
     result.set_player_id(playerId);
-    for (const auto& card : hand) { *result.add_cards() = card; }
+    for (const auto& card : hand) { result.add_cards(card); }
     return makeMessage(result).SerializeAsString();
 }
 
 [[nodiscard]] inline auto makePlayerTurn(
-    const PlayerId& playerId,
+    const PlayerIdView playerId,
     const GameStage stage,
-    const std::string& minBid,
+    std::string_view minBid,
     const bool canHalfWhist,
     const int passRound,
     const CardsNamesView talon) -> std::string
@@ -133,14 +139,14 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
     auto result = PlayerTurn{};
     result.set_player_id(playerId);
     result.set_stage(stage);
-    result.set_min_bid(minBid);
+    result.set_min_bid(std::move(minBid));
     result.set_can_half_whist(canHalfWhist);
     result.set_pass_round(passRound);
     for (const auto& card : talon) { result.add_talon(card); }
     return makeMessage(result).SerializeAsString();
 }
 
-[[nodiscard]] inline auto makeBidding(const PlayerId& playerId, const std::string& bid) -> std::string
+[[nodiscard]] inline auto makeBidding(const PlayerIdView playerId, const std::string_view bid) -> std::string
 {
     PREF_DI(playerId, bid);
     auto result = Bidding{};
@@ -149,7 +155,7 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
     return makeMessage(result).SerializeAsString();
 }
 
-[[nodiscard]] inline auto makeWhisting(const PlayerId& playerId, const std::string& choice) -> std::string
+[[nodiscard]] inline auto makeWhisting(const PlayerIdView playerId, const std::string_view choice) -> std::string
 {
     PREF_DI(playerId, choice);
     auto result = Whisting{};
@@ -158,7 +164,7 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
     return makeMessage(result).SerializeAsString();
 }
 
-[[nodiscard]] inline auto makeHowToPlay(const PlayerId& playerId, const std::string& choice) -> std::string
+[[nodiscard]] inline auto makeHowToPlay(const PlayerIdView playerId, const std::string_view choice) -> std::string
 {
     PREF_DI(playerId, choice);
     auto result = HowToPlay{};
@@ -167,7 +173,7 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
     return makeMessage(result).SerializeAsString();
 }
 
-[[nodiscard]] inline auto makeOpenWhistPlay(const PlayerId& activeWhisterId, const PlayerId& passiveWhisterId)
+[[nodiscard]] inline auto makeOpenWhistPlay(const PlayerIdView activeWhisterId, const PlayerIdView passiveWhisterId)
     -> std::string
 {
     PREF_DI(activeWhisterId, passiveWhisterId);
@@ -177,7 +183,7 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
     return makeMessage(result).SerializeAsString();
 }
 
-[[nodiscard]] inline auto makeOpenTalon(const CardName& card) -> std::string
+[[nodiscard]] inline auto makeOpenTalon(const CardNameView card) -> std::string
 {
     PREF_DI(card);
     auto result = OpenTalon{};
@@ -194,7 +200,7 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
     return makeMessage(result).SerializeAsString();
 }
 
-[[nodiscard]] inline auto makePlayCard(const PlayerId& playerId, const CardName& cardName) -> std::string
+[[nodiscard]] inline auto makePlayCard(const PlayerIdView playerId, const CardNameView cardName) -> std::string
 {
     PREF_DI(playerId, cardName);
     auto result = PlayCard{};
@@ -237,7 +243,7 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
     return makeMessage(result).SerializeAsString();
 }
 
-[[nodiscard]] inline auto makeDealFinished(const ScoreSheet& scoreSheet) -> std::string
+[[nodiscard]] inline auto makeDealFinished(const ScoreSheet& scoreSheet, const auto isGameOver) -> std::string
 {
     auto result = DealFinished{};
     for (const auto& [playerId, score] : scoreSheet) {
@@ -248,6 +254,7 @@ auto moveVectorToRepeated(std::vector<T>& input, MutRepeatedField& output) -> vo
             for (const auto value : values) { (*data.mutable_whists())[whistPlayerId].add_values(value); }
         }
     }
+    result.set_is_game_over(isGameOver);
     return makeMessage(result).SerializeAsString();
 }
 
