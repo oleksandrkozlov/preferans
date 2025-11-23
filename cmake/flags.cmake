@@ -45,6 +45,7 @@ set(GNU_COMPILE_OPTIONS
     -Wl,-z,noexecstack
     -Wl,-z,relro,-z,now
     -Wlogical-op
+    -Wno-subobject-linkage
     -Wstringop-overflow
     -Wtrampolines
     -Wvla-larger-than=1048576

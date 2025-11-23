@@ -12,8 +12,11 @@
 #include "serialization.hpp"
 #include "transport.hpp"
 
+#include <boost/asio/as_tuple.hpp>
 #include <boost/beast.hpp>
 #include <range/v3/all.hpp>
+#include <stdexec/__detail/__let.hpp>
+#include <stdexec/execution.hpp>
 
 #include <algorithm>
 #include <array>
@@ -28,8 +31,6 @@
 
 namespace pref {
 namespace {
-
-using net::ip::tcp;
 
 auto setWhoseTurn(const Context::Players::const_iterator it) -> void
 {
@@ -412,9 +413,9 @@ auto disconnected(Player::Id playerId) -> Awaitable<>
 {
     PREF_DI(playerId);
     auto& player = ctx().player(playerId);
-    if (not player.conn.reconnectTimer) { player.conn.reconnectTimer.emplace(co_await net::this_coro::executor); }
-    player.conn.reconnectTimer->expires_after(2min);
-    if (const auto [error] = co_await player.conn.reconnectTimer->async_wait(net::as_tuple); error) {
+    if (not player.conn.reconnectTimer) { player.conn.reconnectTimer.emplace(player.conn.ch->get_executor()); }
+    player.conn.reconnectTimer->expires_after(10s);
+    if (const auto [error] = co_await player.conn.reconnectTimer->async_wait(); error) {
         if (error != net::error::operation_aborted) { PREF_DW(error); }
         co_return;
     }
@@ -714,7 +715,7 @@ auto finishDeal() -> Awaitable<>
         ctx().gameDuration = {};
         co_return;
     }
-    co_await sleepFor(3s);
+    co_await sleepFor(3s, ctx().ex);
     co_await dealCards();
     setNextDealTurn();
     co_await sendForehand();
@@ -956,56 +957,55 @@ auto launchSession(Stream ws) -> Awaitable<>
     ws.set_option(web::stream_base::decorator([](web::response_type& res) {
         res.set(beast::http::field::server, std::string{BOOST_BEAST_VERSION_STRING} + " preferans-server");
     }));
+    auto buf = beast::flat_buffer{};
+    auto chn = std::shared_ptr<Channel>{};
+    auto sch = co_await stdx::get_scheduler();
+    auto ssn = PlayerSession{};
+    co_await (
 #ifdef PREF_SSL
-    {
-        auto error = sys::error_code{};
-        co_await ws.next_layer().async_handshake(net::ssl::stream_base::server, net::redirect_error(error));
-        if (error) {
-            PREF_W("{} (handshake)", PREF_V(error));
-            co_return;
-        }
-    }
+        ws.next_layer().async_handshake(net::ssl::stream_base::server, netx::use_sender)
+        | stdx::let_value([&] { return ws.async_accept(netx::use_sender); })
+#else // PREF_SSL
+        ws.async_accept(netx::use_sender)
 #endif // PREF_SSL
-    {
-        auto error = sys::error_code{};
-        co_await ws.async_accept(net::redirect_error(error));
-        if (error) {
-            PREF_W("{} (accept)", PREF_V(error));
-            co_return;
-        }
-    }
-    static constexpr auto channelSize = 128;
-    const auto ex = co_await net::this_coro::executor;
-    auto ch = std::make_shared<Channel>(ex, channelSize);
-    net::co_spawn(ex, payloadSender(ws, ch), Detached("payloadSender"));
-    auto session = PlayerSession{};
-
-    while (true) {
-        auto buffer = beast::flat_buffer{};
-        if (const auto [error, _] = co_await ws.async_read(buffer, net::as_tuple); error) {
-            PREF_W("{} (read){}{}", error, PREF_M(session.playerId), PREF_M(session.playerName));
-            break;
-        }
-        co_await dispatchMessage(ch, session, makeMessage(buffer.data().data(), buffer.size()));
-        if (session.id == 0) { break; }
-    }
-    if (session.id == 0) {
-        PREF_W("error: session ID is empty");
-        ch->close();
-        co_return;
-    }
-    if (not std::empty(session.playerId) and not ctx().players.contains(session.playerId)) {
-        PREF_W("{} already left", PREF_V(session.playerId));
-        ch->close();
-        co_return;
-    }
-    auto& player = ctx().player(session.playerId);
-    if (session.id != player.sessionId) {
-        PREF_I("{} reconnected with {} => {}", PREF_V(session.playerId), PREF_V(session.id), player.sessionId);
-        co_return;
-    }
-    net::co_spawn(ex, disconnected(session.playerId), Detached("disconnected"));
-    ch->close();
+        | stdx::then([&] {
+              static constexpr auto channelSize = 128;
+              chn = std::make_shared<Channel>(ws.get_executor(), channelSize);
+              stdx::start_detached(stdx::starts_on(sch, payloadSender(ws, *chn)));
+          })
+        | stdx::let_value([&] {
+              return ex::repeat_effect_until(
+                  ws.async_read(buf, netx::use_sender)
+                  | stdx::let_value([&]([[maybe_unused]] const std::uint64_t bytes) {
+                        return dispatchMessage(chn, ssn, makeMessage(buf.data().data(), buf.size()));
+                    })
+                  | stdx::then([&] { return ssn.id == 0; })
+                  | stdx::upon_stopped([](auto&&...) { return true; })
+                  | stdx::upon_error([](const std::exception_ptr& error) {
+                        PrintError("launchSession", error);
+                        return true;
+                    }));
+          })
+        | stdx::then([&] {
+              if (ssn.id == 0) {
+                  PREF_W("[launchSession] error: session ID is empty");
+                  chn->close();
+                  return;
+              }
+              if (not std::empty(ssn.playerId) and not ctx().players.contains(ssn.playerId)) {
+                  chn->close();
+                  return;
+              }
+              auto& player = ctx().player(ssn.playerId);
+              if (ssn.id != player.sessionId) {
+                  PREF_I("[launchSession] {} reconnected with ssnId: {} => {}", ssn.playerId, ssn.id, player.sessionId);
+                  return;
+              }
+              stdx::start_detached(
+                  stdx::starts_on(sch, disconnected(ssn.playerId) | stdx::upon_error(Detached("disconnected"))));
+              chn->close();
+          })
+        | stdx::upon_error([](const std::exception_ptr& error) { PrintError("launchSession", error); }));
 }
 
 } // namespace
@@ -1162,25 +1162,32 @@ auto Context::countWhistingChoice(const WhistingChoice choice) -> std::ptrdiff_t
     };
 }
 
-auto acceptConnectionAndLaunchSession(
+auto accept(
 #ifdef PREF_SSL
     net::ssl::context ssl,
 #endif // PREF_SSL
-    // NOLINTNEXTLINE(performance-unnecessary-value-param)
-    tcp::endpoint endpoint) -> Awaitable<>
+    tcp::endpoint endpoint,
+    net::any_io_executor ex) -> Awaitable<>
 {
     PREF_I();
-    const auto ex = co_await net::this_coro::executor;
-    auto acceptor = tcp::acceptor{ex, endpoint};
-    while (true) {
-        auto socket = co_await acceptor.async_accept();
+    auto acceptor = Acceptor{ex, endpoint};
+    auto sch = co_await stdx::get_scheduler();
+    co_await ex::repeat_effect_until(
+        acceptor.async_accept()
+        | stdx::then([&](auto socket) {
 #ifdef PREF_SSL
-        auto ws = Stream{std::move(socket), ssl};
+              auto ws = Stream{std::move(socket), ssl};
 #else // PREF_SSL
-        auto ws = Stream{std::move(socket)};
+              auto ws = Stream{std::move(socket)};
 #endif // PREF_SSL
-        net::co_spawn(ex, launchSession(std::move(ws)), Detached("launchSession"));
-    }
+              stdx::start_detached(stdx::starts_on(sch, launchSession(std::move(ws))));
+              return false;
+          })
+        | stdx::upon_stopped([] { return true; })
+        | stdx::upon_error([](const std::exception_ptr& error) {
+              PrintError("acceptConnectionAndLaunchSession", error);
+              return false;
+          }));
 }
 
 } // namespace pref

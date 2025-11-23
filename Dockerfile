@@ -46,6 +46,19 @@ RUN pacman -S --noconfirm \
     && pacman -Scc --noconfirm \
     && pkgfile --update
 
+RUN cd /tmp \
+    && mkdir stdexec \
+    && cd stdexec \
+    && git init -b main \
+    && git remote add origin https://github.com/NVIDIA/stdexec.git \
+    && git fetch --depth 1 origin 394a7c50237fbe3151350027a7786f001de67355 \
+    && git checkout FETCH_HEAD \
+    && cmake -H. -Bbuild -GNinja -DCMAKE_BUILD_TYPE=Release -DSTDEXEC_BUILD_TESTS=OFF -DSTDEXEC_BUILD_EXAMPLES=OFF -DSTDEXEC_ENABLE_ASIO=ON -DSTDEXEC_ENABLE_TBB=ON \
+    && cmake --build build --parallel \
+    && cmake --install build \
+    && cd - \
+    && rm -rf stdexec
+
 RUN useradd -m -G wheel archuser \
     && echo 'archuser ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
@@ -56,15 +69,13 @@ RUN cd /tmp \
     && cd include-what-you-use \
     && makepkg -si --noconfirm \
     && cd - \
-    && rm -rf include-what-you-use \
-    && cd -
+    && rm -rf include-what-you-use
 
 RUN cd /tmp \
     && git clone --depth=1 https://aur.archlinux.org/cmake-format.git \
     && cd cmake-format \
     && makepkg -si --noconfirm \
     && cd - \
-    && rm -rf cmake-format \
-    && cd -
+    && rm -rf cmake-format
 
 CMD ["/bin/bash"]

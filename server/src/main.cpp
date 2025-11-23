@@ -10,7 +10,10 @@
 #include <boost/asio.hpp>
 #include <boost/system.hpp>
 #include <docopt/docopt.h>
+#include <exec/when_any.hpp>
+#include <execpools/asio/asio_thread_pool.hpp>
 #include <spdlog/spdlog.h>
+#include <stdexec/execution.hpp>
 
 #include <coroutine>
 #include <csignal>
@@ -35,13 +38,9 @@ namespace {
 
 auto handleSignals() -> Awaitable<>
 {
-    // NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage)
-    const auto ex = co_await net::this_coro::executor;
-    auto signals = net::signal_set{ex, SIGINT, SIGTERM};
-    const auto signal = co_await signals.async_wait();
-    PREF_I("signal: {} ({})", signal == SIGINT ? "SIGINT" : "SIGTERM", signal);
-    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
-    static_cast<net::io_context&>(ex.context()).stop();
+    auto signals = SignalSet{ctx().ex, SIGINT, SIGTERM};
+    const auto [result, signal] = co_await signals.async_wait();
+    PREF_I("{}, signal: {} ({})", PREF_V(result), signal == SIGINT ? "SIGINT" : "SIGTERM", signal);
 }
 
 constexpr auto Usage = R"(
@@ -61,9 +60,10 @@ auto main(const int argc, const char* const argv[]) -> int
         const auto args = docopt::docopt(pref::Usage, {std::next(argv), std::next(argv, argc)});
         auto const address = net::ip::make_address(args.at("<address>").asString());
         auto const port = gsl::narrow<std::uint16_t>(args.at("<port>").asLong());
-        auto& ctx = pref::ctx();
-        spdlog::set_pattern("[%^%l%$][%!] %v");
-        auto loop = net::io_context{};
+        spdlog::set_pattern("[%^%l%$][%t][%!] %v");
+        auto pool = execpools::asio_thread_pool{1};
+        auto ex = pool.get_executor();
+        auto& ctx = pref::ctx(ex);
         if (args.contains("<data>") and args.at("<data>").isString()) {
             ctx.gameDataPath = args.at("<data>").asString();
             ctx.gameData = pref::loadGameData(ctx.gameDataPath);
@@ -71,23 +71,26 @@ auto main(const int argc, const char* const argv[]) -> int
             PREF_W("game data is not provided");
         }
         ctx.gameId = pref::lastGameId(ctx.gameData);
-        net::co_spawn(loop, pref::handleSignals(), pref::Detached("handleStop"));
 #ifdef PREF_SSL
-        auto accept = pref::acceptConnectionAndLaunchSession(
+        auto accept = pref::accept(
             pref::loadCertificate(
                 args.at("--cert").asString(), args.at("--key").asString(), args.at("--dh").asString()),
-            {address, port});
+            {address, port},
+            std::move(ex));
 #else // PREF_SSL
-        auto accept = pref::acceptConnectionAndLaunchSession({address, port});
+        auto accept = pref::accept({address, port}, std::move(ex));
 #endif // PREF_SSL
-        net::co_spawn(loop, std::move(accept), pref::Detached("acceptConnectionAndLaunchSession"));
-        loop.run();
+        auto sch = pool.get_scheduler();
+        stdx::sync_wait(
+            ex::when_any(
+                stdx::starts_on(sch, std::move(accept)), //
+                stdx::starts_on(sch, pref::handleSignals())));
         ctx.shutdown();
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
         PREF_DE(error);
     } catch (...) {
-        PREF_E("error: uknown");
+        PREF_E("error: unknown");
     }
     return EXIT_FAILURE;
 }

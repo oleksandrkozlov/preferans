@@ -6,10 +6,15 @@
 #include "common/common.hpp"
 #include "common/logger.hpp"
 
+#include <asioexec/use_sender.hpp>
 #include <boost/asio.hpp>
 #include <boost/asio/experimental/channel.hpp> // IWYU pragma: keep
 #include <boost/beast.hpp>
 #include <boost/system.hpp>
+#include <exec/repeat_effect_until.hpp>
+#include <exec/task.hpp>
+#include <exec/variant_sender.hpp>
+#include <stdexec/execution.hpp>
 
 #ifdef PREF_SSL
 #include <boost/asio/ssl.hpp>
@@ -33,6 +38,10 @@ namespace net = boost::asio;
 namespace beast = boost::beast;
 namespace web = beast::websocket;
 namespace sys = boost::system;
+namespace ex = exec;
+namespace stdx = stdexec;
+namespace netx = asioexec;
+using tcp = net::ip::tcp;
 
 namespace boost::system {
 // NOLINTNEXTLINE(readability-identifier-naming)
@@ -47,15 +56,34 @@ namespace pref {
 #ifdef PREF_SSL
 using Stream = web::stream<net::ssl::stream<beast::tcp_stream>>;
 #else // PREF_SSL
-using Stream = web::stream<beast::tcp_stream>;
+using Stream = netx::use_sender_t::as_default_on_t<web::stream<beast::tcp_stream>>;
 #endif // PREF_SSL
 
-using Channel = net::experimental::channel<void(sys::error_code, std::string)>;
+using Channel = netx::use_sender_t::as_default_on_t<net::experimental::channel<void(sys::error_code, std::string)>>;
 using ChannelPtr = std::shared_ptr<Channel>;
-using SteadyTimer = net::steady_timer;
+using SteadyTimer = net::as_tuple_t<netx::use_sender_t>::as_default_on_t<net::steady_timer>;
+using Acceptor = netx::use_sender_t::as_default_on_t<tcp::acceptor>;
+using SignalSet = net::as_tuple_t<netx::use_sender_t>::as_default_on_t<net::signal_set>;
 
 template<typename T = void>
-using Awaitable = net::awaitable<T>;
+using Awaitable = ex::task<T>;
+
+inline constexpr auto PrintError = [](const std::string_view func, const std::exception_ptr& eptr) {
+    if (not eptr) { return; }
+    try {
+        std::rethrow_exception(eptr);
+    } catch (const sys::system_error& error) {
+        if (error.code() != net::error::operation_aborted) { PREF_W("[{}] {}", func, PREF_V(error)); }
+    } catch (const std::exception& error) {
+        PREF_W("[{}] {}", func, PREF_V(error));
+    } catch (...) {
+        PREF_W("[{}] error: unknown", func);
+    }
+};
+
+inline constexpr auto Detached = [](const std::string_view func) {
+    return [func](const std::exception_ptr& eptr) { return PrintError(func, eptr); };
+};
 
 #ifdef PREF_SSL
 [[nodiscard]] inline auto loadCertificate(const fs::path& cert, const fs::path& key, const fs::path& dh)
@@ -72,9 +100,9 @@ using Awaitable = net::awaitable<T>;
 #endif // PREF_SSL
 
 template<typename Rep, typename Period>
-auto sleepFor(const std::chrono::duration<Rep, Period> duration) -> Awaitable<>
+auto sleepFor(const std::chrono::duration<Rep, Period> duration, net::any_io_executor ex) -> Awaitable<>
 {
-    co_await SteadyTimer{co_await net::this_coro::executor, duration}.async_wait(net::as_tuple);
+    co_await SteadyTimer{ex, duration}.async_wait();
 }
 
 inline auto sendToOne(const ChannelPtr& ch, std::string payload) -> Awaitable<>
@@ -115,30 +143,39 @@ struct Connection {
     std::optional<SteadyTimer> reconnectTimer;
 };
 
-inline auto payloadSender(Stream& ws, ChannelPtr ch) -> Awaitable<>
+inline auto send(Stream& ws, std::string payload) -> stdx::sender auto
 {
-    while (true) {
-        auto [receiveError, data] = co_await ch->async_receive(net::as_tuple);
-        const auto payload = std::string{std::move(data)};
-        if (receiveError) {
-            PREF_DW(receiveError);
-            co_return;
-        };
-        assert(ws.is_open());
-        if (not std::empty(payload) and payload.front() == '\0') {
-            if (const auto [closeError] = co_await ws.async_close(
-                    web::close_reason(web::close_code::policy_error, std::string_view{payload}.substr(1)),
-                    net::as_tuple);
-                closeError) {
-                PREF_DW(closeError);
-            }
-            co_return;
-        }
-        if (const auto [writeError, size] = co_await ws.async_write(net::buffer(payload), net::as_tuple); writeError) {
-            PREF_DW(writeError);
-            co_return;
-        }
-    }
+    auto data = std::make_unique<std::string>(std::move(payload));
+    const auto buf = net::buffer(*data);
+    return ws.async_write(buf, netx::use_sender) | stdx::then([d = std::move(data)](auto) { return false; });
+}
+
+inline auto close(Stream& ws, const std::string_view payload) -> stdx::sender auto
+{
+    return ws.async_close({web::close_code::policy_error, payload.substr(1)}, netx::use_sender)
+        | stdx::then([] { return true; });
+}
+
+inline auto sendOrClose(Stream& ws, std::string payload) -> stdx::sender auto
+{
+    using Send = std::invoke_result_t<decltype(send), Stream&, std::string>;
+    using Close = std::invoke_result_t<decltype(close), Stream&, std::string_view>;
+    using Result = ex::variant_sender<Send, Close>;
+    assert(ws.is_open());
+    return std::empty(payload) or payload.front() != '\0' ? Result{send(ws, std::move(payload))}
+                                                          : Result{close(ws, payload)};
+}
+
+inline auto payloadSender(Stream& ws, Channel& ch) -> stdx::sender auto
+{
+    return ex::repeat_effect_until(
+        ch.async_receive()
+        | stdx::let_value([&ws](std::string payload) { return sendOrClose(ws, std::move(payload)); })
+        | stdx::upon_stopped([] { return true; })
+        | stdx::upon_error([](const std::exception_ptr& error) {
+              PrintError("payloadSender", error);
+              return true;
+          }));
 }
 
 } // namespace pref

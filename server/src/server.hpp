@@ -164,6 +164,11 @@ struct PassGame {
 struct Context {
     using Players = std::map<Player::Id, Player, std::less<>>;
 
+    explicit Context(net::any_io_executor executor)
+        : ex{std::move(executor)}
+    {
+    }
+
     [[nodiscard]] auto whoseTurnId() const -> Player::IdView;
     [[nodiscard]] auto player(Player::IdView playerId) const -> Player&;
     [[nodiscard]] auto playerName(Player::IdView playerId) const -> Player::NameView;
@@ -191,6 +196,7 @@ struct Context {
         players.clear();
     }
 
+    net::any_io_executor ex;
     GameStage stage = GameStage::UNKNOWN;
     mutable Players players;
     Players::const_iterator whoseTurnIt;
@@ -210,29 +216,14 @@ struct Context {
     std::int32_t gameDuration{};
 };
 
-[[nodiscard]] inline auto ctx() -> Context&
+[[nodiscard]] inline auto ctx(net::any_io_executor ex = {}) -> Context&
 {
-    static auto ctx = Context{};
+    static auto ctx = Context{std::move(ex)};
     return ctx;
 }
 
 inline constexpr auto ToPlayerId = &Context::Players::value_type::first;
 inline constexpr auto ToPlayer = &Context::Players::value_type::second;
-
-inline constexpr auto Detached = [](const std::string_view func) {
-    return [func](const std::exception_ptr& eptr) {
-        if (not eptr) { return; }
-        try {
-            std::rethrow_exception(eptr);
-        } catch (const sys::system_error& error) {
-            if (error.code() != net::error::operation_aborted) { PREF_W("[{}][Detached] error: {}", func, error); }
-        } catch (const std::exception& error) {
-            PREF_W("[{}][Detached] error: {}", func, error);
-        } catch (...) {
-            PREF_W("[{}][Detached] error: unknown", func);
-        }
-    };
-};
 
 struct Beat {
     std::string_view candidate;
@@ -246,10 +237,11 @@ struct Beat {
 [[nodiscard]] auto decideTrickWinner(const std::vector<PlayedCard>& trick, std::string_view trump) -> Player::Id;
 [[nodiscard]] auto calculateDealScore(const Declarer& declarer, const std::vector<Whister>& whisters) -> DealScore;
 
-auto acceptConnectionAndLaunchSession(
+auto accept(
 #ifdef PREF_SSL
     net::ssl::context ssl,
 #endif // PREF_SSL
-    net::ip::tcp::endpoint endpoint) -> Awaitable<>;
+    net::ip::tcp::endpoint endpoint,
+    net::any_io_executor ex) -> Awaitable<>;
 
 }; // namespace pref

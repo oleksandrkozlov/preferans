@@ -5,10 +5,11 @@ Web Multiplayer Card Game in C++
 --------------------------------
 
 The server is implemented using `Boost.Beast` (for `WebSocket`) and
-`Boost.Asio` for networking. The client is compiled to `WebAssembly` via
-`Emscripten`, using `WebSockets` for communication. Rendering is handled with
-`raylib`/`raylib-cpp`, and the GUI is built with `raygui`. Both server and
-client use `Protobuf` for message serialization.
+`Boost.Asio` for networking, using `stdexec` for structured concurrency. The
+client is compiled to `WebAssembly` via `Emscripten`, using `WebSockets` for
+communication. Rendering is handled with `raylib`/`raylib-cpp`, and the GUI is
+built with `raygui`. Both server and client use `Protobuf` for message
+serialization.
 
 ### Docker
 
@@ -133,6 +134,7 @@ cmake --build build-server --target test_server
 * [raylib-cpp](https://robloach.github.io/raylib-cpp/)
 * [raylib](https://www.raylib.com)
 * [spdlog](https://gabime.github.io/spdlog/)
+* [stdexec](https://github.com/NVIDIA/stdexec)
 * [wasm](https://webassembly.org)
 
 ### License

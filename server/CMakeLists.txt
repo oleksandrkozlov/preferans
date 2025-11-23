@@ -35,6 +35,7 @@ find_package(fmt REQUIRED)
 find_package(protobuf CONFIG REQUIRED)
 find_package(range-v3 REQUIRED)
 find_package(spdlog REQUIRED)
+find_package(stdexec REQUIRED)
 
 if(CMAKE_BUILD_TYPE STREQUAL Debug)
     find_package(Catch2 REQUIRED)
@@ -90,7 +91,7 @@ target_link_libraries(
            proto-objects
            protobuf::libprotobuf-lite
            range-v3::range-v3
-           spdlog::spdlog
+           STDEXEC::stdexec
 )
 
 if(PREF_SSL)
