@@ -36,7 +36,7 @@ namespace {
 #define PREF_SSL_OPTS ""
 #endif // PREF_SSL
 
-auto handleSignals() -> Awaitable<>
+auto handleSignals() -> task<>
 {
     auto signals = SignalSet{ctx().ex, SIGINT, SIGTERM};
     const auto [result, signal] = co_await signals.async_wait();
@@ -72,19 +72,20 @@ auto main(const int argc, const char* const argv[]) -> int
         }
         ctx.gameId = pref::lastGameId(ctx.gameData);
 #ifdef PREF_SSL
-        auto accept = pref::accept(
+        auto accept = pref::createAcceptor(
             pref::loadCertificate(
                 args.at("--cert").asString(), args.at("--key").asString(), args.at("--dh").asString()),
             {address, port},
             std::move(ex));
 #else // PREF_SSL
-        auto accept = pref::accept({address, port}, std::move(ex));
+        auto accept = pref::createAcceptor({address, port}, std::move(ex));
 #endif // PREF_SSL
         auto sch = pool.get_scheduler();
         stdx::sync_wait(
             ex::when_any(
                 stdx::starts_on(sch, std::move(accept)), //
                 stdx::starts_on(sch, pref::handleSignals())));
+        PREF_I("shutdown");
         ctx.shutdown();
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {

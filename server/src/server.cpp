@@ -14,8 +14,9 @@
 
 #include <boost/asio/as_tuple.hpp>
 #include <boost/beast.hpp>
+#include <exec/async_scope.hpp>
+#include <exec/scope.hpp>
 #include <range/v3/all.hpp>
-#include <stdexec/__detail/__let.hpp>
 #include <stdexec/execution.hpp>
 
 #include <algorithm>
@@ -217,15 +218,16 @@ auto joinPlayer(const ChannelPtr& ch, const Player::IdView playerId, PlayerSessi
     ctx().players.emplace(session.playerId, Player{session.playerId, session.playerName, session.id, ch});
 }
 
-auto prepareNewSession(const Player::IdView playerId, PlayerSession& session) -> Awaitable<>
+auto prepareNewSession(const Player::IdView playerId, PlayerSession& session) -> task<>
 {
     PREF_I("{}, {}, {}{}", PREF_V(playerId), PREF_V(session.playerName), PREF_V(session.id), PREF_M(session.playerId));
     auto& player = ctx().player(playerId);
     session.id = ++player.sessionId;
     session.playerId = playerId;
     session.playerName = player.name; // keep the first connected player's name
-    player.conn.cancelReconnectTimer();
-    co_await player.conn.closeStream();
+    if (player.conn.reconnectTimer) { player.conn.cancelReconnectTimer(); }
+    // the channel might be already close
+    if (player.conn.ch->is_open()) { co_await player.conn.closeStream(); }
 }
 
 auto addCardToHand(const Player::IdView playerId, const CardName& card) -> void
@@ -278,7 +280,7 @@ auto addCardToHand(const Player::IdView playerId, const CardName& card) -> void
     return playerItByWhistingChoice(players, choice)->second;
 }
 
-auto openCardsAndLetAnotherWhisterPlay() -> Awaitable<>
+auto openCardsAndLetAnotherWhisterPlay() -> task<>
 {
     const auto& activeWhister = playerByWhistingChoice(ctx().players, WhistingChoice::Whist);
     const auto& passiveWhister = playerByWhistingChoice(ctx().players, WhistingChoice::Pass);
@@ -287,7 +289,7 @@ auto openCardsAndLetAnotherWhisterPlay() -> Awaitable<>
     co_await sendDealCardsExcept(passiveWhister.id, passiveWhister.hand);
 }
 
-auto reconnectPlayer(const ChannelPtr& ch, const Player::IdView playerId, PlayerSession& session) -> Awaitable<>
+auto reconnectPlayer(const ChannelPtr& ch, const Player::IdView playerId, PlayerSession& session) -> task<>
 {
     co_await prepareNewSession(playerId, session);
     auto& player = ctx().player(playerId);
@@ -369,7 +371,7 @@ auto removeCardFromHand(const Player::IdView playerId, CardName card) -> void
     ctx().player(playerId).playedCards.push_back(std::move(card));
 }
 
-auto dealCards() -> Awaitable<>
+auto dealCards() -> task<>
 {
     const auto suits = std::array{PREF_SPADES, PREF_DIAMONDS, PREF_CLUBS, PREF_HEARTS};
     const auto ranks
@@ -401,7 +403,7 @@ auto dealCards() -> Awaitable<>
     }
 }
 
-auto removePlayer(Player::Id playerId) -> Awaitable<>
+auto removePlayer(Player::Id playerId) -> task<>
 {
     assert(ctx().players.contains(playerId) and "player exists");
     PREF_DI(playerId);
@@ -409,7 +411,7 @@ auto removePlayer(Player::Id playerId) -> Awaitable<>
     co_await sendPlayerLeft(std::move(playerId));
 }
 
-auto disconnected(Player::Id playerId) -> Awaitable<>
+auto disconnected(Player::Id playerId) -> task<>
 {
     PREF_DI(playerId);
     auto& player = ctx().player(playerId);
@@ -475,7 +477,7 @@ auto updateScoreSheetForDeal() -> void
     });
 }
 
-auto dealFinished() -> Awaitable<bool>
+auto dealFinished() -> task<bool>
 {
     ctx().gameDuration = pref::durationInSec(ctx().gameStarted);
     PREF_I("gameId: {} duration: {}", ctx().gameId, formatDuration(ctx().gameDuration));
@@ -531,7 +533,7 @@ auto updateStageGame() -> void
     ctx().stage = GameStage::BIDDING;
 }
 
-auto startGame() -> Awaitable<>
+auto startGame() -> task<>
 {
     assert(std::size(ctx().players) == NumberOfPlayers);
     // TODO: use UTC on the server and local time zone on the client
@@ -560,7 +562,7 @@ auto startGame() -> Awaitable<>
     return bytes2hex(generateToken());
 }
 
-auto handleLoginRequest(const Message& msg, const ChannelPtr& ch) -> Awaitable<PlayerSession>
+auto handleLoginRequest(const Message& msg, const ChannelPtr& ch) -> task<PlayerSession>
 {
     auto loginRequest = makeMethod<LoginRequest>(msg);
     if (not loginRequest) { co_return PlayerSession{}; }
@@ -594,7 +596,7 @@ auto handleLoginRequest(const Message& msg, const ChannelPtr& ch) -> Awaitable<P
     co_return session;
 }
 
-auto handleAuthRequest(const Message& msg, const ChannelPtr& ch) -> Awaitable<PlayerSession>
+auto handleAuthRequest(const Message& msg, const ChannelPtr& ch) -> task<PlayerSession>
 {
     const auto authRequest = makeMethod<AuthRequest>(msg);
     if (not authRequest) { co_return PlayerSession{}; }
@@ -624,7 +626,7 @@ auto handleAuthRequest(const Message& msg, const ChannelPtr& ch) -> Awaitable<Pl
     co_return session;
 }
 
-auto handleLogout(const Message& msg) -> Awaitable<>
+auto handleLogout(const Message& msg) -> task<>
 {
     auto logout = makeMethod<Logout>(msg);
     if (not logout) { co_return; }
@@ -635,7 +637,7 @@ auto handleLogout(const Message& msg) -> Awaitable<>
     co_await removePlayer(std::move(playerId));
 }
 
-auto handleReadyCheck(const Message& msg) -> Awaitable<>
+auto handleReadyCheck(const Message& msg) -> task<>
 {
     const auto readyCheck = makeMethod<ReadyCheck>(msg);
     if (not readyCheck) { co_return; }
@@ -652,7 +654,7 @@ auto handleReadyCheck(const Message& msg) -> Awaitable<>
     if (rng::all_of(players(), equalTo(ReadyCheckState::ACCEPTED), &Player::readyCheckState)) { co_await startGame(); }
 }
 
-auto handleBidding(const Message& msg) -> Awaitable<>
+auto handleBidding(const Message& msg) -> task<>
 {
     auto bidding = makeMethod<Bidding>(msg);
     if (not bidding) { co_return; }
@@ -668,7 +670,7 @@ auto handleBidding(const Message& msg) -> Awaitable<>
     co_await sendPlayerTurn(decidePlayerTurn());
 }
 
-auto handleDiscardTalon(const Message& msg) -> Awaitable<>
+auto handleDiscardTalon(const Message& msg) -> task<>
 {
     auto discardTalon = makeMethod<DiscardTalon>(msg);
     if (not discardTalon) { co_return; }
@@ -695,14 +697,14 @@ auto handleDiscardTalon(const Message& msg) -> Awaitable<>
     co_await sendPlayerTurn(decidePlayerTurn());
 }
 
-auto handlePingPong(const Message& msg, const ChannelPtr& ch) -> Awaitable<>
+auto handlePingPong(const Message& msg, const ChannelPtr& ch) -> task<>
 {
     const auto pingPong = makeMethod<PingPong>(msg);
     if (not pingPong) { co_return; }
     co_await sendPingPong(msg, ch);
 }
 
-auto finishDeal() -> Awaitable<>
+auto finishDeal() -> task<>
 {
     const auto isGameOver = co_await dealFinished();
     PREF_DI(isGameOver);
@@ -729,21 +731,21 @@ auto updateDeclarerTakenTricks() -> void
     declarer.tricksTaken = declarerReqTricks(makeContractLevel(declarer.bid));
 }
 
-auto openCards() -> Awaitable<>
+auto openCards() -> task<>
 {
     const auto& [p0, p1] = getTwoPassers();
     co_await sendDealCardsExcept(p0.get().id, p0.get().hand);
     co_await sendDealCardsExcept(p1.get().id, p1.get().hand);
 }
 
-auto startPlayingFromForehand() -> Awaitable<>
+auto startPlayingFromForehand() -> task<>
 {
     forehandsTurn();
     ctx().stage = GameStage::PLAYING;
     co_await sendPlayerTurn(decidePlayerTurn());
 }
 
-auto handleWhisting(const Message& msg) -> Awaitable<>
+auto handleWhisting(const Message& msg) -> task<>
 {
     using enum WhistingChoice;
     using enum GameStage;
@@ -812,7 +814,7 @@ auto handleWhisting(const Message& msg) -> Awaitable<>
     co_return co_await sendPlayerTurn(decidePlayerTurn());
 }
 
-auto handleHowToPlay(const Message& msg) -> Awaitable<>
+auto handleHowToPlay(const Message& msg) -> task<>
 {
     auto howToPlay = makeMethod<HowToPlay>(msg);
     if (not howToPlay) { co_return; }
@@ -827,7 +829,7 @@ auto handleHowToPlay(const Message& msg) -> Awaitable<>
     co_await startPlayingFromForehand();
 }
 
-auto handleMakeOffer(const Message& msg) -> Awaitable<>
+auto handleMakeOffer(const Message& msg) -> task<>
 {
     const auto makeOffer = makeMethod<MakeOffer>(msg);
     if (not makeOffer) { co_return; }
@@ -849,7 +851,7 @@ auto handleMakeOffer(const Message& msg) -> Awaitable<>
     player.offer = offerRequest;
     if (rng::count_if(players(), equalTo(Offer::OFFER_ACCEPTED), &Player::offer) == std::ssize(getOneOrTwoWhisters())) {
         auto& whomAddTricks = std::invoke([&] -> Player& {
-            if (isMiser) { return playerByWhistingChoice(ctx().players, WhistingChoice::Pass); }
+            if (isMiser) { return playerByWhistingChoice(ctx().players, WhistingChoice::Whist); }
             return declarer;
         });
         whomAddTricks.tricksTaken += static_cast<int>(std::size(declarer.hand));
@@ -861,7 +863,7 @@ auto handleMakeOffer(const Message& msg) -> Awaitable<>
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-auto handlePlayCard(const Message& msg) -> Awaitable<>
+auto handlePlayCard(const Message& msg) -> task<>
 {
     auto playCard = makeMethod<PlayCard>(msg);
     if (not playCard) { co_return; }
@@ -919,7 +921,7 @@ auto handleLog(const Message& msg) -> void
     PREF_I("[client] {}, playerId: {}", log->text(), log->player_id());
 }
 
-auto handleSpeechBubble(const Message& msg) -> Awaitable<>
+auto handleSpeechBubble(const Message& msg) -> task<>
 {
     const auto speechBubble = makeMethod<SpeechBubble>(msg);
     if (not speechBubble) { co_return; }
@@ -928,7 +930,7 @@ auto handleSpeechBubble(const Message& msg) -> Awaitable<>
     co_await forwardToAllExcept(msg, playerId);
 }
 
-auto dispatchMessage(const ChannelPtr& ch, PlayerSession& session, std::optional<Message> msg) -> Awaitable<>
+auto dispatchMessage(const ChannelPtr& ch, PlayerSession& session, std::optional<Message> msg) -> task<>
 { // clang-format off
     if (not msg) { co_return; }
     const auto method = msg->method();
@@ -949,7 +951,7 @@ auto dispatchMessage(const ChannelPtr& ch, PlayerSession& session, std::optional
     PREF_W("error: unknown {}", PREF_V(method));
 } // clang-format on
 
-auto launchSession(Stream ws) -> Awaitable<>
+auto launchSession(Stream ws) -> task<>
 {
     PREF_I();
     ws.binary(true);
@@ -957,6 +959,7 @@ auto launchSession(Stream ws) -> Awaitable<>
     ws.set_option(web::stream_base::decorator([](web::response_type& res) {
         res.set(beast::http::field::server, std::string{BOOST_BEAST_VERSION_STRING} + " preferans-server");
     }));
+    auto scp = ex::async_scope{};
     auto buf = beast::flat_buffer{};
     auto chn = std::shared_ptr<Channel>{};
     auto sch = co_await stdx::get_scheduler();
@@ -971,41 +974,43 @@ auto launchSession(Stream ws) -> Awaitable<>
         | stdx::then([&] {
               static constexpr auto channelSize = 128;
               chn = std::make_shared<Channel>(ws.get_executor(), channelSize);
-              stdx::start_detached(stdx::starts_on(sch, payloadSender(ws, *chn)));
+              scp.spawn(stdx::starts_on(sch, payloadSender(ws, *chn)));
           })
         | stdx::let_value([&] {
               return ex::repeat_effect_until(
                   ws.async_read(buf, netx::use_sender)
-                  | stdx::let_value([&]([[maybe_unused]] const std::uint64_t bytes) {
+                  | stdx::let_value([&](const std::uint64_t bytes) {
+                        assert(bytes == buf.size());
+                        auto _ = ex::scope_guard{[&] noexcept { buf.consume(buf.size()); }};
                         return dispatchMessage(chn, ssn, makeMessage(buf.data().data(), buf.size()));
                     })
                   | stdx::then([&] { return ssn.id == 0; })
-                  | stdx::upon_stopped([](auto&&...) { return true; })
+                  | stdx::upon_stopped([] {
+                        PREF_I("[launchSession] Stream canceled");
+                        return true;
+                    })
                   | stdx::upon_error([](const std::exception_ptr& error) {
                         PrintError("launchSession", error);
                         return true;
                     }));
           })
         | stdx::then([&] {
-              if (ssn.id == 0) {
-                  PREF_W("[launchSession] error: session ID is empty");
-                  chn->close();
-                  return;
+              if (chn) {
+                  assert(chn->is_open());
+                  scp.request_stop();
               }
-              if (not std::empty(ssn.playerId) and not ctx().players.contains(ssn.playerId)) {
-                  chn->close();
-                  return;
-              }
-              auto& player = ctx().player(ssn.playerId);
-              if (ssn.id != player.sessionId) {
-                  PREF_I("[launchSession] {} reconnected with ssnId: {} => {}", ssn.playerId, ssn.id, player.sessionId);
+              const auto& playerId = ssn.playerId;
+              if (std::empty(playerId)
+                  or not ctx().players.contains(playerId)
+                  or ssn.id == 0
+                  or ssn.id != ctx().player(playerId).sessionId) {
                   return;
               }
               stdx::start_detached(
-                  stdx::starts_on(sch, disconnected(ssn.playerId) | stdx::upon_error(Detached("disconnected"))));
-              chn->close();
+                  stdx::starts_on(sch, disconnected(playerId) | stdx::upon_error(Detached("disconnected"))));
           })
         | stdx::upon_error([](const std::exception_ptr& error) { PrintError("launchSession", error); }));
+    co_await scp.on_empty();
 }
 
 } // namespace
@@ -1162,12 +1167,12 @@ auto Context::countWhistingChoice(const WhistingChoice choice) -> std::ptrdiff_t
     };
 }
 
-auto accept(
+auto createAcceptor(
 #ifdef PREF_SSL
     net::ssl::context ssl,
 #endif // PREF_SSL
     tcp::endpoint endpoint,
-    net::any_io_executor ex) -> Awaitable<>
+    net::any_io_executor ex) -> task<>
 {
     PREF_I();
     auto acceptor = Acceptor{ex, endpoint};
@@ -1183,10 +1188,9 @@ auto accept(
               stdx::start_detached(stdx::starts_on(sch, launchSession(std::move(ws))));
               return false;
           })
-        | stdx::upon_stopped([] { return true; })
         | stdx::upon_error([](const std::exception_ptr& error) {
-              PrintError("acceptConnectionAndLaunchSession", error);
-              return false;
+              PrintError("createAcceptor", error);
+              return true;
           }));
 }
 

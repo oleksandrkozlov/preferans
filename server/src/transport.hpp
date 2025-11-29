@@ -29,6 +29,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -65,19 +66,29 @@ using SteadyTimer = net::as_tuple_t<netx::use_sender_t>::as_default_on_t<net::st
 using Acceptor = netx::use_sender_t::as_default_on_t<tcp::acceptor>;
 using SignalSet = net::as_tuple_t<netx::use_sender_t>::as_default_on_t<net::signal_set>;
 
-template<typename T = void>
-using Awaitable = ex::task<T>;
+template<class T = void>
+using task = ex::task<T>; // NOLINT(readability-identifier-naming)
 
 inline constexpr auto PrintError = [](const std::string_view func, const std::exception_ptr& eptr) {
-    if (not eptr) { return; }
+    const auto logErr = [func](const auto& error) { PREF_W("[{}] {}", func, PREF_V(error)); };
+    if (not eptr) {
+        logErr("success");
+        return;
+    }
     try {
         std::rethrow_exception(eptr);
     } catch (const sys::system_error& error) {
-        if (error.code() != net::error::operation_aborted) { PREF_W("[{}] {}", func, PREF_V(error)); }
+        if (const auto code = error.code(); code == net::experimental::error::channel_cancelled
+            or code == web::error::closed
+            or code == net::error::operation_aborted) {
+            PREF_I("[{}] {}", func, code.message());
+            return;
+        }
+        logErr(error.code().message());
     } catch (const std::exception& error) {
-        PREF_W("[{}] {}", func, PREF_V(error));
+        logErr(error);
     } catch (...) {
-        PREF_W("[{}] error: unknown", func);
+        logErr("unknown");
     }
 };
 
@@ -100,18 +111,18 @@ inline constexpr auto Detached = [](const std::string_view func) {
 #endif // PREF_SSL
 
 template<typename Rep, typename Period>
-auto sleepFor(const std::chrono::duration<Rep, Period> duration, net::any_io_executor ex) -> Awaitable<>
+auto sleepFor(const std::chrono::duration<Rep, Period> duration, net::any_io_executor ex) -> task<>
 {
     co_await SteadyTimer{ex, duration}.async_wait();
 }
 
-inline auto sendToOne(const ChannelPtr& ch, std::string payload) -> Awaitable<>
+inline auto sendToOne(const ChannelPtr& ch, std::string payload) -> task<>
 {
     assert(ch);
     if (const auto [error] = co_await ch->async_send({}, std::move(payload), net::as_tuple); error) { PREF_DW(error); };
 }
 
-inline auto sendToMany(const std::span<const ChannelPtr> channels, std::string payload) -> Awaitable<>
+inline auto sendToMany(const std::span<const ChannelPtr> channels, std::string payload) -> task<>
 {
     for (const auto& ch : channels) { co_await sendToOne(ch, payload); }
 }
@@ -124,18 +135,23 @@ struct Connection {
     {
     }
 
-    auto closeStream() -> Awaitable<>
+    auto closeStream() -> task<>
     {
-        if (ch->is_open()) { co_await sendToOne(ch, std::string{"\0", 1}.append("Another tab connected")); }
+        PREF_I();
+        assert(ch->is_open());
+        co_await sendToOne(ch, std::string{"\0", 1}.append("Another tab connected"));
     }
 
     auto cancelReconnectTimer() -> void
     {
-        if (reconnectTimer) { reconnectTimer->cancel(); }
+        PREF_I();
+        assert(reconnectTimer);
+        reconnectTimer->cancel();
     }
 
     auto replaceChannel(const ChannelPtr& channel) -> void
     {
+        PREF_I();
         ch = channel;
     }
 
@@ -143,35 +159,26 @@ struct Connection {
     std::optional<SteadyTimer> reconnectTimer;
 };
 
-inline auto send(Stream& ws, std::string payload) -> stdx::sender auto
+inline auto sendOrClose(Stream& ws, std::string payload) -> task<bool>
 {
-    auto data = std::make_unique<std::string>(std::move(payload));
-    const auto buf = net::buffer(*data);
-    return ws.async_write(buf, netx::use_sender) | stdx::then([d = std::move(data)](auto) { return false; });
-}
-
-inline auto close(Stream& ws, const std::string_view payload) -> stdx::sender auto
-{
-    return ws.async_close({web::close_code::policy_error, payload.substr(1)}, netx::use_sender)
-        | stdx::then([] { return true; });
-}
-
-inline auto sendOrClose(Stream& ws, std::string payload) -> stdx::sender auto
-{
-    using Send = std::invoke_result_t<decltype(send), Stream&, std::string>;
-    using Close = std::invoke_result_t<decltype(close), Stream&, std::string_view>;
-    using Result = ex::variant_sender<Send, Close>;
+    assert(not std::empty(payload));
+    if (payload.front() == '\0') {
+        if (ws.is_open()) {
+            co_await ws.async_close({web::close_code::policy_error, payload.substr(1)}, netx::use_sender);
+        }
+        co_return true;
+    }
     assert(ws.is_open());
-    return std::empty(payload) or payload.front() != '\0' ? Result{send(ws, std::move(payload))}
-                                                          : Result{close(ws, payload)};
+    co_await ws.async_write(net::buffer(payload), netx::use_sender);
+    co_return false;
 }
 
 inline auto payloadSender(Stream& ws, Channel& ch) -> stdx::sender auto
 {
+    PREF_I();
     return ex::repeat_effect_until(
         ch.async_receive()
         | stdx::let_value([&ws](std::string payload) { return sendOrClose(ws, std::move(payload)); })
-        | stdx::upon_stopped([] { return true; })
         | stdx::upon_error([](const std::exception_ptr& error) {
               PrintError("payloadSender", error);
               return true;

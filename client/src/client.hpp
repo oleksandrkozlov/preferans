@@ -222,6 +222,7 @@ enum class GameLang : std::size_t {
     PREF_X(DECLINE, "DECLINE", "ВІДХИЛИТИ", "ОТКЛОНИТЬ")                                                               \
     PREF_X(Dark, "Dark", "Темний", "Тёмный")                                                                           \
     PREF_X(Date, "DATE", "ДАТА", "ДАТА")                                                                               \
+    PREF_X(Dracula, "Dracula", "Дракула", "Дракула")                                                                   \
     PREF_X(Draw, "Draw", "Нічия", "Ничья")                                                                             \
     PREF_X(Duration, "DURATION", "ТРИВАЛІСТЬ", "ДЛИТЕЛЬНОСТЬ")                                                         \
     PREF_X(English, "English", "Англійська", "Английский")                                                             \
@@ -244,6 +245,7 @@ enum class GameLang : std::size_t {
     PREF_X(None, "", "", "")                                                                                           \
     PREF_X(Normal, "Normal", "Звичайна", "Обычная")                                                                    \
     PREF_X(Openly, PREF_OPENLY, "У світлу", "В светлую")                                                               \
+    PREF_X(Offer, "Offer", "Запропонувати", "Предложить") \
     PREF_X(Other, "Other", "Інше", "Другое")                                                                           \
     PREF_X(OverallScoreboard, "SCOREBOARD", "ТАБЛИЦЯ РЕЗУЛЬТАТІВ", "ТАБЛИЦА РЕЗУЛЬТАТОВ")       \
     PREF_X(PDW, "P/D/W", "П/Г/В", "П/Г/В")                                                                             \

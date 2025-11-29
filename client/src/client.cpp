@@ -515,6 +515,7 @@ struct ReadyCheckPopUp {
 struct OfferButton {
     bool isPossible{};
     bool isVisible{};
+    bool beenClicked{};
 
     auto clear() -> void
     {
@@ -537,7 +538,7 @@ struct Sound {
     r::Sound readyCheckRequested{sounds("ready_check_requested.mp3")};
     r::Sound readyCheckSucceeded{sounds("ready_check_succeeded.mp3")};
     r::Sound dealCards{sounds("deal_cards.wav")};
-    r::Sound placeCard{sounds("place_card.wav")};
+    r::Sound placeCard{sounds("place_card.mp3")};
 
     auto mute() -> void
     {
@@ -553,6 +554,16 @@ struct Sound {
         dealCards.Stop();
         placeCard.Stop();
     }
+};
+
+struct CardAnimation {
+    bool active{};
+    CardNameView cardName;
+    r::Vector2 startPos;
+    r::Vector2 targetPos;
+    r::Vector2 currentPos;
+    float duration{};
+    float t{};
 };
 
 struct Context {
@@ -610,6 +621,7 @@ struct Context {
     bool needsDraw = true;
     double tick = 0.0;
     bool isGameStarted{};
+    CardAnimation cardAnim;
 
     auto clear() -> void
     {
@@ -1496,6 +1508,7 @@ auto handleDealFinished(const Message& msg) -> void
 {
     const auto dealFinished = makeMethod<DealFinished>(msg);
     if (not dealFinished) { return; }
+    ctx().offerButton.beenClicked = false;
     const auto isGameOver = dealFinished->is_game_over();
     PREF_DI(isGameOver);
     ctx().scoreSheet.score = dealFinished->score_sheet() // clang-format off
@@ -1777,21 +1790,31 @@ auto withGuiFont(const r::Font& font, std::invocable auto draw) -> auto
     return draw();
 }
 
+[[nodiscard]] auto redColor() -> r::Color
+{
+    return ctx().settingsMenu.loadedColorScheme == "dracula" ? r::Color{255, 85, 85} : r::Color::Red();
+}
+
+[[nodiscard]] auto greenColor() -> r::Color
+{
+    return ctx().settingsMenu.loadedColorScheme == "dracula" ? r::Color{80, 250, 123} : r::Color::DarkGreen();
+}
+
 [[maybe_unused]] auto drawDebugDot(const r::Vector2& pos, const std::string_view text) -> void
 {
-    pos.DrawCircle(5, r::Color::Red());
+    pos.DrawCircle(5, redColor());
     ctx().fontS.DrawText(std::string{text}, pos, ctx().fontSizeS(), FontSpacing, r::Color::Black());
 }
 
 [[maybe_unused]] auto drawDebugVertLine(const float x, const std::string_view text) -> void
 {
-    r::Vector2{x, 0.f}.DrawLine({x, VirtualH}, 1, r::Color::Red());
+    r::Vector2{x, 0.f}.DrawLine({x, VirtualH}, 1, redColor());
     ctx().fontS.DrawText(std::string{text}, {x, VirtualH * 0.5f}, ctx().fontSizeS(), FontSpacing, r::Color::Black());
 }
 
 [[maybe_unused]] auto drawDebugHorzLine(const float y, const std::string_view text) -> void
 {
-    r::Vector2{0.f, y}.DrawLine({VirtualW, y}, 1, r::Color::Red());
+    r::Vector2{0.f, y}.DrawLine({VirtualW, y}, 1, redColor());
     ctx().fontS.DrawText(std::string{text}, {VirtualW * 0.5f, y}, ctx().fontSizeS(), FontSpacing, r::Color::Black());
 }
 
@@ -2038,6 +2061,7 @@ auto drawConnectedPlayers() -> void
             const auto& scheme = ctx().settingsMenu.loadedColorScheme;
             const auto state = ctx().player(id).readyCheckState;
             if (state == ReadyCheckState::ACCEPTED) {
+                if (scheme == "dracula") { return {getGuiColor(BASE_COLOR_FOCUSED), getGuiColor(TEXT_COLOR_FOCUSED)}; }
                 if (scheme == "genesis") { return {getGuiColor(TEXT_COLOR_PRESSED), getGuiColor(TEXT_COLOR_FOCUSED)}; }
                 if (scheme == "amber") { return {getGuiColor(BASE_COLOR_PRESSED), getGuiColor(TEXT_COLOR_PRESSED)}; }
                 if (scheme == "dark") { return {getGuiColor(BASE_COLOR_PRESSED), getGuiColor(TEXT_COLOR_FOCUSED)}; }
@@ -2240,6 +2264,7 @@ auto drawCards(const r::Vector2& pos, Player& player, const Shift shift, const i
 {
     const auto turnColor = std::invoke([&] {
         const auto& scheme = ctx().settingsMenu.loadedColorScheme;
+        if (scheme == "dracula") { return TEXT_COLOR_FOCUSED; }
         if (scheme == "jungle") { return TEXT_COLOR_PRESSED; }
         if (scheme == "jungle") { return BORDER_COLOR_PRESSED; }
         if (scheme == "lavanda") { return BASE_COLOR_FOCUSED; }
@@ -2309,11 +2334,13 @@ auto drawOfferButton() -> void
     if (ctx().offerButton.isVisible) {
         assert(ctx().offerButton.isPossible);
         assert(not ctx().offerPopUp.isVisible);
-        const auto offerText = fmt::format(
-            "{}: {}", ctx().localizeText(GameText::RevealCardsAndOffer), ctx().localizeText(offerGameText()));
+        const auto offerOrReveal = ctx().offerButton.beenClicked ? GameText::Offer : GameText::RevealCardsAndOffer;
+        const auto offerText
+            = fmt::format("{}: {}", ctx().localizeText(offerOrReveal), ctx().localizeText(offerGameText()));
         const auto offerW = (pad * 2.0f) + ctx().fontM.MeasureText(offerText.c_str(), ctx().fontSizeM(), FontSpacing).x;
         if (GuiButton({(VirtualW * 0.5f) - (offerW * 0.5f), VirtualH - shift, offerW, buttonH}, offerText.c_str())) {
             sendMakeOffer(Offer::OFFER_REQUESTED);
+            ctx().offerButton.beenClicked = true;
             evaluateOffer(ctx().myPlayerId);
             return;
         }
@@ -2348,8 +2375,10 @@ auto drawOfferButton() -> void
         const auto arrowY = rect.y + rect.height - arrowSize;
         const auto arrow = isLeft ? r::Vector2{rect.x - arrowSize, arrowY} //
                                   : r::Vector2{rect.x + rect.width, arrowY};
+        const auto arrowStyle
+            = ctx().settingsMenu.loadedColorScheme == "dracula" ? BASE_COLOR_NORMAL : TEXT_COLOR_NORMAL;
         ctx().fontAwesomeXL.DrawText(
-            isLeft ? LeftArrowIcon : RightArrowIcon, arrow, arrowSize, getGuiColor(TEXT_COLOR_NORMAL));
+            isLeft ? LeftArrowIcon : RightArrowIcon, arrow, arrowSize, getGuiColor(arrowStyle));
     }
     GuiLabel(rect, text.c_str());
     return textY;
@@ -2468,7 +2497,7 @@ auto drawLeftHand() -> void
     drawOpponentHand(DrawPosition::Left);
 }
 
-auto drawPlayedCards() -> void
+auto playedCardPositions() -> std::tuple<r::Vector2, r::Vector2, r::Vector2, r::Vector2>
 {
     static constexpr auto cardSpacing = CardWidth * 0.1f;
     static const auto centerPos = r::Vector2{VirtualW * 0.5f, (VirtualH - MyCardBorderMarginY - CardHeight) * 0.5f};
@@ -2478,6 +2507,12 @@ auto drawPlayedCards() -> void
     static const auto bottomPlayPos = r::Vector2{topBottomX, centerPos.y + cardSpacing};
     static const auto leftPlayPos = r::Vector2{centerPos.x - CardWidth * 0.5f - cardSpacing - CardWidth, leftRightY};
     static const auto rightPlayPos = r::Vector2{centerPos.x + cardSpacing + CardWidth * 0.5f, leftRightY};
+    return {bottomPlayPos, leftPlayPos, topPlayPos, rightPlayPos};
+}
+
+auto drawPlayedCards() -> void
+{
+    const auto [bottomPlayPos, leftPlayPos, topPlayPos, rightPlayPos] = playedCardPositions();
     const auto [leftOpponentId, rightOpponentId] = getOpponentIds();
     if (ctx().passGameTalon.exists()) { ctx().passGameTalon.get().texture.Draw(topPlayPos); }
     if (std::empty(ctx().cardsOnTable)) { return; }
@@ -2488,7 +2523,8 @@ auto drawPlayedCards() -> void
         ctx().cardsOnTable.at(rightOpponentId)->texture.Draw(rightPlayPos);
     }
     if (ctx().cardsOnTable.contains(ctx().myPlayerId)) {
-        ctx().cardsOnTable.at(ctx().myPlayerId)->texture.Draw(bottomPlayPos);
+        const auto& cardPosition = ctx().cardAnim.active ? ctx().cardAnim.currentPos : bottomPlayPos;
+        ctx().cardsOnTable.at(ctx().myPlayerId)->texture.Draw(cardPosition);
     }
 }
 
@@ -2598,7 +2634,7 @@ auto drawBiddingMenu() -> void
             const auto textX = cell.x + (cell.width - textSize.x) * 0.5f;
             const auto textY = cell.y + (cell.height - textSize.y) * 0.5f;
             if (isRedSuit(text)) {
-                const auto suitColor = state == STATE_DISABLED ? r::Color::Red().Alpha(0.4f) : r::Color::Red();
+                const auto suitColor = state == STATE_DISABLED ? redColor().Alpha(0.4f) : redColor();
                 drawRankAndSuitText(text, ctx().fontM, ctx().fontSizeM(), {textX, textY}, textColor, suitColor);
             } else {
                 ctx().fontM.DrawText(text, {textX, textY}, ctx().fontSizeM(), FontSpacing, textColor);
@@ -2718,7 +2754,7 @@ auto drawMiserCards() -> void
                     pos.x + (cellSize - textSize.x) * 0.5f, //
                     pos.y + (cellSize - textSize.y) * 0.5f};
                 const auto textColor = (textCell == DiamondSign or textCell == HeartSign)
-                    ? r::Color::Red()
+                    ? redColor()
                     : getGuiColor(BUTTON, PREF_GUI_PROPERTY(TEXT, state));
                 ctx().fontM.DrawText(textCell, textPos, ctx().fontSizeM(), FontSpacing, textColor);
             }
@@ -2765,7 +2801,7 @@ auto drawWhistingOrMiserMenu() -> void
     if (isRedSuit(text)) {
         const auto textSize = font.MeasureText(text, fontSize, FontSpacing);
         const auto textPos = r::Vector2{pos.x - textSize.x * 0.5f, pos.y - textSize.y * 0.5f};
-        drawRankAndSuitText(text, font, fontSize, textPos, getGuiColor(TEXT_COLOR_NORMAL), r::Color::Red());
+        drawRankAndSuitText(text, font, fontSize, textPos, getGuiColor(TEXT_COLOR_NORMAL), redColor());
     } else {
         withGuiFont(font, [&] {
             withGuiStyle(DEFAULT, TEXT_SIZE, static_cast<int>(fontSize), [&] { drawGuiLabelCentered(text, pos); });
@@ -3069,6 +3105,7 @@ auto drawSettingsMenu() -> void
         ctx().localizeText(GameText::Alternative),
     };
     const auto colorScheme = std::vector{
+        ctx().localizeText(GameText::Dracula),
         ctx().localizeText(GameText::Genesis),
         ctx().localizeText(GameText::Amber),
         ctx().localizeText(GameText::Dark),
@@ -3229,7 +3266,7 @@ auto drawScoreSheet() -> void
             return std::tuple{
                 result,
                 ctx().fontM.MeasureText(result, ctx().fontSizeM(), fSpace),
-                result.starts_with('-') ? r::Color::Red() : (result.starts_with('+') ? r::Color::DarkGreen() : c)};
+                result.starts_with('-') ? redColor() : (result.starts_with('+') ? greenColor() : c)};
         });
         if (playerId == ctx().myPlayerId) {
             if (resultValue) {
@@ -3342,18 +3379,21 @@ auto drawOverallScoreboard() -> void
                     if (cell.starts_with('+')
                         or cell.starts_with(ctx().localizeText(GameText::Win))
                         or (cell.contains('%') and std::stoi(cell) >= GoodWinrate)) {
-                        return scheme == "bluish" ? r::Color::DarkGreen() : r::Color::Lime();
+                        if (scheme == "bluish") { return r::Color::DarkGreen(); }
+                        if (scheme == "dracula") { return greenColor(); }
+                        return r::Color::Lime();
                     }
                     if ((cell.starts_with('-') and "-" != cell)
                         or cell.starts_with(ctx().localizeText(GameText::Lost))
                         or (cell.contains('%') and std::stoi(cell) <= BadWinrate)) {
                         if (scheme == "bluish") { return r::Color::Maroon(); }
                         if (scheme == "lavanda") { return r::Color::Pink(); }
-                        return r::Color::Red();
+                        return redColor();
                     }
                     if ("0" == cell
                         or cell.starts_with(ctx().localizeText(GameText::Draw))
                         or (cell.contains('%') and std::stoi(cell) < GoodWinrate and std::stoi(cell) > BadWinrate)) {
+                        if (scheme == "dracula") { return r::Color{255, 184, 108}; }
                         return r::Color::Orange();
                     }
                     return getGuiColor(LABEL, TEXT_COLOR_NORMAL);
@@ -3422,8 +3462,9 @@ auto drawLastTrickOrTalon() -> void
     static constexpr auto borderX = VirtualW - BorderMargin;
     const auto fps = GetFPS();
     const auto fpsColor = std::invoke([&] {
-        if (fps < 15) { return r::Color::Red(); }
+        if (fps < 15) { return redColor(); }
         if (fps < 30) { return r::Color::Orange(); }
+        if (ctx().settingsMenu.loadedColorScheme == "dracula") { return greenColor(); }
         return r::Color::Lime();
     });
     const auto fpsText = r::Text{fmt::format(" FPS {}", fps), fontSize, fpsColor, font, fontSpacing};
@@ -3437,9 +3478,12 @@ auto drawPing(const r::Vector2& pos, const Font& font, const float fontSize, con
     if (static_cast<int>(ctx().ping.rtt) == Ping::InvalidRtt) { return; }
     const auto ping = static_cast<int>(ctx().ping.rtt);
     const auto pingColor = std::invoke([&] {
-        if (ping <= 200) { return r::Color::Lime(); }
+        if (ping <= 200) {
+            if (ctx().settingsMenu.loadedColorScheme == "dracula") { return greenColor(); }
+            return r::Color::Lime();
+        }
         if (ping <= 600) { return r::Color::Orange(); }
-        return r::Color::Red();
+        return redColor();
     });
     const auto pingText
         = r::Text{fmt::format("PING {} MS ", ping == 0 ? 1 : ping), fontSize, pingColor, font, fontSpacing};
@@ -3461,6 +3505,20 @@ auto drawPingAndFps() -> void
     drawPing({fpsX, y}, font, fontSize, fontSpacing);
 }
 
+auto updateCardAnimation() -> void
+{
+    auto& anim = ctx().cardAnim;
+    if (not anim.active) { return; }
+    anim.t += GetFrameTime() / anim.duration;
+    if (anim.t >= 1.f) {
+        anim.active = false;
+        return;
+    }
+    // Linear interpolation
+    anim.currentPos.x = anim.startPos.x + (anim.targetPos.x - anim.startPos.x) * anim.t;
+    anim.currentPos.y = anim.startPos.y + (anim.targetPos.y - anim.startPos.y) * anim.t;
+}
+
 auto handleMousePress() -> void
 {
     if (not r::Mouse::IsButtonPressed(MOUSE_LEFT_BUTTON) or ctx().isGameFreezed) { return; }
@@ -3472,6 +3530,18 @@ auto handleMousePress() -> void
         handleCardClick(ctx().player(playerId).hand, [&](const Card& card) {
             if (std::empty(ctx().cardsOnTable) and not ctx().passGameTalon.exists()) {
                 ctx().leadSuit = cardSuit(card.name);
+            }
+            if (playerId == ctx().myPlayerId) {
+                const auto [bottomPlayPos, _, _, _] = playedCardPositions();
+                const auto& startPos = ctx().cardPositions[card.name];
+                ctx().cardAnim = CardAnimation{
+                    .active = true,
+                    .cardName = card.name,
+                    .startPos = startPos,
+                    .targetPos = bottomPlayPos,
+                    .currentPos = startPos,
+                    .duration = 0.2f, // 200ms
+                    .t = 0.f};
             }
             ctx().cardsOnTable.insert_or_assign(playerId, &getCard(card.name));
             sendPlayCard(playerId, card.name);
@@ -3547,6 +3617,7 @@ auto updateDrawFrame([[maybe_unused]] void* ud) -> void
         GuiUnlock();
     }
     handleMousePress();
+    updateCardAnimation();
     updateMenuPosition(ctx().settingsMenu);
     updateMenuPosition(ctx().speechBubbleMenu);
     updateMenuPosition(ctx().overallScoreboard);
@@ -3604,8 +3675,8 @@ Options:
     -h --help               Show this screen.
     --url=<url>             WebSocket URL [default: ws://0.0.0.0:8080]
     --language=<name>       Language to use [default: english]. Options: english, ukrainian, alternative
-    --color-scheme=<name>   Color scheme to use [default: genesis]
-                            Options: genesis, amber, dark, cyber, jungle, lavanda, bluish)";
+    --color-scheme=<name>   Color scheme to use [default: dracula]
+                            Options: dracula, genesis, amber, dark, cyber, jungle, lavanda, bluish)";
 } // namespace
 } // namespace pref
 

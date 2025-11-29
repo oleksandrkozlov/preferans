@@ -237,11 +237,11 @@ struct Beat {
 [[nodiscard]] auto decideTrickWinner(const std::vector<PlayedCard>& trick, std::string_view trump) -> Player::Id;
 [[nodiscard]] auto calculateDealScore(const Declarer& declarer, const std::vector<Whister>& whisters) -> DealScore;
 
-auto accept(
+auto createAcceptor(
 #ifdef PREF_SSL
     net::ssl::context ssl,
 #endif // PREF_SSL
     net::ip::tcp::endpoint endpoint,
-    net::any_io_executor ex) -> Awaitable<>;
+    net::any_io_executor ex) -> task<>;
 
 }; // namespace pref
