@@ -29,6 +29,7 @@
 #include <raylib-cpp.hpp>
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <concepts>
@@ -425,6 +426,15 @@ struct OverallScoreboard {
     Table table;
 };
 
+struct MovingCard {
+    PlayerId playerId;
+    const Card* card{};
+    r::Vector2 from{};
+    r::Vector2 to{};
+    double startedAt{};
+    double durationMs{};
+};
+
 struct LogoutMessage {
     bool isVisible{};
 };
@@ -528,6 +538,12 @@ struct OfferPopUp {
     bool isVisible{};
 };
 
+struct MicrophoneDemo {
+    std::string status = "Microphone: requesting access...";
+    bool isError{};
+    bool isMuted{};
+};
+
 struct Sound {
     r::Sound gameAboutToStarted{sounds("game_about_to_start.mp3")};
     r::Sound gameStarted{sounds("game_started.mp3")};
@@ -556,16 +572,6 @@ struct Sound {
     }
 };
 
-struct CardAnimation {
-    bool active{};
-    CardNameView cardName;
-    r::Vector2 startPos;
-    r::Vector2 targetPos;
-    r::Vector2 currentPos;
-    float duration{};
-    float t{};
-};
-
 struct Context {
     r::Font fontS;
     r::Font fontM;
@@ -582,6 +588,7 @@ struct Context {
     r::RenderTexture target{static_cast<int>(VirtualW), static_cast<int>(VirtualH)};
     r::AudioDevice audio;
     Sound sound;
+    MicrophoneDemo microphone;
     PlayerId myPlayerId;
     PlayerName myPlayerName;
     std::string password;
@@ -617,11 +624,11 @@ struct Context {
     Ping ping;
     std::string url;
     std::map<CardNameView, r::Vector2> cardPositions;
+    std::vector<MovingCard> movingCards;
     bool isGameFreezed{};
     bool needsDraw = true;
     double tick = 0.0;
     bool isGameStarted{};
-    CardAnimation cardAnim;
 
     auto clear() -> void
     {
@@ -641,6 +648,7 @@ struct Context {
         scoreSheet.isVisible = false;
         miserCardsPanel.clear();
         cardPositions.clear();
+        movingCards.clear();
         isGameFreezed = false;
         offerButton.clear();
         offerPopUp.isVisible = false;
@@ -710,6 +718,10 @@ struct Context {
     static auto ctx = Context{};
     return ctx;
 }
+
+auto initializeAudioEngine() -> void;
+auto syncAudioPeers() -> void;
+auto teardownAudioEngine() -> void;
 
 auto playSound(r::Sound& sound) -> void
 {
@@ -785,6 +797,66 @@ auto loadFromLocalStorageAuthToken() -> void
     ctx().authToken = loadFromLocalStorage(AuthTokenStorageKey);
 }
 
+auto initializeMicrophoneDemo() -> void
+{
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
+    EM_ASM({
+        (function () {
+            'use strict';
+            Module.ccall('pref_on_microphone_status', null, ['string', 'number'], ['Microphone: requesting access...', 0]);
+            const constraints = (window.constraints = { audio: true, video: false });
+            const audio = new Audio();
+            audio.autoplay = true;
+            audio.controls = false;
+            audio.style.display = 'none';
+            audio.muted = true; // avoid local loopback playback
+            window.prefDesiredMute = !!window.prefDesiredMute;
+
+            function handleSuccess(stream) {
+                const audioTracks = stream.getAudioTracks();
+                console.log('Got stream with constraints:', constraints);
+                const device = audioTracks[0]?.label || 'unknown device';
+                console.log('Using audio device: ' + device);
+                const mute = !!window.prefDesiredMute;
+                if (audioTracks) {
+                    audioTracks.forEach(track => { track.enabled = !mute; });
+                }
+                Module.ccall('pref_on_microphone_status', null, ['string', 'number'], [
+                    mute ? `Microphone active (muted): ${device}` : `Microphone active: ${device}`,
+                    0,
+                ]);
+                stream.oninactive = function () {
+                    console.log('Stream ended');
+                    Module.ccall(
+                        'pref_on_microphone_status',
+                        null,
+                        ['string', 'number'],
+                        ['Microphone: stream ended', 1]);
+                };
+                window.stream = stream;
+                audio.srcObject = stream;
+                audio.play().catch(() => {});
+            }
+
+            function handleError(error) {
+                const errorMessage =
+                    'navigator.MediaDevices.getUserMedia error: ' + error.message + ' ' + error.name;
+                Module.ccall('pref_on_microphone_status', null, ['string', 'number'], [errorMessage, 1]);
+                console.log(errorMessage);
+            }
+
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                handleError(new Error('getUserMedia not supported'));
+                return;
+            }
+
+            navigator.mediaDevices.getUserMedia(constraints).then(handleSuccess).catch(handleError);
+        })();
+    });
+#pragma GCC diagnostic pop
+}
+
 auto saveToLocalStorageAuthToken() -> void
 {
     saveToLocalStorage(AuthTokenStorageKey, ctx().authToken);
@@ -838,6 +910,91 @@ auto removeFromLocalStorageAuthToken() -> void
     const auto leftIndex = (selfIndex + 1) % 3;
     const auto rightIndex = (selfIndex + 2) % 3;
     return {order[static_cast<std::size_t>(leftIndex)], order[static_cast<std::size_t>(rightIndex)]};
+}
+
+struct PlaySlots {
+    r::Vector2 top;
+    r::Vector2 left;
+    r::Vector2 right;
+    r::Vector2 bottom;
+};
+
+[[nodiscard]] auto playSlots() -> const PlaySlots&
+{
+    static const PlaySlots slots = [] {
+        static constexpr auto cardSpacing = CardWidth * 0.1f;
+        static const auto centerPos
+            = r::Vector2{VirtualW * 0.5f, (VirtualH - MyCardBorderMarginY - CardHeight) * 0.5f};
+        static const auto topBottomX = centerPos.x - CardWidth * 0.5f;
+        static const auto leftRightY = centerPos.y - CardHeight * 0.5f;
+        static const auto topPlayPos = r::Vector2{topBottomX, centerPos.y - cardSpacing - CardHeight};
+        static const auto bottomPlayPos = r::Vector2{topBottomX, centerPos.y + cardSpacing};
+        static const auto leftPlayPos
+            = r::Vector2{centerPos.x - CardWidth * 0.5f - cardSpacing - CardWidth, leftRightY};
+        static const auto rightPlayPos
+            = r::Vector2{centerPos.x + cardSpacing + CardWidth * 0.5f, leftRightY};
+        return PlaySlots{topPlayPos, leftPlayPos, rightPlayPos, bottomPlayPos};
+    }();
+    return slots;
+}
+
+[[nodiscard]] auto playedCardPosition(const PlayerId& playerId) -> std::optional<r::Vector2>
+{
+    if (std::empty(playerId) or not ctx().areAllPlayersJoined()) { return std::nullopt; }
+    const auto [leftOpponentId, rightOpponentId] = getOpponentIds();
+    const auto& slots = playSlots();
+    if (playerId == leftOpponentId) { return slots.left; }
+    if (playerId == rightOpponentId) { return slots.right; }
+    if (playerId == ctx().myPlayerId) { return slots.bottom; }
+    return std::nullopt;
+}
+
+[[nodiscard]] auto handAnchor(const PlayerId& playerId) -> std::optional<r::Vector2>
+{
+    if (std::empty(playerId) or not ctx().areAllPlayersJoined()) { return std::nullopt; }
+    const auto [leftOpponentId, rightOpponentId] = getOpponentIds();
+    if (playerId == ctx().myPlayerId) {
+        const auto cardCount = std::max<std::size_t>(1, std::size(ctx().myPlayer().hand));
+        const auto totalWidth = (static_cast<float>(cardCount) - 1.f) * CardOverlapX + CardWidth;
+        return r::Vector2{(VirtualW - totalWidth) * 0.5f, VirtualH - CardHeight - MyCardBorderMarginY};
+    }
+    const auto isRight = playerId == rightOpponentId;
+    const auto isLeft = playerId == leftOpponentId;
+    if (not isLeft and not isRight) { return std::nullopt; }
+    const auto cardCount = std::max(1, isRight ? ctx().rightCardCount : ctx().leftCardCount);
+    const auto totalHeight = (static_cast<float>(cardCount) - 1.f) * CardOverlapY + CardHeight;
+    const auto x = isRight ? VirtualW - CardWidth - CardBorderMargin : CardBorderMargin;
+    const auto y = (VirtualH - totalHeight) * 0.5f;
+    return r::Vector2{x, y};
+}
+
+[[nodiscard]] auto isCardMoving(const PlayerId& playerId) -> bool
+{
+    return rng::any_of(ctx().movingCards, equalTo(playerId), &MovingCard::playerId);
+}
+
+auto startCardMove(const PlayerId& playerId, const Card& card, std::optional<r::Vector2> fromHint = {}) -> void
+{
+    const auto to = playedCardPosition(playerId);
+    if (not to) { return; }
+    const auto from = fromHint.value_or(handAnchor(playerId).value_or(*to));
+    constexpr auto durationMs = 240.0;
+    std::erase_if(ctx().movingCards, [&](const MovingCard& movingCard) { return movingCard.playerId == playerId; });
+    ctx().movingCards.push_back(MovingCard{playerId, &card, from, *to, emscripten_get_now(), durationMs});
+    ctx().needsDraw = true;
+}
+
+auto drawMovingCards() -> void
+{
+    if (std::empty(ctx().movingCards)) { return; }
+    const auto now = emscripten_get_now();
+    std::erase_if(ctx().movingCards, [&](const MovingCard& movingCard) {
+        const auto progress = std::clamp((now - movingCard.startedAt) / movingCard.durationMs, 0.0, 1.0);
+        const auto pos = Vector2Lerp(movingCard.from, movingCard.to, static_cast<float>(progress));
+        movingCard.card->texture.Draw(pos);
+        return progress >= 1.0;
+    });
+    ctx().needsDraw = true;
 }
 
 auto sendMessage(const EMSCRIPTEN_WEBSOCKET_T ws, const Message& msg) -> bool
@@ -966,6 +1123,19 @@ auto sendMessage(const EMSCRIPTEN_WEBSOCKET_T ws, const Message& msg) -> bool
     return result;
 }
 
+[[nodiscard]] auto makeAudioSignal(
+    const std::string& fromPlayerId, const std::string& toPlayerId, const std::string& kind, const std::string& data)
+    -> AudioSignal
+{
+    auto result = AudioSignal{};
+    PREF_DI(fromPlayerId, toPlayerId, kind, data);
+    result.set_from_player_id(fromPlayerId);
+    result.set_to_player_id(toPlayerId);
+    result.set_kind(kind);
+    result.set_data(data);
+    return result;
+}
+
 [[nodiscard]] auto makePingPong(const int id) -> PingPong
 {
     auto result = PingPong{};
@@ -1039,6 +1209,13 @@ auto sendSpeechBubble(const std::string& text) -> void
     sendMessage(ctx().ws, makeMessage(makeSpeechBubble(ctx().myPlayerId, text)));
 }
 
+auto sendAudioSignal(const std::string& toPlayerId, const std::string& kind, const std::string& data) -> void
+{
+    PREF_DI(toPlayerId, kind, data);
+    if (toPlayerId == ctx().myPlayerId) { return; }
+    sendMessage(ctx().ws, makeMessage(makeAudioSignal(ctx().myPlayerId, toPlayerId, kind, data)));
+}
+
 [[nodiscard]] auto sendPingPong(const std::int32_t id) -> bool
 {
     return sendMessage(ctx().ws, makeMessage(makePingPong(id)));
@@ -1095,6 +1272,7 @@ auto finishLogin(auto& response) -> void
     repeatPingPong();
     ctx().isLoggedIn = true;
     ctx().isLoginInProgress = false;
+    initializeAudioEngine();
 }
 
 auto handleLoginResponse(const Message& msg) -> void
@@ -1240,6 +1418,7 @@ auto handlePlayerJoined(const Message& msg) -> void
     auto player = Player{playerId, std::move(playerName)};
     ctx().players.insert_or_assign(std::move(playerId), std::move(player));
     if (ctx().areAllPlayersJoined()) { ctx().startGameButton.isVisible = true; }
+    syncAudioPeers();
 }
 
 auto handlePlayerLeft(const Message& msg) -> void
@@ -1248,6 +1427,7 @@ auto handlePlayerLeft(const Message& msg) -> void
     if (not playerLeft) { return; }
     PREF_I("playerId: {}", playerLeft->player_id());
     ctx().players.erase(std::string{playerLeft->player_id()});
+    syncAudioPeers();
 }
 
 [[nodiscard]] auto isMiser() -> bool
@@ -1425,6 +1605,7 @@ auto handlePlayCard(const Message& msg) -> void
     const auto cardName = playCard->card();
     PREF_DI(playerId, cardName);
 
+    const auto& card = getCard(cardName);
     if (playerId == leftOpponentId) {
         if (ctx().leftCardCount > 0) { --ctx().leftCardCount; }
     } else if (playerId == rightOpponentId) {
@@ -1433,7 +1614,10 @@ auto handlePlayCard(const Message& msg) -> void
 
     ctx().player(playerId).hand |= rng::actions::remove_if(equalTo(cardName), &Card::name);
     if (std::empty(ctx().cardsOnTable) and not ctx().passGameTalon.exists()) { ctx().leadSuit = cardSuit(cardName); }
-    ctx().cardsOnTable.emplace(std::move(playerId), &getCard(cardName));
+    ctx().cardsOnTable.insert_or_assign(playerId, &card);
+    if (not isCardMoving(playerId)) {
+        startCardMove(playerId, card);
+    }
     playSound(ctx().sound.placeCard);
 }
 
@@ -1540,6 +1724,26 @@ auto handleSpeechBubble(const Message& msg) -> void
         std::string{speechBubble->player_id()}, std::string{speechBubble->text()});
     // TODO: replace sound with a different one
     // playSound(ctx().sound.messageReceived);
+}
+
+auto handleAudioSignal(const Message& msg) -> void
+{
+    const auto signal = makeMethod<AudioSignal>(msg);
+    if (not signal) { return; }
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
+    EM_ASM(
+        {
+            if (!Module.prefAudio) { return; }
+            Module.prefAudio.handleSignal(
+                UTF8ToString($0), // from
+                UTF8ToString($1), // kind
+                UTF8ToString($2)); // data
+        },
+        std::string{signal->from_player_id()}.c_str(),
+        std::string{signal->kind()}.c_str(),
+        std::string{signal->data()}.c_str());
+#pragma GCC diagnostic pop
 }
 
 auto handlePingPong(const Message& msg) -> void
@@ -1650,6 +1854,7 @@ auto updateWindowSize() -> void
 // clang-format off
 #define PREF_METHODS \
     PREF_X(AuthResponse) \
+    PREF_X(AudioSignal) \
     PREF_X(Bidding) \
     PREF_X(DealCards) \
     PREF_X(DealFinished) \
@@ -1996,6 +2201,7 @@ auto drawLogoutMessage() -> void
         removeFromLocalStoragePlayerId();
         removeFromLocalStorageAuthToken();
         ctx().isLoggedIn = false;
+        teardownAudioEngine();
         emscripten_websocket_close(ctx().ws, 1000, "Logout");
     }
     ctx().logoutMessage.isVisible = false;
@@ -2497,34 +2703,21 @@ auto drawLeftHand() -> void
     drawOpponentHand(DrawPosition::Left);
 }
 
-auto playedCardPositions() -> std::tuple<r::Vector2, r::Vector2, r::Vector2, r::Vector2>
-{
-    static constexpr auto cardSpacing = CardWidth * 0.1f;
-    static const auto centerPos = r::Vector2{VirtualW * 0.5f, (VirtualH - MyCardBorderMarginY - CardHeight) * 0.5f};
-    static const auto topBottomX = centerPos.x - CardWidth * 0.5f;
-    static const auto leftRightY = centerPos.y - CardHeight * 0.5f;
-    static const auto topPlayPos = r::Vector2{topBottomX, centerPos.y - cardSpacing - CardHeight};
-    static const auto bottomPlayPos = r::Vector2{topBottomX, centerPos.y + cardSpacing};
-    static const auto leftPlayPos = r::Vector2{centerPos.x - CardWidth * 0.5f - cardSpacing - CardWidth, leftRightY};
-    static const auto rightPlayPos = r::Vector2{centerPos.x + cardSpacing + CardWidth * 0.5f, leftRightY};
-    return {bottomPlayPos, leftPlayPos, topPlayPos, rightPlayPos};
-}
-
 auto drawPlayedCards() -> void
 {
-    const auto [bottomPlayPos, leftPlayPos, topPlayPos, rightPlayPos] = playedCardPositions();
+    const auto& slots = playSlots();
     const auto [leftOpponentId, rightOpponentId] = getOpponentIds();
-    if (ctx().passGameTalon.exists()) { ctx().passGameTalon.get().texture.Draw(topPlayPos); }
+    if (ctx().passGameTalon.exists()) { ctx().passGameTalon.get().texture.Draw(slots.top); }
+    drawMovingCards();
     if (std::empty(ctx().cardsOnTable)) { return; }
-    if (ctx().cardsOnTable.contains(leftOpponentId)) {
-        ctx().cardsOnTable.at(leftOpponentId)->texture.Draw(leftPlayPos);
+    if (ctx().cardsOnTable.contains(leftOpponentId) and not isCardMoving(leftOpponentId)) {
+        ctx().cardsOnTable.at(leftOpponentId)->texture.Draw(slots.left);
     }
-    if (ctx().cardsOnTable.contains(rightOpponentId)) {
-        ctx().cardsOnTable.at(rightOpponentId)->texture.Draw(rightPlayPos);
+    if (ctx().cardsOnTable.contains(rightOpponentId) and not isCardMoving(rightOpponentId)) {
+        ctx().cardsOnTable.at(rightOpponentId)->texture.Draw(slots.right);
     }
-    if (ctx().cardsOnTable.contains(ctx().myPlayerId)) {
-        const auto& cardPosition = ctx().cardAnim.active ? ctx().cardAnim.currentPos : bottomPlayPos;
-        ctx().cardsOnTable.at(ctx().myPlayerId)->texture.Draw(cardPosition);
+    if (ctx().cardsOnTable.contains(ctx().myPlayerId) and not isCardMoving(ctx().myPlayerId)) {
+        ctx().cardsOnTable.at(ctx().myPlayerId)->texture.Draw(slots.bottom);
     }
 }
 
@@ -2824,7 +3017,10 @@ auto drawHowToPlayMenu() -> void
         []([[maybe_unused]] const GameText _) { return true; });
 }
 
-auto handleCardClick(std::list<const Card*>& hand, std::invocable<const Card&> auto act) -> void
+auto handleCardClick(
+    std::list<const Card*>& hand,
+    std::invocable<const Card&> auto act,
+    std::function<void(const Card&, const r::Vector2&)> beforeErase = {}) -> void
 {
     if (not r::Mouse::IsButtonPressed(MOUSE_LEFT_BUTTON)) { return; }
     const auto mousePos = r::Mouse::GetPosition();
@@ -2839,8 +3035,11 @@ auto handleCardClick(std::list<const Card*>& hand, std::invocable<const Card&> a
             PREF_W("Can't play {}", PREF_V(cardName));
             return;
         }
+        const auto posIt = ctx().cardPositions.find(cardName);
+        if (posIt == ctx().cardPositions.end()) { return; }
+        if (beforeErase) { beforeErase(**it, posIt->second); }
         const auto _ = gsl::finally([&] {
-            ctx().cardPositions.erase(cardName);
+            ctx().cardPositions.erase(posIt);
             hand.erase(it);
             playSound(ctx().sound.placeCard);
         });
@@ -3494,6 +3693,261 @@ auto drawPing(const r::Vector2& pos, const Font& font, const float fontSize, con
     delimText.Draw({delimX, pos.y});
 }
 
+auto setMicrophoneMuted(const bool mute) -> void
+{
+    ctx().microphone.isMuted = mute;
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
+    EM_ASM(
+        {
+            const mute = $0 !== 0;
+            window.prefDesiredMute = mute;
+            const stream = window.stream;
+            if (stream && stream.getAudioTracks) {
+                stream.getAudioTracks().forEach(track => {
+                    track.enabled = !mute;
+                });
+                Module.ccall(
+                    'pref_on_microphone_status',
+                    null,
+                    ['string', 'number'],
+                    [mute ? 'Microphone muted' : 'Microphone unmuted', 0]);
+            } else {
+                Module.ccall(
+                    'pref_on_microphone_status',
+                    null,
+                    ['string', 'number'],
+                    [mute ? 'Will mute when ready' : 'Will unmute when ready', 0]);
+            }
+        },
+        mute);
+#pragma GCC diagnostic pop
+    ctx().needsDraw = true;
+}
+
+[[nodiscard]] auto audioPeerIds() -> std::vector<std::string>
+{
+    auto ids = std::vector<std::string>{};
+    for (const auto& playerId : ctx().players | rv::keys) {
+        if (playerId == ctx().myPlayerId) { continue; }
+        ids.push_back(playerId);
+    }
+    return ids;
+}
+
+[[nodiscard]] auto peerIdsAsJson() -> std::string
+{
+    const auto ids = audioPeerIds();
+    auto json = std::string{"["};
+    for (auto&& [i, id] : ids | rv::enumerate) {
+        if (i != 0) { json += ","; }
+        json += fmt::format("\"{}\"", id);
+    }
+    json += "]";
+    return json;
+}
+
+auto syncAudioPeers() -> void
+{
+    if (std::empty(ctx().myPlayerId)) { return; }
+    const auto peersJson = peerIdsAsJson();
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
+    EM_ASM(
+        {
+            if (!Module.prefAudio) { return; }
+            Module.prefAudio.setPeers(JSON.parse(UTF8ToString($0)));
+        },
+        peersJson.c_str());
+#pragma GCC diagnostic pop
+}
+
+auto teardownAudioEngine() -> void
+{
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
+    EM_ASM({ if (Module.prefAudio) { Module.prefAudio.setPeers([]); Module.prefAudio.setSelf(''); } });
+#pragma GCC diagnostic pop
+}
+
+auto initializeAudioEngine() -> void
+{
+    PREF_I();
+    if (std::empty(ctx().myPlayerId)) { return; }
+    const auto peersJson = peerIdsAsJson();
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
+    EM_ASM(
+        {
+            if (!Module.prefAudio) {
+                Module.prefAudio = (function () {
+                    const peers = new Map();
+                    const audios = new Map();
+                    let selfId = '';
+                    let localStreamPromise = null;
+
+                    function log(...args) {
+                        console.log('[audio]', ...args);
+                    }
+
+                    function send(to, kind, data) {
+                        console.log('send');
+                        Module.ccall(
+                            'pref_on_audio_signal', null, [ 'string', 'string', 'string' ], [ to, kind, data ]);
+                    }
+
+                    async function getLocalStream() {
+                        if (window.stream) { return window.stream; }
+                        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                            throw new Error('getUserMedia not available');
+                        }
+                        if (!localStreamPromise) {
+                            localStreamPromise = navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                        }
+                        window.stream = await localStreamPromise;
+                        return window.stream;
+                    }
+
+                    function shouldInitiate(remoteId) {
+                        return selfId && remoteId && selfId < remoteId;
+                    }
+
+                    function closePeer(remoteId) {
+                        const pc = peers.get(remoteId);
+                        if (pc) {
+                            pc.getSenders().forEach(sender => {
+                                try {
+                                    pc.removeTrack(sender);
+                                } catch (_) {}
+                            });
+                            pc.close();
+                        }
+                        peers.delete(remoteId);
+                        const audio = audios.get(remoteId);
+                        if (audio) {
+                            audio.srcObject = null;
+                            audio.remove();
+                            audios.delete(remoteId);
+                        }
+                    }
+
+                    async function ensurePeer(remoteId) {
+                        console.log('ensurePeer');
+                        if (!remoteId || remoteId === selfId) { return null; }
+                        if (peers.has(remoteId)) { return peers.get(remoteId); }
+                        const pc = new RTCPeerConnection({
+                            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+                        });
+                        peers.set(remoteId, pc);
+                        const stream = await getLocalStream();
+                        stream.getTracks().forEach(track => pc.addTrack(track, stream));
+                        pc.onicecandidate = ev => {
+                            if (ev.candidate) {
+                                send(remoteId, 'candidate', JSON.stringify(ev.candidate));
+                            }
+                        };
+                        pc.ontrack = ev => {
+                            const remoteStream = ev.streams[0];
+                            let audio = audios.get(remoteId);
+                            if (!audio) {
+                                audio = new Audio();
+                                audio.autoplay = true;
+                                audio.controls = false;
+                                audio.style.display = 'none';
+                                audios.set(remoteId, audio);
+                                document.body.appendChild(audio);
+                            }
+                            audio.srcObject = remoteStream;
+                            audio.play().catch(() => {});
+                        };
+                        pc.onconnectionstatechange = () => {
+                            if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
+                                closePeer(remoteId);
+                            }
+                        };
+                        if (shouldInitiate(remoteId)) {
+                            const offer = await pc.createOffer();
+                            await pc.setLocalDescription(offer);
+                            send(remoteId, 'offer', JSON.stringify(offer));
+                        }
+                        return pc;
+                    }
+
+                    async function handleSignal(from, kind, data) {
+                        const pc = await ensurePeer(from);
+                        if (!pc) { return; }
+                        if (kind === 'offer') {
+                            await pc.setRemoteDescription(JSON.parse(data));
+                            const answer = await pc.createAnswer();
+                            await pc.setLocalDescription(answer);
+                            send(from, 'answer', JSON.stringify(answer));
+                            return;
+                        }
+                        if (kind === 'answer') {
+                            if (!pc.currentRemoteDescription) {
+                                await pc.setRemoteDescription(JSON.parse(data));
+                            }
+                            return;
+                        }
+                        if (kind === 'candidate') {
+                            try {
+                                await pc.addIceCandidate(JSON.parse(data));
+                            } catch (e) {
+                                log('Failed to add candidate', e);
+                            }
+                        }
+                    }
+
+                    function setSelf(id) {
+                        selfId = id;
+                    }
+
+                    function setPeers(ids) {
+                        const desired = new Set(ids);
+                        desired.forEach(id => { void ensurePeer(id); });
+                        for (const id of peers.keys()) {
+                            if (!desired.has(id)) { closePeer(id); }
+                        }
+                    }
+
+                    return { setSelf, setPeers, handleSignal, ensurePeer, closePeer };
+                })();
+            }
+            Module.prefAudio.setSelf(UTF8ToString($0));
+            Module.prefAudio.setPeers(JSON.parse(UTF8ToString($1)));
+        },
+        ctx().myPlayerId.c_str(),
+        peersJson.c_str());
+#pragma GCC diagnostic pop
+}
+
+auto drawMicrophonePanel() -> void
+{
+    const auto& text = ctx().microphone.status;
+    const auto& font = ctx().fontS;
+    const auto fontSize = ctx().fontSizeS();
+    static constexpr auto padX = 14.f;
+    static constexpr auto padY = 10.f;
+    const auto textSize = font.MeasureText(text, fontSize, FontSpacing);
+    const auto boxW = textSize.x + padX * 2.f;
+    const auto boxH = textSize.y + padY * 2.f;
+    const auto buttonH = std::max(boxH, 42.f);
+    static constexpr auto buttonW = 160.f;
+    static constexpr auto spacing = 12.f;
+    const auto y = VirtualH - buttonH - BorderMargin;
+    const auto buttonLabel = ctx().microphone.isMuted ? "Unmute mic" : "Mute mic";
+    if (GuiButton({BorderMargin, y, buttonW, buttonH}, buttonLabel)) {
+        setMicrophoneMuted(not ctx().microphone.isMuted);
+    }
+    if (std::empty(text)) { return; }
+    const auto bgColor = ctx().microphone.isError ? getGuiColor(BASE_COLOR_PRESSED) : getGuiColor(BASE_COLOR_NORMAL);
+    const auto fgColor = ctx().microphone.isError ? getGuiColor(TEXT_COLOR_PRESSED) : getGuiColor(TEXT_COLOR_NORMAL);
+    const auto boxX = BorderMargin + buttonW + spacing;
+    const auto boxY = y + (buttonH - boxH) * 0.5f;
+    r::Rectangle{boxX, boxY, boxW, boxH}.DrawRounded(0.18f, 6, bgColor);
+    font.DrawText(text, {boxX + padX, boxY + (boxH - textSize.y) * 0.5f}, fontSize, FontSpacing, fgColor);
+}
+
 auto drawPingAndFps() -> void
 {
     if (not ctx().settingsMenu.showPingAndFps) { return; }
@@ -3505,20 +3959,6 @@ auto drawPingAndFps() -> void
     drawPing({fpsX, y}, font, fontSize, fontSpacing);
 }
 
-auto updateCardAnimation() -> void
-{
-    auto& anim = ctx().cardAnim;
-    if (not anim.active) { return; }
-    anim.t += GetFrameTime() / anim.duration;
-    if (anim.t >= 1.f) {
-        anim.active = false;
-        return;
-    }
-    // Linear interpolation
-    anim.currentPos.x = anim.startPos.x + (anim.targetPos.x - anim.startPos.x) * anim.t;
-    anim.currentPos.y = anim.startPos.y + (anim.targetPos.y - anim.startPos.y) * anim.t;
-}
-
 auto handleMousePress() -> void
 {
     if (not r::Mouse::IsButtonPressed(MOUSE_LEFT_BUTTON) or ctx().isGameFreezed) { return; }
@@ -3527,25 +3967,16 @@ auto handleMousePress() -> void
         const auto& playerId
             = std::invoke([&] { return isMyTurn() ? ctx().myPlayerId : ctx().myPlayer().playsOnBehalfOf; });
 
-        handleCardClick(ctx().player(playerId).hand, [&](const Card& card) {
-            if (std::empty(ctx().cardsOnTable) and not ctx().passGameTalon.exists()) {
-                ctx().leadSuit = cardSuit(card.name);
-            }
-            if (playerId == ctx().myPlayerId) {
-                const auto [bottomPlayPos, _, _, _] = playedCardPositions();
-                const auto& startPos = ctx().cardPositions[card.name];
-                ctx().cardAnim = CardAnimation{
-                    .active = true,
-                    .cardName = card.name,
-                    .startPos = startPos,
-                    .targetPos = bottomPlayPos,
-                    .currentPos = startPos,
-                    .duration = 0.2f, // 200ms
-                    .t = 0.f};
-            }
-            ctx().cardsOnTable.insert_or_assign(playerId, &getCard(card.name));
-            sendPlayCard(playerId, card.name);
-        });
+        handleCardClick(
+            ctx().player(playerId).hand,
+            [&](const Card& card) {
+                if (std::empty(ctx().cardsOnTable) and not ctx().passGameTalon.exists()) {
+                    ctx().leadSuit = cardSuit(card.name);
+                }
+                ctx().cardsOnTable.insert_or_assign(playerId, &getCard(card.name));
+                sendPlayCard(playerId, card.name);
+            },
+            [&](const Card& card, const r::Vector2& from) { startCardMove(playerId, card, from); });
         return;
     } else {
         if (not isMyTurn()) { return; }
@@ -3617,7 +4048,6 @@ auto updateDrawFrame([[maybe_unused]] void* ud) -> void
         GuiUnlock();
     }
     handleMousePress();
-    updateCardAnimation();
     updateMenuPosition(ctx().settingsMenu);
     updateMenuPosition(ctx().speechBubbleMenu);
     updateMenuPosition(ctx().overallScoreboard);
@@ -3647,6 +4077,7 @@ auto updateDrawFrame([[maybe_unused]] void* ud) -> void
     }
     if (ctx().isLoggedIn) { drawOverallScoreboardButton(); }
     drawSettingsButton();
+    drawMicrophonePanel();
     drawFullScreenButton();
     drawPingAndFps();
     if (ctx().isGameStarted and ctx().isLoggedIn) { drawSpeechBubbleMenu(); }
@@ -3678,7 +4109,28 @@ Options:
     --color-scheme=<name>   Color scheme to use [default: dracula]
                             Options: dracula, genesis, amber, dark, cyber, jungle, lavanda, bluish)";
 } // namespace
+
+auto setMicrophoneStatus(std::string status, const bool isError) -> void
+{
+    ctx().microphone.status = std::move(status);
+    ctx().microphone.isError = isError;
+    ctx().needsDraw = true;
+}
+
 } // namespace pref
+
+extern "C" EMSCRIPTEN_KEEPALIVE auto pref_on_microphone_status(const char* status, const int isError) -> void
+{
+    pref::setMicrophoneStatus(status ? status : "", isError != 0);
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE auto pref_on_audio_signal(
+    const char* toPlayerId, const char* kind, const char* data) -> void
+{
+    PREF_DI(toPlayerId, kind, data);
+    if (not toPlayerId or not kind or not data) { return; }
+    pref::sendAudioSignal(toPlayerId, kind, data);
+}
 
 int main(const int argc, const char* const argv[])
 {
@@ -3690,6 +4142,7 @@ int main(const int argc, const char* const argv[])
     pref::loadFromLocalStoragePlayerId();
     pref::loadFromLocalStorageAuthToken();
     pref::loadFromLocalStoragePlayerName();
+    pref::initializeMicrophoneDemo();
     ctx.settingsMenu.showPingAndFps = not std::empty(pref::loadFromLocalStorage("show_ping_and_fps"));
     ctx.settingsMenu.mute = not std::empty(pref::loadFromLocalStorage("mute"));
     const auto args = docopt::docopt(pref::usage, {std::next(argv), std::next(argv, argc)});

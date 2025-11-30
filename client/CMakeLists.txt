@@ -125,7 +125,7 @@ target_link_options(
     -sSTACK_SIZE=1048576
     -sINITIAL_MEMORY=128MB
     -sALLOW_MEMORY_GROWTH=0
-    -sEXPORTED_RUNTIME_METHODS=requestFullscreen,HEAPF32
+    -sEXPORTED_RUNTIME_METHODS=requestFullscreen,HEAPF32,ccall
     --shell-file
     ${PREF_INDEX_HTML}
     --preload-file

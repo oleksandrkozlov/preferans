@@ -348,6 +348,7 @@ PREF_DEFINE_METHOD_NAME(SpeechBubble)
 PREF_DEFINE_METHOD_NAME(TrickFinished)
 PREF_DEFINE_METHOD_NAME(UserGames)
 PREF_DEFINE_METHOD_NAME(Whisting)
+PREF_DEFINE_METHOD_NAME(AudioSignal)
 
 template<typename Method>
 [[nodiscard]] auto makeMessage(const Method& method) -> Message

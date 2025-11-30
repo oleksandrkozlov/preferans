@@ -930,6 +930,19 @@ auto handleSpeechBubble(const Message& msg) -> task<>
     co_await forwardToAllExcept(msg, playerId);
 }
 
+auto handleAudioSignal(const Message& msg) -> task<>
+{
+    PREF_I();
+    const auto audioSignal = makeMethod<AudioSignal>(msg);
+    if (not audioSignal) { co_return; }
+    const auto fromPlayerId = audioSignal->from_player_id();
+    const auto toPlayerId = audioSignal->to_player_id();
+    const auto kind = audioSignal->kind();
+    const auto data = audioSignal->data();
+    PREF_DI(fromPlayerId, toPlayerId, kind, data);
+    co_await forwardToAllExcept(msg, fromPlayerId);
+}
+
 auto dispatchMessage(const ChannelPtr& ch, PlayerSession& session, std::optional<Message> msg) -> task<>
 { // clang-format off
     if (not msg) { co_return; }
@@ -948,6 +961,7 @@ auto dispatchMessage(const ChannelPtr& ch, PlayerSession& session, std::optional
     if (method == "SpeechBubble") { co_await handleSpeechBubble(*msg); co_return; }
     if (method == "PingPong") { co_await handlePingPong(*msg, ch); co_return; }
     if (method == "Log") { handleLog(*msg); co_return; }
+    if (method == "AudioSignal") { co_await handleAudioSignal(*msg); co_return; }
     PREF_W("error: unknown {}", PREF_V(method));
 } // clang-format on
 

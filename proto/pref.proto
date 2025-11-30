@@ -190,6 +190,18 @@ message SpeechBubble {
   string text = 2;
 }
 
+// Used to relay audio/WebRTC signaling data between players via the server.
+message AudioSignal {
+  // Player sending the signal.
+  string from_player_id = 1;
+  // Intended recipient of the signal.
+  string to_player_id = 2;
+  // Application-defined signal type (e.g., "offer", "answer", "candidate").
+  string kind = 3;
+  // Opaque payload (JSON/SDP/ICE) serialized as text.
+  string data = 4 [features.(pb.cpp).string_type=STRING];
+}
+
 message PingPong {
   int32 id = 1;
 }
