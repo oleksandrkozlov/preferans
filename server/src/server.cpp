@@ -8,7 +8,7 @@
 #include "common/time.hpp"
 #include "game_data.hpp"
 #include "proto/pref.pb.h"
-#include "senders.hpp"
+#include "send_msg.hpp"
 #include "serialization.hpp"
 #include "transport.hpp"
 
@@ -932,15 +932,12 @@ auto handleSpeechBubble(const Message& msg) -> task<>
 
 auto handleAudioSignal(const Message& msg) -> task<>
 {
-    PREF_I();
     const auto audioSignal = makeMethod<AudioSignal>(msg);
     if (not audioSignal) { co_return; }
     const auto fromPlayerId = audioSignal->from_player_id();
     const auto toPlayerId = audioSignal->to_player_id();
-    const auto kind = audioSignal->kind();
-    const auto data = audioSignal->data();
-    PREF_DI(fromPlayerId, toPlayerId, kind, data);
-    co_await forwardToAllExcept(msg, fromPlayerId);
+    PREF_DI(fromPlayerId, toPlayerId);
+    co_await forwardToOne(toPlayerId, msg);
 }
 
 auto dispatchMessage(const ChannelPtr& ch, PlayerSession& session, std::optional<Message> msg) -> task<>

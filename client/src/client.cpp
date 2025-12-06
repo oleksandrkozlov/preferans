@@ -385,7 +385,7 @@ struct SettingsMenu {
     std::string loadedColorScheme;
     std::string loadedLang;
     bool showPingAndFps{};
-    bool mute{};
+    bool soundEffects = true;
     r::Vector2 grabOffset{};
     bool moving{};
     r::Vector2 windowBoxPos{MenuX - windowBoxW, BorderMargin};
@@ -538,10 +538,10 @@ struct OfferPopUp {
     bool isVisible{};
 };
 
-struct MicrophoneDemo {
-    std::string status = "Microphone: requesting access...";
+struct Mic {
+    std::string status;
     bool isError{};
-    bool isMuted{};
+    bool isMuted = false;
 };
 
 struct Sound {
@@ -556,7 +556,7 @@ struct Sound {
     r::Sound dealCards{sounds("deal_cards.wav")};
     r::Sound placeCard{sounds("place_card.mp3")};
 
-    auto mute() -> void
+    auto withoutSoundEffects() -> void
     {
         // TODO: add sounds to a container and replace with a loop
         gameAboutToStarted.Stop();
@@ -588,7 +588,7 @@ struct Context {
     r::RenderTexture target{static_cast<int>(VirtualW), static_cast<int>(VirtualH)};
     r::AudioDevice audio;
     Sound sound;
-    MicrophoneDemo microphone;
+    Mic microphone;
     PlayerId myPlayerId;
     PlayerName myPlayerName;
     std::string password;
@@ -719,13 +719,13 @@ struct Context {
     return ctx;
 }
 
-auto initializeAudioEngine() -> void;
+auto initAudioEngine() -> void;
 auto syncAudioPeers() -> void;
 auto teardownAudioEngine() -> void;
 
 auto playSound(r::Sound& sound) -> void
 {
-    if (ctx().settingsMenu.mute) { return; }
+    if (not ctx().settingsMenu.soundEffects) { return; }
     sound.Play();
 }
 
@@ -739,9 +739,10 @@ auto playSound(r::Sound& sound) -> void
     char buffer[128] = {};
     const auto keyWithPrefix = fmt::format("{}{}", LocalStoragePrefix, key);
 
+    // clang-format off
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
-    EM_ASM_(
+    EM_ASM(
         {
             const key = UTF8ToString($2);
             const value = localStorage.getItem(key) || "";
@@ -751,6 +752,7 @@ auto playSound(r::Sound& sound) -> void
         sizeof(buffer),
         keyWithPrefix.c_str());
 #pragma GCC diagnostic pop
+    // clang-format on
     return {buffer};
 }
 
@@ -797,42 +799,38 @@ auto loadFromLocalStorageAuthToken() -> void
     ctx().authToken = loadFromLocalStorage(AuthTokenStorageKey);
 }
 
-auto initializeMicrophoneDemo() -> void
+auto initMic() -> void
 {
+    // clang-format off
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
     EM_ASM({
         (function () {
-            'use strict';
-            Module.ccall('pref_on_microphone_status', null, ['string', 'number'], ['Microphone: requesting access...', 0]);
+            Module.ccall('pref_on_microphone_status', null, ['string', 'number'], ['Requesting access', 0]);
             const constraints = (window.constraints = { audio: true, video: false });
+            if (window.stream && window.stream.getTracks) {
+                window.stream.getTracks().forEach(track => {
+                    try { track.stop(); } catch (_) {}
+                });
+                window.stream = null;
+            }
             const audio = new Audio();
             audio.autoplay = true;
             audio.controls = false;
             audio.style.display = 'none';
             audio.muted = true; // avoid local loopback playback
-            window.prefDesiredMute = !!window.prefDesiredMute;
+            window.prefDesiredMute = false;
 
             function handleSuccess(stream) {
                 const audioTracks = stream.getAudioTracks();
-                console.log('Got stream with constraints:', constraints);
                 const device = audioTracks[0]?.label || 'unknown device';
-                console.log('Using audio device: ' + device);
                 const mute = !!window.prefDesiredMute;
                 if (audioTracks) {
                     audioTracks.forEach(track => { track.enabled = !mute; });
                 }
-                Module.ccall('pref_on_microphone_status', null, ['string', 'number'], [
-                    mute ? `Microphone active (muted): ${device}` : `Microphone active: ${device}`,
-                    0,
-                ]);
+                Module.ccall('pref_on_microphone_status', null, ['string', 'number'], [ mute ? 'OFF' : 'ON', 0]);
                 stream.oninactive = function () {
-                    console.log('Stream ended');
-                    Module.ccall(
-                        'pref_on_microphone_status',
-                        null,
-                        ['string', 'number'],
-                        ['Microphone: stream ended', 1]);
+                    Module.ccall('pref_on_microphone_status', null, ['string', 'number'], ['Stream ended', 1]);
                 };
                 window.stream = stream;
                 audio.srcObject = stream;
@@ -842,8 +840,7 @@ auto initializeMicrophoneDemo() -> void
             function handleError(error) {
                 const errorMessage =
                     'navigator.MediaDevices.getUserMedia error: ' + error.message + ' ' + error.name;
-                Module.ccall('pref_on_microphone_status', null, ['string', 'number'], [errorMessage, 1]);
-                console.log(errorMessage);
+                    Module.ccall('pref_on_microphone_status', null, ['string', 'number'], [errorMessage, 1]);
             }
 
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -855,6 +852,7 @@ auto initializeMicrophoneDemo() -> void
         })();
     });
 #pragma GCC diagnostic pop
+    // clang-format on
 }
 
 auto saveToLocalStorageAuthToken() -> void
@@ -923,16 +921,14 @@ struct PlaySlots {
 {
     static const PlaySlots slots = [] {
         static constexpr auto cardSpacing = CardWidth * 0.1f;
-        static const auto centerPos
-            = r::Vector2{VirtualW * 0.5f, (VirtualH - MyCardBorderMarginY - CardHeight) * 0.5f};
+        static const auto centerPos = r::Vector2{VirtualW * 0.5f, (VirtualH - MyCardBorderMarginY - CardHeight) * 0.5f};
         static const auto topBottomX = centerPos.x - CardWidth * 0.5f;
         static const auto leftRightY = centerPos.y - CardHeight * 0.5f;
         static const auto topPlayPos = r::Vector2{topBottomX, centerPos.y - cardSpacing - CardHeight};
         static const auto bottomPlayPos = r::Vector2{topBottomX, centerPos.y + cardSpacing};
         static const auto leftPlayPos
             = r::Vector2{centerPos.x - CardWidth * 0.5f - cardSpacing - CardWidth, leftRightY};
-        static const auto rightPlayPos
-            = r::Vector2{centerPos.x + cardSpacing + CardWidth * 0.5f, leftRightY};
+        static const auto rightPlayPos = r::Vector2{centerPos.x + cardSpacing + CardWidth * 0.5f, leftRightY};
         return PlaySlots{topPlayPos, leftPlayPos, rightPlayPos, bottomPlayPos};
     }();
     return slots;
@@ -1272,7 +1268,7 @@ auto finishLogin(auto& response) -> void
     repeatPingPong();
     ctx().isLoggedIn = true;
     ctx().isLoginInProgress = false;
-    initializeAudioEngine();
+    initAudioEngine();
 }
 
 auto handleLoginResponse(const Message& msg) -> void
@@ -1615,9 +1611,7 @@ auto handlePlayCard(const Message& msg) -> void
     ctx().player(playerId).hand |= rng::actions::remove_if(equalTo(cardName), &Card::name);
     if (std::empty(ctx().cardsOnTable) and not ctx().passGameTalon.exists()) { ctx().leadSuit = cardSuit(cardName); }
     ctx().cardsOnTable.insert_or_assign(playerId, &card);
-    if (not isCardMoving(playerId)) {
-        startCardMove(playerId, card);
-    }
+    if (not isCardMoving(playerId)) { startCardMove(playerId, card); }
     playSound(ctx().sound.placeCard);
 }
 
@@ -1730,6 +1724,7 @@ auto handleAudioSignal(const Message& msg) -> void
 {
     const auto signal = makeMethod<AudioSignal>(msg);
     if (not signal) { return; }
+    // clang-format off
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
     EM_ASM(
@@ -1744,6 +1739,7 @@ auto handleAudioSignal(const Message& msg) -> void
         std::string{signal->kind()}.c_str(),
         std::string{signal->data()}.c_str());
 #pragma GCC diagnostic pop
+    // clang-format on
 }
 
 auto handlePingPong(const Message& msg) -> void
@@ -2267,7 +2263,7 @@ auto drawConnectedPlayers() -> void
             const auto& scheme = ctx().settingsMenu.loadedColorScheme;
             const auto state = ctx().player(id).readyCheckState;
             if (state == ReadyCheckState::ACCEPTED) {
-                if (scheme == "dracula") { return {getGuiColor(BASE_COLOR_FOCUSED), getGuiColor(TEXT_COLOR_FOCUSED)}; }
+                if (scheme == "dracula") { return {getGuiColor(TEXT_COLOR_FOCUSED), getGuiColor(BASE_COLOR_FOCUSED)}; }
                 if (scheme == "genesis") { return {getGuiColor(TEXT_COLOR_PRESSED), getGuiColor(TEXT_COLOR_FOCUSED)}; }
                 if (scheme == "amber") { return {getGuiColor(BASE_COLOR_PRESSED), getGuiColor(TEXT_COLOR_PRESSED)}; }
                 if (scheme == "dark") { return {getGuiColor(BASE_COLOR_PRESSED), getGuiColor(TEXT_COLOR_FOCUSED)}; }
@@ -2278,7 +2274,7 @@ auto drawConnectedPlayers() -> void
                 return {getGuiColor(BASE_COLOR_PRESSED), getGuiColor(TEXT_COLOR_PRESSED)};
             }
             if (state == ReadyCheckState::DECLINED) {
-                if (rng::contains(std::array{"genesis", "cyber", "jungle", "lavanda"}, scheme)) {
+                if (rng::contains(std::array{"dracula", "genesis", "cyber", "jungle", "lavanda"}, scheme)) {
                     return {getGuiColor(TEXT_COLOR_DISABLED), getGuiColor(BASE_COLOR_DISABLED)};
                 }
                 return {getGuiColor(BASE_COLOR_DISABLED), getGuiColor(TEXT_COLOR_DISABLED)};
@@ -3079,7 +3075,9 @@ auto handleCardClick(
         SpeechBubbleIcon,
         OverallScoreboardIcon,
         LogoutIcon,
-        HandshakeIcon);
+        HandshakeIcon,
+        MicOnIcon,
+        MicOffIcon);
 }
 
 [[nodiscard]] auto makeAwesomeLargeCodepoints()
@@ -3151,7 +3149,30 @@ auto loadLang(const std::string_view lang) -> void
     saveToLocalStorage("language", name);
 }
 
-auto drawToolbarButton(const int indexFromRight, const char* icon, const auto onClick, bool isBottom = true) -> void
+auto toggleMic() -> void
+{
+    ctx().microphone.isMuted = not ctx().microphone.isMuted;
+    // clang-format off
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
+    EM_ASM({
+        const mute = $0 !== 0;
+        window.prefDesiredMute = mute;
+        const stream = window.stream;
+        if (stream && stream.getAudioTracks) {
+            stream.getAudioTracks().forEach(track => {
+                track.enabled = !mute;
+            });
+        }
+        Module.ccall('pref_on_microphone_status', null, ['string', 'number'], [mute ? 'OFF' : 'ON', 0]);
+    }, ctx().microphone.isMuted);
+#pragma GCC diagnostic pop
+    // clang-format on
+    ctx().needsDraw = true;
+}
+
+auto drawToolbarButton(
+    const int indexFromRight, const char* icon, const auto onClick, bool isBottom = true, bool isRight = true) -> void
 {
     assert(indexFromRight >= 1);
     static constexpr auto buttonW = VirtualW / 30.f;
@@ -3159,7 +3180,8 @@ auto drawToolbarButton(const int indexFromRight, const char* icon, const auto on
     static constexpr auto gapBetweenButtons = BorderMargin / 5.f;
     const auto i = static_cast<float>(indexFromRight);
     const auto bounds = r::Rectangle{
-        VirtualW - buttonW * i - BorderMargin - gapBetweenButtons * (i - 1),
+        isRight ? VirtualW - buttonW * i - BorderMargin - gapBetweenButtons * (i - 1)
+                : BorderMargin + buttonW * (i - 1) + gapBetweenButtons * (i - 1),
         isBottom ? VirtualH - buttonH - BorderMargin : BorderMargin,
         buttonW,
         buttonH};
@@ -3224,6 +3246,13 @@ auto drawLogoutButton() -> void
                 ctx().logoutMessage.isVisible = true;
             },
             false);
+    });
+}
+
+auto drawMicButton() -> void
+{
+    withGuiState(STATE_DISABLED, ctx().microphone.isError, [&] {
+        drawToolbarButton(1, ctx().microphone.isMuted ? MicOffIcon : MicOnIcon, [&] { toggleMic(); }, false, false);
     });
 }
 
@@ -3336,7 +3365,7 @@ auto drawSettingsMenu() -> void
     const auto otherGroupBox
         = r::Vector2{colorSchemeListView.x - margin, colorSchemeListView.y + colorSchemeListViewH + margin * 2.5f};
     const auto fpsCheckbox = r::Vector2{otherGroupBox.x + margin, otherGroupBox.y + margin};
-    const auto muteCheckbox = r::Vector2{otherGroupBox.x + margin, fpsCheckbox.y + margin * 1.5f};
+    const auto soundEffectsCheckbox = r::Vector2{otherGroupBox.x + margin, fpsCheckbox.y + margin * 1.5f};
     static const auto windowBoxH = (fpsCheckbox.y + otherGroupBoxH) - ctx().settingsMenu.windowBoxPos.y;
     withGuiFont(ctx().fontS, [&] {
         const auto settingsText = ctx().localizeText(GameText::Settings);
@@ -3393,15 +3422,18 @@ auto drawSettingsMenu() -> void
                 removeFromLocalStorage("show_ping_and_fps");
             }
         }
-        const auto mute = ctx().settingsMenu.mute;
-        const auto muteText = ctx().localizeText(GameText::Mute);
-        GuiCheckBox({muteCheckbox.x, muteCheckbox.y, margin, margin}, muteText.c_str(), &ctx().settingsMenu.mute);
-        if (mute != ctx().settingsMenu.mute) {
-            if (ctx().settingsMenu.mute) {
-                saveToLocalStorage("mute", "true");
-                ctx().sound.mute();
+        const auto soundEffects = ctx().settingsMenu.soundEffects;
+        const auto soundEffectsText = ctx().localizeText(GameText::SoundEffects);
+        GuiCheckBox(
+            {soundEffectsCheckbox.x, soundEffectsCheckbox.y, margin, margin},
+            soundEffectsText.c_str(),
+            &ctx().settingsMenu.soundEffects);
+        if (soundEffects != ctx().settingsMenu.soundEffects) {
+            if (ctx().settingsMenu.soundEffects) {
+                removeFromLocalStorage("sound_effects");
             } else {
-                removeFromLocalStorage("mute");
+                saveToLocalStorage("sound_effects", "false");
+                ctx().sound.withoutSoundEffects();
             }
         }
     });
@@ -3693,38 +3725,6 @@ auto drawPing(const r::Vector2& pos, const Font& font, const float fontSize, con
     delimText.Draw({delimX, pos.y});
 }
 
-auto setMicrophoneMuted(const bool mute) -> void
-{
-    ctx().microphone.isMuted = mute;
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
-    EM_ASM(
-        {
-            const mute = $0 !== 0;
-            window.prefDesiredMute = mute;
-            const stream = window.stream;
-            if (stream && stream.getAudioTracks) {
-                stream.getAudioTracks().forEach(track => {
-                    track.enabled = !mute;
-                });
-                Module.ccall(
-                    'pref_on_microphone_status',
-                    null,
-                    ['string', 'number'],
-                    [mute ? 'Microphone muted' : 'Microphone unmuted', 0]);
-            } else {
-                Module.ccall(
-                    'pref_on_microphone_status',
-                    null,
-                    ['string', 'number'],
-                    [mute ? 'Will mute when ready' : 'Will unmute when ready', 0]);
-            }
-        },
-        mute);
-#pragma GCC diagnostic pop
-    ctx().needsDraw = true;
-}
-
 [[nodiscard]] auto audioPeerIds() -> std::vector<std::string>
 {
     auto ids = std::vector<std::string>{};
@@ -3751,6 +3751,7 @@ auto syncAudioPeers() -> void
 {
     if (std::empty(ctx().myPlayerId)) { return; }
     const auto peersJson = peerIdsAsJson();
+    // clang-format off
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
     EM_ASM(
@@ -3760,192 +3761,203 @@ auto syncAudioPeers() -> void
         },
         peersJson.c_str());
 #pragma GCC diagnostic pop
+    // clang-format on
 }
 
 auto teardownAudioEngine() -> void
 {
+    // clang-format off
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
-    EM_ASM({ if (Module.prefAudio) { Module.prefAudio.setPeers([]); Module.prefAudio.setSelf(''); } });
+#pragma GCC diagnostic ignored "-Winvalid-pp-token"
+    EM_ASM({
+        if (Module.prefAudio) { Module.prefAudio.setPeers([]); Module.prefAudio.setSelf(''); }
+        if (window.stream && window.stream.getTracks) {
+            window.stream.getTracks().forEach(track => { try { track.stop(); } catch (_) {} });
+        }
+        window.stream = null;
+        if (Module.prefAudio && Module.prefAudio.stopLocalStream) { Module.prefAudio.stopLocalStream(); }
+    });
 #pragma GCC diagnostic pop
+    // clang-format on
 }
 
-auto initializeAudioEngine() -> void
+auto initAudioEngine() -> void
 {
     PREF_I();
     if (std::empty(ctx().myPlayerId)) { return; }
     const auto peersJson = peerIdsAsJson();
+    // clang-format off
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
-    EM_ASM(
-        {
-            if (!Module.prefAudio) {
-                Module.prefAudio = (function () {
-                    const peers = new Map();
-                    const audios = new Map();
-                    let selfId = '';
-                    let localStreamPromise = null;
+#pragma GCC diagnostic ignored "-Winvalid-pp-token"
+    EM_ASM({
+        if (!Module.prefAudio) {
+            Module.prefAudio = (function () {
+                const peers = new Map();
+                const audios = new Map();
+                let selfId = '';
+                let localStreamPromise = null;
+                let desiredPeers = new Set();
 
-                    function log(...args) {
-                        console.log('[audio]', ...args);
-                    }
+                function log(...args) {
+                    console.log('[audio]', ...args);
+                }
 
-                    function send(to, kind, data) {
-                        console.log('send');
+                function send(to, kind, data) {
+                    Module.ccall('pref_on_audio_signal', null, [ 'string', 'string', 'string' ], [ to, kind, data ]);
+                }
+
+                async function getLocalStream() {
+                    if (window.stream) { return window.stream; }
+                    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                         Module.ccall(
-                            'pref_on_audio_signal', null, [ 'string', 'string', 'string' ], [ to, kind, data ]);
+                            'pref_on_microphone_status',
+                            null,
+                            [ 'string', 'number' ],
+                            [ 'getUserMedia not available', 1 ]);
+                        throw new Error('getUserMedia not available');
                     }
-
-                    async function getLocalStream() {
-                        if (window.stream) { return window.stream; }
-                        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                            throw new Error('getUserMedia not available');
-                        }
-                        if (!localStreamPromise) {
-                            localStreamPromise = navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-                        }
-                        window.stream = await localStreamPromise;
-                        return window.stream;
-                    }
-
-                    function shouldInitiate(remoteId) {
-                        return selfId && remoteId && selfId < remoteId;
-                    }
-
-                    function closePeer(remoteId) {
-                        const pc = peers.get(remoteId);
-                        if (pc) {
-                            pc.getSenders().forEach(sender => {
-                                try {
-                                    pc.removeTrack(sender);
-                                } catch (_) {}
+                    if (!localStreamPromise) {
+                        localStreamPromise = navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+                            .then(stream => {
+                                const mute = !!window.prefDesiredMute;
+                                stream.getTracks().forEach(track => { track.enabled = !mute; });
+                                window.stream = stream;
+                                return stream;
+                            })
+                            .catch(error => {
+                                Module.ccall(
+                                    'pref_on_microphone_status',
+                                    null,
+                                    [ 'string', 'number' ],
+                                    [ 'navigator.MediaDevices.getUserMedia error: ' + error.message + ' ' + error.name, 1 ]);
+                                localStreamPromise = null;
+                                throw error;
                             });
-                            pc.close();
-                        }
-                        peers.delete(remoteId);
-                        const audio = audios.get(remoteId);
-                        if (audio) {
-                            audio.srcObject = null;
-                            audio.remove();
-                            audios.delete(remoteId);
-                        }
                     }
+                    window.stream = await localStreamPromise;
+                    return window.stream;
+                }
 
-                    async function ensurePeer(remoteId) {
-                        console.log('ensurePeer');
-                        if (!remoteId || remoteId === selfId) { return null; }
-                        if (peers.has(remoteId)) { return peers.get(remoteId); }
-                        const pc = new RTCPeerConnection({
-                            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-                        });
-                        peers.set(remoteId, pc);
-                        const stream = await getLocalStream();
-                        stream.getTracks().forEach(track => pc.addTrack(track, stream));
-                        pc.onicecandidate = ev => {
-                            if (ev.candidate) {
-                                send(remoteId, 'candidate', JSON.stringify(ev.candidate));
-                            }
-                        };
-                        pc.ontrack = ev => {
-                            const remoteStream = ev.streams[0];
-                            let audio = audios.get(remoteId);
-                            if (!audio) {
-                                audio = new Audio();
-                                audio.autoplay = true;
-                                audio.controls = false;
-                                audio.style.display = 'none';
-                                audios.set(remoteId, audio);
-                                document.body.appendChild(audio);
-                            }
-                            audio.srcObject = remoteStream;
-                            audio.play().catch(() => {});
-                        };
-                        pc.onconnectionstatechange = () => {
-                            if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
-                                closePeer(remoteId);
-                            }
-                        };
-                        if (shouldInitiate(remoteId)) {
-                            const offer = await pc.createOffer();
-                            await pc.setLocalDescription(offer);
-                            send(remoteId, 'offer', JSON.stringify(offer));
-                        }
-                        return pc;
-                    }
+                function shouldInitiate(remoteId) {
+                    return selfId && remoteId && selfId < remoteId;
+                }
 
-                    async function handleSignal(from, kind, data) {
-                        const pc = await ensurePeer(from);
-                        if (!pc) { return; }
-                        if (kind === 'offer') {
-                            await pc.setRemoteDescription(JSON.parse(data));
-                            const answer = await pc.createAnswer();
-                            await pc.setLocalDescription(answer);
-                            send(from, 'answer', JSON.stringify(answer));
-                            return;
-                        }
-                        if (kind === 'answer') {
-                            if (!pc.currentRemoteDescription) {
-                                await pc.setRemoteDescription(JSON.parse(data));
-                            }
-                            return;
-                        }
-                        if (kind === 'candidate') {
+                function closePeer(remoteId) {
+                    const pc = peers.get(remoteId);
+                    if (pc) {
+                        pc.getSenders().forEach(sender => {
                             try {
-                                await pc.addIceCandidate(JSON.parse(data));
-                            } catch (e) {
-                                log('Failed to add candidate', e);
+                                pc.removeTrack(sender);
+                            } catch (_) {}
+                        });
+                        pc.close();
+                    }
+                    peers.delete(remoteId);
+                    const audio = audios.get(remoteId);
+                    if (audio) {
+                        audio.srcObject = null;
+                        audio.remove();
+                        audios.delete(remoteId);
+                    }
+                }
+
+                async function ensurePeer(remoteId) {
+                    if (!remoteId || remoteId === selfId) { return null; }
+                    if (peers.has(remoteId)) { return peers.get(remoteId); }
+                    const pc = new RTCPeerConnection({
+                        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+                    });
+                    peers.set(remoteId, pc);
+                    const stream = await getLocalStream();
+                    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+                    pc.onicecandidate = ev => {
+                        if (ev.candidate) {
+                            send(remoteId, 'candidate', JSON.stringify(ev.candidate));
+                        }
+                    };
+                    pc.ontrack = ev => {
+                        const remoteStream = ev.streams[0];
+                        let audio = audios.get(remoteId);
+                        if (!audio) {
+                            audio = new Audio();
+                            audio.autoplay = true;
+                            audio.controls = false;
+                            audio.style.display = 'none';
+                            audios.set(remoteId, audio);
+                            document.body.appendChild(audio);
+                        }
+                        audio.srcObject = remoteStream;
+                        audio.play().catch(() => {});
+                    };
+                    pc.onconnectionstatechange = () => {
+                        if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
+                            closePeer(remoteId);
+                            if (desiredPeers.has(remoteId)) {
+                                setTimeout(() => { if (desiredPeers.has(remoteId)) { void ensurePeer(remoteId); } }, 1000);
                             }
                         }
+                    };
+                    if (shouldInitiate(remoteId)) {
+                        const offer = await pc.createOffer();
+                        await pc.setLocalDescription(offer);
+                        send(remoteId, 'offer', JSON.stringify(offer));
                     }
+                    return pc;
+                }
 
-                    function setSelf(id) {
-                        selfId = id;
+                async function handleSignal(from, kind, data) {
+                    const pc = await ensurePeer(from);
+                    if (!pc) { return; }
+                    if (kind === 'offer') {
+                        await pc.setRemoteDescription(JSON.parse(data));
+                        const answer = await pc.createAnswer();
+                        await pc.setLocalDescription(answer);
+                        send(from, 'answer', JSON.stringify(answer));
+                        return;
                     }
-
-                    function setPeers(ids) {
-                        const desired = new Set(ids);
-                        desired.forEach(id => { void ensurePeer(id); });
-                        for (const id of peers.keys()) {
-                            if (!desired.has(id)) { closePeer(id); }
+                    if (kind === 'answer') {
+                        if (!pc.currentRemoteDescription) {
+                            await pc.setRemoteDescription(JSON.parse(data));
+                        }
+                        return;
+                    }
+                    if (kind === 'candidate') {
+                        try {
+                            await pc.addIceCandidate(JSON.parse(data));
+                        } catch (e) {
+                            log('Failed to add candidate', e);
                         }
                     }
+                }
 
-                    return { setSelf, setPeers, handleSignal, ensurePeer, closePeer };
-                })();
-            }
-            Module.prefAudio.setSelf(UTF8ToString($0));
-            Module.prefAudio.setPeers(JSON.parse(UTF8ToString($1)));
-        },
-        ctx().myPlayerId.c_str(),
-        peersJson.c_str());
+                function setSelf(id) {
+                    selfId = id;
+                }
+
+                function setPeers(ids) {
+                    desiredPeers = new Set(ids);
+                    desiredPeers.forEach(id => { void ensurePeer(id); });
+                    for (const id of peers.keys()) { if (!desiredPeers.has(id)) { closePeer(id); } }
+                }
+
+                function stopLocalStream() {
+                    if (localStreamPromise) { localStreamPromise = null; }
+                    if (window.stream && window.stream.getTracks) {
+                        window.stream.getTracks().forEach(track => { try { track.stop(); } catch (_) {} });
+                    }
+                    window.stream = null;
+                }
+
+                return { setSelf, setPeers, handleSignal, ensurePeer, closePeer, stopLocalStream};
+            })();
+        }
+        Module.prefAudio.setSelf(UTF8ToString($0));
+        Module.prefAudio.setPeers(JSON.parse(UTF8ToString($1)));
+    }, ctx().myPlayerId.c_str(), peersJson.c_str());
 #pragma GCC diagnostic pop
-}
-
-auto drawMicrophonePanel() -> void
-{
-    const auto& text = ctx().microphone.status;
-    const auto& font = ctx().fontS;
-    const auto fontSize = ctx().fontSizeS();
-    static constexpr auto padX = 14.f;
-    static constexpr auto padY = 10.f;
-    const auto textSize = font.MeasureText(text, fontSize, FontSpacing);
-    const auto boxW = textSize.x + padX * 2.f;
-    const auto boxH = textSize.y + padY * 2.f;
-    const auto buttonH = std::max(boxH, 42.f);
-    static constexpr auto buttonW = 160.f;
-    static constexpr auto spacing = 12.f;
-    const auto y = VirtualH - buttonH - BorderMargin;
-    const auto buttonLabel = ctx().microphone.isMuted ? "Unmute mic" : "Mute mic";
-    if (GuiButton({BorderMargin, y, buttonW, buttonH}, buttonLabel)) {
-        setMicrophoneMuted(not ctx().microphone.isMuted);
-    }
-    if (std::empty(text)) { return; }
-    const auto bgColor = ctx().microphone.isError ? getGuiColor(BASE_COLOR_PRESSED) : getGuiColor(BASE_COLOR_NORMAL);
-    const auto fgColor = ctx().microphone.isError ? getGuiColor(TEXT_COLOR_PRESSED) : getGuiColor(TEXT_COLOR_NORMAL);
-    const auto boxX = BorderMargin + buttonW + spacing;
-    const auto boxY = y + (buttonH - boxH) * 0.5f;
-    r::Rectangle{boxX, boxY, boxW, boxH}.DrawRounded(0.18f, 6, bgColor);
-    font.DrawText(text, {boxX + padX, boxY + (boxH - textSize.y) * 0.5f}, fontSize, FontSpacing, fgColor);
+    // clang-format on
 }
 
 auto drawPingAndFps() -> void
@@ -4075,9 +4087,11 @@ auto updateDrawFrame([[maybe_unused]] void* ud) -> void
     } else {
         drawConnectedPlayers();
     }
-    if (ctx().isLoggedIn) { drawOverallScoreboardButton(); }
+    if (ctx().isLoggedIn) {
+        drawOverallScoreboardButton();
+        drawMicButton();
+    }
     drawSettingsButton();
-    drawMicrophonePanel();
     drawFullScreenButton();
     drawPingAndFps();
     if (ctx().isGameStarted and ctx().isLoggedIn) { drawSpeechBubbleMenu(); }
@@ -4110,8 +4124,13 @@ Options:
                             Options: dracula, genesis, amber, dark, cyber, jungle, lavanda, bluish)";
 } // namespace
 
-auto setMicrophoneStatus(std::string status, const bool isError) -> void
+auto setMicStatus(std::string status, const bool isError) -> void
 {
+    if (isError) {
+        PREF_W("error: {}", status);
+    } else {
+        PREF_DI(status);
+    }
     ctx().microphone.status = std::move(status);
     ctx().microphone.isError = isError;
     ctx().needsDraw = true;
@@ -4121,11 +4140,11 @@ auto setMicrophoneStatus(std::string status, const bool isError) -> void
 
 extern "C" EMSCRIPTEN_KEEPALIVE auto pref_on_microphone_status(const char* status, const int isError) -> void
 {
-    pref::setMicrophoneStatus(status ? status : "", isError != 0);
+    pref::setMicStatus(status ? status : "", isError != 0);
 }
 
-extern "C" EMSCRIPTEN_KEEPALIVE auto pref_on_audio_signal(
-    const char* toPlayerId, const char* kind, const char* data) -> void
+extern "C" EMSCRIPTEN_KEEPALIVE auto pref_on_audio_signal(const char* toPlayerId, const char* kind, const char* data)
+    -> void
 {
     PREF_DI(toPlayerId, kind, data);
     if (not toPlayerId or not kind or not data) { return; }
@@ -4142,9 +4161,8 @@ int main(const int argc, const char* const argv[])
     pref::loadFromLocalStoragePlayerId();
     pref::loadFromLocalStorageAuthToken();
     pref::loadFromLocalStoragePlayerName();
-    pref::initializeMicrophoneDemo();
     ctx.settingsMenu.showPingAndFps = not std::empty(pref::loadFromLocalStorage("show_ping_and_fps"));
-    ctx.settingsMenu.mute = not std::empty(pref::loadFromLocalStorage("mute"));
+    ctx.settingsMenu.soundEffects = std::empty(pref::loadFromLocalStorage("sound_effects"));
     const auto args = docopt::docopt(pref::usage, {std::next(argv), std::next(argv, argc)});
     ctx.url = args.at("--url").asString();
     const auto lang = pref::loadFromLocalStorage("language");
@@ -4166,6 +4184,7 @@ int main(const int argc, const char* const argv[])
         ctx.isLoginInProgress = true;
         pref::setupWebsocket();
     }
+    pref::initMic();
     emscripten_set_main_loop_arg(pref::updateDrawFrame, nullptr, 60, true);
     emscripten_websocket_deinitialize();
     return 0;

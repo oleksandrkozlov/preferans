@@ -9,7 +9,8 @@ The server is implemented using `Boost.Beast` (for `WebSocket`) and
 client is compiled to `WebAssembly` via `Emscripten`, using `WebSockets` for
 communication. Rendering is handled with `raylib`/`raylib-cpp`, and the GUI is
 built with `raygui`. Both server and client use `Protobuf` for message
-serialization.
+serialization. Voice communication between players is implemented using
+`WebRTC`.
 
 ### Docker
 
@@ -136,6 +137,7 @@ cmake --build build-server --target test_server
 * [spdlog](https://gabime.github.io/spdlog/)
 * [stdexec](https://github.com/NVIDIA/stdexec)
 * [wasm](https://webassembly.org)
+* [webrtc](https://webrtc.org/)
 
 ### License
 

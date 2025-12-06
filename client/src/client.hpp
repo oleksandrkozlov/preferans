@@ -43,6 +43,10 @@ inline constexpr auto SpeechBubbleIcon = "";
 inline constexpr auto OverallScoreboardIcon = "";
 inline constexpr auto LogoutIcon = "";
 inline constexpr auto HandshakeIcon = "";
+inline constexpr auto MicOnIcon = "";
+inline constexpr auto MicOffIcon = "";
+inline constexpr auto VoiceOnIcon = "";
+inline constexpr auto VoiceOffIcon = "";
 inline constexpr int LeftArrowIcon = 0xF112;
 inline constexpr int RightArrowIcon = 0xF064;
 
@@ -239,15 +243,14 @@ enum class GameLang : std::size_t {
     PREF_X(Lost, "Lost", "Поразка", "Поражение")                                                                       \
     PREF_X(MMR, "MMR", "РЕЙТИНГ", "РЕЙТИНГ")                                                                           \
     PREF_X(Miser, PREF_MISER, "Мізéр", "Мизéр")                                                                        \
-    PREF_X(Mute, "Mute", "Без звуку", "Без звука")                                                                     \
     PREF_X(No, "No", "Ні", "Нет")                                                                                      \
     PREF_X(NoMoreForMe, "No more for me", "Більше не беру", "Моих больше нет")                                         \
     PREF_X(None, "", "", "")                                                                                           \
     PREF_X(Normal, "Normal", "Звичайна", "Обычная")                                                                    \
     PREF_X(Openly, PREF_OPENLY, "У світлу", "В светлую")                                                               \
-    PREF_X(Offer, "Offer", "Запропонувати", "Предложить") \
+    PREF_X(Offer, "Offer", "Запропонувати", "Предложить")                                                              \
     PREF_X(Other, "Other", "Інше", "Другое")                                                                           \
-    PREF_X(OverallScoreboard, "SCOREBOARD", "ТАБЛИЦЯ РЕЗУЛЬТАТІВ", "ТАБЛИЦА РЕЗУЛЬТАТОВ")       \
+    PREF_X(OverallScoreboard, "SCOREBOARD", "ТАБЛИЦЯ РЕЗУЛЬТАТІВ", "ТАБЛИЦА РЕЗУЛЬТАТОВ")                              \
     PREF_X(PDW, "P/D/W", "П/Г/В", "П/Г/В")                                                                             \
     PREF_X(PLAY, "PLAY", "ГРАТИ", "ИГРАТЬ")                                                                            \
     PREF_X(Pass, PREF_PASS, "Пас", "Пас")                                                                              \
@@ -269,6 +272,7 @@ enum class GameLang : std::size_t {
     PREF_X(Whist, PREF_WHIST, "Віст", "Вист")                                                                          \
     PREF_X(Win, "Win", "Перемога", "Победа")                                                                           \
     PREF_X(WinRate, "WIN RATE", "ПЕРЕМОГ", "ПОБЕД")                                                                    \
+    PREF_X(SoundEffects, "Sound effects", "Звукові ефекти", "Звуковые эффекты")                                        \
     PREF_X(Yes, "Yes", "Так", "Да")                                                                                    \
     PREF_X(YourTurn, "Your turn", "Ваш хід", "Ваш ход")                                                                \
     PREF_X(YourTurnFor, "Your turn for", "Ваш хід за", "Ваш ход за")

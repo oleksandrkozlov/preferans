@@ -69,14 +69,9 @@ protobuf_generate(
 
 add_library(
     serverlib STATIC
-    src/auth.cpp
-    src/game_data.cpp
     src/main.cpp
     src/pref_cli.cpp
-    src/senders.cpp
-    src/serialization.cpp
     src/server.cpp
-    src/transport.cpp
 )
 
 target_link_libraries(
