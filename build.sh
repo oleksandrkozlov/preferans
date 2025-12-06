@@ -11,7 +11,7 @@ WS_PORT=${3:-8080}
 BUILD_TYPE=${4:-Debug}
 
 cmake -S server -B build-server -GNinja -DCMAKE_BUILD_TYPE=$BUILD_TYPE $( [[ "$WS_PROTOCOL" == "wss" ]] && echo "-DPREF_SSL=ON" )
-cmake --build build-server --target server
+cmake --build build-server --target server pref-cli
 mkdir -p ./server/data
 touch ./server/data/game.dat
 

@@ -544,31 +544,37 @@ struct Mic {
     bool isMuted = false;
 };
 
+[[nodiscard]] auto makeSound(const std::string_view filename) -> std::optional<r::Sound>
+{
+    if (const auto path = sounds(filename); std::filesystem::exists(path)) { return {path}; }
+    return {};
+}
+
+auto stopSound(std::optional<r::Sound>& sound) -> void;
+
 struct Sound {
-    r::Sound gameAboutToStarted{sounds("game_about_to_start.mp3")};
-    r::Sound gameStarted{sounds("game_started.mp3")};
-    r::Sound messageReceived{sounds("message_received.mp3")};
-    r::Sound readyCheckAccepted{sounds("ready_check_accepted.mp3")};
-    r::Sound readyCheckDeclined{sounds("ready_check_declined.mp3")};
-    r::Sound readyCheckReceived{sounds("ready_check_received.mp3")};
-    r::Sound readyCheckRequested{sounds("ready_check_requested.mp3")};
-    r::Sound readyCheckSucceeded{sounds("ready_check_succeeded.mp3")};
-    r::Sound dealCards{sounds("deal_cards.wav")};
-    r::Sound placeCard{sounds("place_card.mp3")};
+    std::optional<r::Sound> gameAboutToStarted = makeSound("game_about_to_start.mp3");
+    std::optional<r::Sound> gameStarted = makeSound("game_started.mp3");
+    std::optional<r::Sound> readyCheckAccepted = makeSound("ready_check_accepted.mp3");
+    std::optional<r::Sound> readyCheckDeclined = makeSound("ready_check_declined.mp3");
+    std::optional<r::Sound> readyCheckReceived = makeSound("ready_check_received.mp3");
+    std::optional<r::Sound> readyCheckRequested = makeSound("ready_check_requested.mp3");
+    std::optional<r::Sound> readyCheckSucceeded = makeSound("ready_check_succeeded.mp3");
+    std::optional<r::Sound> dealCards = makeSound("deal_cards.wav");
+    std::optional<r::Sound> placeCard = makeSound("place_card.mp3");
 
     auto withoutSoundEffects() -> void
     {
         // TODO: add sounds to a container and replace with a loop
-        gameAboutToStarted.Stop();
-        gameStarted.Stop();
-        messageReceived.Stop();
-        readyCheckAccepted.Stop();
-        readyCheckDeclined.Stop();
-        readyCheckReceived.Stop();
-        readyCheckRequested.Stop();
-        readyCheckSucceeded.Stop();
-        dealCards.Stop();
-        placeCard.Stop();
+        stopSound(gameAboutToStarted);
+        stopSound(gameStarted);
+        stopSound(readyCheckAccepted);
+        stopSound(readyCheckDeclined);
+        stopSound(readyCheckReceived);
+        stopSound(readyCheckRequested);
+        stopSound(readyCheckSucceeded);
+        stopSound(dealCards);
+        stopSound(placeCard);
     }
 };
 
@@ -723,10 +729,16 @@ auto initAudioEngine() -> void;
 auto syncAudioPeers() -> void;
 auto teardownAudioEngine() -> void;
 
-auto playSound(r::Sound& sound) -> void
+auto playSound(std::optional<r::Sound>& sound) -> void
 {
-    if (not ctx().settingsMenu.soundEffects) { return; }
-    sound.Play();
+    if (not sound or not ctx().settingsMenu.soundEffects) { return; }
+    sound->Play();
+}
+
+auto stopSound(std::optional<r::Sound>& sound) -> void
+{
+    if (not sound) { return; }
+    sound->Stop();
 }
 
 [[nodiscard]] auto players() -> decltype(auto)
@@ -1268,6 +1280,7 @@ auto finishLogin(auto& response) -> void
     repeatPingPong();
     ctx().isLoggedIn = true;
     ctx().isLoginInProgress = false;
+    initMic();
     initAudioEngine();
 }
 
@@ -1317,9 +1330,9 @@ auto whenReadyCheckDeclined(const PlayerId& playerId) -> void
     if (ctx().player(playerId).readyCheckState != ReadyCheckState::DECLINED) { return; }
     ctx().startGameButton.isVisible = true;
     ctx().readyCheckPopUp.isVisible = false;
-    ctx().sound.readyCheckAccepted.Stop();
-    ctx().sound.readyCheckReceived.Stop();
-    ctx().sound.readyCheckRequested.Stop();
+    stopSound(ctx().sound.readyCheckAccepted);
+    stopSound(ctx().sound.readyCheckReceived);
+    stopSound(ctx().sound.readyCheckRequested);
     playSound(ctx().sound.readyCheckDeclined);
 }
 
@@ -1327,9 +1340,9 @@ auto readyCheckSucceeded() -> void
 {
     assert(not ctx().startGameButton.isVisible);
     assert(not ctx().readyCheckPopUp.isVisible);
-    ctx().sound.readyCheckAccepted.Stop();
-    ctx().sound.readyCheckReceived.Stop();
-    ctx().sound.readyCheckRequested.Stop();
+    stopSound(ctx().sound.readyCheckAccepted);
+    stopSound(ctx().sound.readyCheckReceived);
+    stopSound(ctx().sound.readyCheckRequested);
     playSound(ctx().sound.readyCheckSucceeded);
 }
 
@@ -1342,7 +1355,9 @@ auto evaluateReadyCheck(const PlayerId& playerId) -> void
 {
     if (isReadyCheckSucceeded()) {
         readyCheckSucceeded();
-    } else if (isReadyCheckAccepted(playerId) and not ctx().sound.readyCheckReceived.IsPlaying()) {
+    } else if (
+        isReadyCheckAccepted(playerId)
+        and (ctx().sound.readyCheckReceived and not ctx().sound.readyCheckReceived->IsPlaying())) {
         playSound(ctx().sound.readyCheckAccepted);
     } else {
         whenReadyCheckDeclined(playerId);
@@ -1716,8 +1731,6 @@ auto handleSpeechBubble(const Message& msg) -> void
     PREF_I("playerId: {}, text: {}", speechBubble->player_id(), speechBubble->text());
     ctx().speechBubbleMenu.text.insert_or_assign(
         std::string{speechBubble->player_id()}, std::string{speechBubble->text()});
-    // TODO: replace sound with a different one
-    // playSound(ctx().sound.messageReceived);
 }
 
 auto handleAudioSignal(const Message& msg) -> void
@@ -4184,7 +4197,6 @@ int main(const int argc, const char* const argv[])
         ctx.isLoginInProgress = true;
         pref::setupWebsocket();
     }
-    pref::initMic();
     emscripten_set_main_loop_arg(pref::updateDrawFrame, nullptr, 60, true);
     emscripten_websocket_deinitialize();
     return 0;

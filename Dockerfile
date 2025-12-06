@@ -16,6 +16,7 @@ RUN pacman -Syu --noconfirm \
     microsoft-gsl \
     nginx \
     ninja \
+    onetbb \
     openssl \
     protobuf \
     range-v3 \

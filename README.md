@@ -52,7 +52,7 @@ Equivalent to:
 Which runs:
 ```
 cmake -S server -B build-server -GNinja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build-server --target server
+cmake --build build-server --target server pref-cli
 mkdir -p ./server/data
 touch ./server/data/game.dat
 source /etc/profile.d/emscripten.sh
