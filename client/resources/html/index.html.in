@@ -54,7 +54,7 @@
           console.log("status: " + text);
         },
         monitorRunDependencies: function (left) {},
-        arguments: ["--url=@CMAKE_WEBSOCKET_URL@", "--language=english", "--color-scheme=genesis"],
+        arguments: ["--url=@CMAKE_WEBSOCKET_URL@", "--language=english", "--color-scheme=dracula"],
       };
       window.onerror = function () {
         console.log("onerror: " + event);

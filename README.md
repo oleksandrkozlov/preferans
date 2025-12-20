@@ -1,8 +1,13 @@
-Preferans
-=========
+<div align="center">
+
+# Preferans
+
+![Preferans](https://repository-images.githubusercontent.com/1111279870/00e91a19-ddad-4b78-9de6-7dcb00e8dbee)
 
 Web Multiplayer Card Game in C++
 --------------------------------
+
+</div>
 
 The server is implemented using `Boost.Beast` (for `WebSocket`) and
 `Boost.Asio` for networking, using `stdexec` for structured concurrency. The
