@@ -49,6 +49,7 @@ inline constexpr auto VoiceOnIcon = "";
 inline constexpr auto VoiceOffIcon = "";
 inline constexpr int LeftArrowIcon = 0xF112;
 inline constexpr int RightArrowIcon = 0xF064;
+inline constexpr int DownArrowIcon = 0xF3BE;
 
 inline constexpr auto PREF_SEVEN_OF_SPADES_CARD = 0x1F0A7;
 inline constexpr auto PREF_SEVEN_OF_CLUBS_CARD = 0x1F0D7;
@@ -221,11 +222,13 @@ enum class GameLang : std::size_t {
     PREF_X(Catch, PREF_CATCH, "Ловлю", "Ловлю")                                                                        \
     PREF_X(Closed, "Closed", "У темну", "Втёмную")                                                                     \
     PREF_X(ColorScheme, "Color scheme", "Кольорова схема", "Цветовая схема")                                           \
+    PREF_X(ConfirmTitle, "CONFIRM", "ПІДТВЕРДИТИ", "ПОДТВЕРДИТЬ")                                                       \
     PREF_X(CurrentPlayers, "Current players:", "Поточні гравці:", "Текущие игроки:")                                   \
     PREF_X(Cyber, "Cyber", "Кібер", "Кибер")                                                                           \
     PREF_X(DECLINE, "DECLINE", "ВІДХИЛИТИ", "ОТКЛОНИТЬ")                                                               \
     PREF_X(Dark, "Dark", "Темний", "Тёмный")                                                                           \
     PREF_X(Date, "DATE", "ДАТА", "ДАТА")                                                                               \
+    PREF_X(DiscardSelectedCards, "Discard selected cards?", "Скинути вибрані карти?", "Сбросить выбранные карты?")    \
     PREF_X(Dracula, "Dracula", "Дракула", "Дракула")                                                                   \
     PREF_X(Draw, "Draw", "Нічия", "Ничья")                                                                             \
     PREF_X(Duration, "DURATION", "ТРИВАЛІСТЬ", "ДЛИТЕЛЬНОСТЬ")                                                         \
@@ -247,8 +250,8 @@ enum class GameLang : std::size_t {
     PREF_X(NoMoreForMe, "No more for me", "Більше не беру", "Моих больше нет")                                         \
     PREF_X(None, "", "", "")                                                                                           \
     PREF_X(Normal, "Normal", "Звичайна", "Обычная")                                                                    \
-    PREF_X(Openly, PREF_OPENLY, "У світлу", "В светлую")                                                               \
     PREF_X(Offer, "Offer", "Запропонувати", "Предложить")                                                              \
+    PREF_X(Openly, PREF_OPENLY, "У світлу", "В светлую")                                                               \
     PREF_X(Other, "Other", "Інше", "Другое")                                                                           \
     PREF_X(OverallScoreboard, "SCOREBOARD", "ТАБЛИЦЯ РЕЗУЛЬТАТІВ", "ТАБЛИЦА РЕЗУЛЬТАТОВ")                              \
     PREF_X(PDW, "P/D/W", "П/Г/В", "П/Г/В")                                                                             \
@@ -264,6 +267,7 @@ enum class GameLang : std::size_t {
     PREF_X(Send, "Send", "Надіслати", "Отправить")                                                                     \
     PREF_X(Settings, "SETTINGS", "НАЛАШТУВАННЯ", "НАСТРОЙКИ")                                                          \
     PREF_X(ShowFps, "Show Ping & FPS", "Показувати пінг та част. кадрів", "Показывать пинг и част. кадров")            \
+    PREF_X(SoundEffects, "Sound effects", "Звукові ефекти", "Звуковые эффекты")                                        \
     PREF_X(Time, "TIME", "ЧАС", "ВРЕМЯ")                                                                               \
     PREF_X(Total, "TOTAL", "УСЬОГО", "ВСЕГО")                                                                          \
     PREF_X(Trust, PREF_TRUST, "Довіряю", "Доверяю")                                                                    \
@@ -272,7 +276,6 @@ enum class GameLang : std::size_t {
     PREF_X(Whist, PREF_WHIST, "Віст", "Вист")                                                                          \
     PREF_X(Win, "Win", "Перемога", "Победа")                                                                           \
     PREF_X(WinRate, "WIN RATE", "ПЕРЕМОГ", "ПОБЕД")                                                                    \
-    PREF_X(SoundEffects, "Sound effects", "Звукові ефекти", "Звуковые эффекты")                                        \
     PREF_X(Yes, "Yes", "Так", "Да")                                                                                    \
     PREF_X(YourTurn, "Your turn", "Ваш хід", "Ваш ход")                                                                \
     PREF_X(YourTurnFor, "Your turn for", "Ваш хід за", "Ваш ход за")

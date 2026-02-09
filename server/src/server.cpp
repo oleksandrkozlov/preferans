@@ -670,6 +670,8 @@ auto handleBidding(const Message& msg) -> task<>
     co_await sendPlayerTurn(decidePlayerTurn());
 }
 
+auto startPlayingFromForehand() -> task<>;
+
 auto handleDiscardTalon(const Message& msg) -> task<>
 {
     auto discardTalon = makeMethod<DiscardTalon>(msg);
@@ -692,6 +694,8 @@ auto handleDiscardTalon(const Message& msg) -> task<>
             p.get().whistingChoice = PREF_WHIST;
             co_await sendWhisting(p.get().id, p.get().whistingChoice);
         }
+        co_await startPlayingFromForehand();
+        co_return;
     }
     advanceWhoseTurn();
     co_await sendPlayerTurn(decidePlayerTurn());
@@ -829,6 +833,11 @@ auto handleHowToPlay(const Message& msg) -> task<>
     co_await startPlayingFromForehand();
 }
 
+auto resetPassGameIfNeeded() -> void
+{
+    if (ctx().passGame.round != 0 and hasDeclarerFulfilledContract()) { ctx().passGame.resetRound(); }
+}
+
 auto handleMakeOffer(const Message& msg) -> task<>
 {
     const auto makeOffer = makeMethod<MakeOffer>(msg);
@@ -855,6 +864,7 @@ auto handleMakeOffer(const Message& msg) -> task<>
             return declarer;
         });
         whomAddTricks.tricksTaken += static_cast<int>(std::size(declarer.hand));
+        resetPassGameIfNeeded();
         // TODO: create GameState once
         // TODO: send only taken tricks
         for (const auto& p : players()) { co_await sendGameState(p.conn.ch); }
@@ -889,7 +899,7 @@ auto handlePlayCard(const Message& msg) -> task<>
         const auto winnerId = decideTrickWinner();
         co_await sendTrickFinished();
         if (const auto isDealFinished = rng::all_of(players(), &Hand::empty, &Player::hand); isDealFinished) {
-            if (ctx().passGame.round != 0 and hasDeclarerFulfilledContract()) { ctx().passGame.resetRound(); }
+            resetPassGameIfNeeded();
             co_return co_await finishDeal();
         }
         if (not ctx().passGame.now) {
@@ -964,7 +974,6 @@ auto dispatchMessage(const ChannelPtr& ch, PlayerSession& session, std::optional
 
 auto launchSession(Stream ws) -> task<>
 {
-    PREF_I();
     ws.binary(true);
     ws.set_option(web::stream_base::timeout::suggested(beast::role_type::server));
     ws.set_option(web::stream_base::decorator([](web::response_type& res) {

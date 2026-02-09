@@ -405,7 +405,7 @@ struct SpeechBubbleMenu {
     static constexpr auto windowBoxW = VirtualW / 5.f;
     static constexpr auto Margin = VirtualH / 60.f;
     static constexpr auto ListViewW = windowBoxW - (Margin * 2.f);
-    static constexpr auto SendCooldownInSec = 30;
+    static constexpr auto SendCooldownInSec = 10;
     bool isVisible{};
     bool isSendButtonActive = true;
     int cooldown = SendCooldownInSec;
@@ -522,6 +522,10 @@ struct ReadyCheckPopUp {
     bool isVisible{};
 };
 
+struct TalonDiscardPopUp {
+    bool isVisible{};
+};
+
 struct OfferButton {
     bool isPossible{};
     bool isVisible{};
@@ -607,6 +611,8 @@ struct Context {
     int rightCardCount = 10;
     std::map<PlayerId, const Card*> cardsOnTable;
     std::vector<CardNameView> lastTrickOrTalon;
+    std::vector<CardNameView> pendingTalonReveal;
+    double pendingTalonRevealUntil = 0.0;
     PlayerId forehandId;
     PlayerId turnPlayerId;
     BiddingMenu bidding;
@@ -625,6 +631,7 @@ struct Context {
     LogoutMessage logoutMessage;
     StartGameButton startGameButton;
     ReadyCheckPopUp readyCheckPopUp;
+    TalonDiscardPopUp talonDiscardPopUp;
     OfferButton offerButton;
     OfferPopUp offerPopUp;
     Ping ping;
@@ -642,6 +649,8 @@ struct Context {
         rightCardCount = 10;
         cardsOnTable.clear();
         lastTrickOrTalon.clear();
+        pendingTalonReveal.clear();
+        pendingTalonRevealUntil = 0.0;
         forehandId.clear();
         turnPlayerId.clear();
         bidding.clear();
@@ -728,6 +737,10 @@ struct Context {
 auto initAudioEngine() -> void;
 auto syncAudioPeers() -> void;
 auto teardownAudioEngine() -> void;
+[[nodiscard]] auto isTalonDiscardSelected(CardNameView name) -> bool;
+auto removeCardsFromHand(Player& player, const std::vector<CardNameView>& cardNames) -> void;
+auto handleTalonCardClick(std::list<const Card*>& hand) -> void;
+auto applyPendingTalonReveal() -> void;
 
 auto playSound(std::optional<r::Sound>& sound) -> void
 {
@@ -1510,13 +1523,28 @@ auto handlePlayerTurn(const Message& msg) -> void
     const auto isMyTurn = pref::isMyTurn();
     // FIXME: On reconnection during talon picking, previously discarded cards are incorrectly restored to the hand
     if (ctx().stage == TALON_PICKING) {
+        const auto talonCards = playerTurn->talon()
+            | rv::transform([](const auto& cardName) { return getCard(cardName).name; })
+            | rng::to_vector;
+        if (not std::empty(talonCards)) {
+            const auto allCardsAlreadyApplied = rng::all_of(talonCards, [&](const auto cardName) {
+                const auto& card = getCard(cardName);
+                return rng::contains(ctx().lastTrickOrTalon, card.name)
+                    and (not isMyTurn or rng::contains(ctx().myPlayer().hand, &card));
+            });
+            if (not allCardsAlreadyApplied and not rng::equal(ctx().pendingTalonReveal, talonCards)) {
+                ctx().pendingTalonReveal = std::move(talonCards);
+                ctx().pendingTalonRevealUntil = ctx().window.GetTime() + 2.0;
+                ctx().needsDraw = true;
+            }
+        }
+        applyPendingTalonReveal();
         for (const auto& cardName : playerTurn->talon()) {
             const auto& card = getCard(cardName);
             // Note: On reconnection, the cards are already sent by DealCards, so they must not be inserted twice
+            if (rng::contains(ctx().pendingTalonReveal, card.name)) { continue; }
             if (not rng::contains(ctx().lastTrickOrTalon, card.name)) { ctx().lastTrickOrTalon.push_back(card.name); }
-            if (isMyTurn and not rng::contains(ctx().myPlayer().hand, &card)) {
-                ctx().myPlayer().hand.emplace_back(&card);
-            }
+            if (isMyTurn and not rng::contains(ctx().myPlayer().hand, &card)) { ctx().myPlayer().hand.emplace_back(&card); }
         }
         // TODO: Sorting should be skipped if no cards were added above
         if (isMyTurn) { ctx().myPlayer().sortCards(); }
@@ -1837,6 +1865,22 @@ auto handleMiserCards(const Message& msg) -> void
     ctx().miserCardsPanel.remaining = miserCards->remaining_cards() | rng::to_vector;
     PREF_DI(ctx().miserCardsPanel.played, ctx().miserCardsPanel.remaining);
     ctx().miserCardsPanel.isVisible = true;
+}
+
+auto applyPendingTalonReveal() -> void
+{
+    if (std::empty(ctx().pendingTalonReveal)) { return; }
+    if (ctx().window.GetTime() < ctx().pendingTalonRevealUntil) { return; }
+    const auto isMyTurn = pref::isMyTurn();
+    for (const auto cardName : ctx().pendingTalonReveal) {
+        const auto& card = getCard(cardName);
+        if (not rng::contains(ctx().lastTrickOrTalon, card.name)) { ctx().lastTrickOrTalon.push_back(card.name); }
+        if (isMyTurn and not rng::contains(ctx().myPlayer().hand, &card)) { ctx().myPlayer().hand.emplace_back(&card); }
+    }
+    if (isMyTurn) { ctx().myPlayer().sortCards(); }
+    ctx().pendingTalonReveal.clear();
+    ctx().pendingTalonRevealUntil = 0.0;
+    ctx().needsDraw = true;
 }
 
 auto updateWindowSize() -> void
@@ -2181,6 +2225,9 @@ auto drawLoginScreen() -> void
     return widget.isVisible;
 }
 
+[[maybe_unused]] auto drawMessageBox(
+    const r::Vector2& pos, const std::string& title, const std::string& message, const std::string& buttons) -> int;
+
 auto drawLogoutMessage() -> void
 {
     if (not isVisible(ctx().logoutMessage)) { return; }
@@ -2214,6 +2261,32 @@ auto drawLogoutMessage() -> void
         emscripten_websocket_close(ctx().ws, 1000, "Logout");
     }
     ctx().logoutMessage.isVisible = false;
+}
+
+auto drawTalonDiscardPopUp() -> void
+{
+    if (not ctx().talonDiscardPopUp.isVisible) { return; }
+    const auto title = ctx().localizeText(GameText::ConfirmTitle);
+    const auto message = ctx().localizeText(GameText::DiscardSelectedCards);
+    const auto buttons = std::format(
+        "{};{}", //
+        ctx().localizeText(GameText::Yes),
+        ctx().localizeText(GameText::No));
+    const auto clicked = drawMessageBox({VirtualW * 0.5f, VirtualH * 0.45f}, title, message, buttons);
+    if (clicked == PREF_NO_CLICK) { return; }
+    if (clicked == PREF_OK_CLICK) {
+        removeCardsFromHand(ctx().myPlayer(), ctx().discardedTalon);
+        if (const auto isSixSpade = ctx().bidding.rank == 0; isSixSpade) {
+            ctx().bidding.rank = AllRanks;
+        } else if (const auto isNotAllPassed = ctx().bidding.rank != AllRanks; isNotAllPassed) {
+            --ctx().bidding.rank;
+        }
+        ctx().bidding.isVisible = true;
+    } else {
+        ctx().discardedTalon.clear();
+    }
+    ctx().talonDiscardPopUp.isVisible = false;
+    ctx().needsDraw = true;
 }
 
 [[maybe_unused]] auto drawMessageBox(
@@ -2386,9 +2459,39 @@ auto drawCardShineEffect(const bool isHovered, const r::Vector2& cardPosition) -
     EndBlendMode();
 }
 
+auto drawHandTurnAura(const r::Rectangle& cardsRect) -> void
+{
+    static constexpr auto roundness = 0.05f;
+    static constexpr auto segments = 0;
+    static constexpr auto margin = 2.f;
+    static constexpr auto size = 12.f;
+    static constexpr auto speed = 4.f;
+    static constexpr auto thick = CardWidth / 35.f;
+    const auto time = static_cast<float>(ctx().window.GetTime());
+    const auto pulse = (std::sin(time * speed) + 1.f) * 0.5f;
+    const auto ringColor = getGuiColor(BORDER_COLOR_NORMAL);
+    (cardsRect + (margin + pulse * size)).DrawRoundedLines(roundness, segments, thick, ringColor.Fade(0.95f));
+}
+
 auto drawCards(const r::Vector2 pos, Player& player, const Shift shift) -> void
 {
     using enum Shift;
+    const auto isMyHand = ctx().myPlayerId == player.id;
+    const auto isTheirHand = ctx().myPlayer().playsOnBehalfOf == player.id;
+    const auto isRightTurn = (isMyHand and isMyTurn() and not isSomeonePlayingOnMyBehalf())
+        or (isTheirHand and isMyTurnOnBehalfOfSomeone());
+    if (isRightTurn
+        and ctx().stage == GameStage::PLAYING
+        and not std::empty(player.hand)
+        and not ctx().isGameFreezed
+        and not ctx().bidding.isVisible
+        and not ctx().cardsOnTable.contains(player.id)) {
+        const auto handSize = static_cast<float>(std::size(player.hand));
+        const auto cardsRect = hasShift(shift, Horizont)
+            ? r::Rectangle{pos.x, pos.y, (handSize - 1.f) * CardOverlapX + CardWidth, CardHeight}
+            : r::Rectangle{pos.x, pos.y, CardWidth, (handSize - 1.f) * CardOverlapY + CardHeight};
+        drawHandTurnAura(cardsRect);
+    }
     const auto mousePos = r::Mouse::GetPosition();
     const auto toPos = [&](const auto i, const float offset = 0.f) {
         return hasShift(shift, Horizont) ? r::Vector2{pos.x + static_cast<float>(i) * CardOverlapX, pos.y + offset}
@@ -2403,21 +2506,28 @@ auto drawCards(const r::Vector2 pos, Player& player, const Shift shift) -> void
         return it == rng::end(reversed) ? -1 : *it;
     });
     for (auto&& [i, card] : player.hand | rv::enumerate) {
-        const auto isMyHand = ctx().myPlayerId == player.id;
-        const auto isTheirHand = ctx().myPlayer().playsOnBehalfOf == player.id;
-        const auto isRightTurn = (isMyHand and isMyTurn() and not isSomeonePlayingOnMyBehalf())
-            or (isTheirHand and isMyTurnOnBehalfOfSomeone());
         const auto isCardPlayable = pref::isCardPlayable(player.hand, card->name);
+        const auto isTalonPicking = ctx().stage == GameStage::TALON_PICKING;
+        const auto isTalonRevealPending = isMyHand and isTalonPicking and not std::empty(ctx().pendingTalonReveal);
+        const auto isSelectedForTalon = isMyHand and isTalonPicking and isTalonDiscardSelected(card->name);
+        const auto isTalonSelectionLocked
+            = isMyHand and isTalonPicking and (std::size(ctx().discardedTalon) == 2);
         const auto isHovered = (not ctx().isGameFreezed and isRightTurn)
+            and not isTalonRevealPending
             and (ctx().stage == GameStage::PLAYING or ctx().stage == GameStage::TALON_PICKING)
             and not ctx().bidding.isVisible
             and isCardPlayable
+            and (not isTalonSelectionLocked or isSelectedForTalon)
             and static_cast<int>(i) == hoveredIndex;
         static constexpr auto Offset = CardHeight / 10.f;
-        const auto offset = isHovered ? (hasShift(shift, Positive) ? Offset : -Offset) : 0.f;
+        const auto offset
+            = (isHovered or isSelectedForTalon) ? (hasShift(shift, Positive) ? Offset : -Offset) : 0.f;
         const auto cardPosition = toPos(i, offset);
         ctx().cardPositions[card->name] = cardPosition;
-        card->texture.Draw(cardPosition, tintForCard(not ctx().cardsOnTable.contains(player.id) and isCardPlayable));
+        const auto canPlay = not ctx().cardsOnTable.contains(player.id) and isCardPlayable;
+        const auto canPlayWithTalon
+            = isTalonSelectionLocked ? (isSelectedForTalon ? true : false) : canPlay;
+        card->texture.Draw(cardPosition, tintForCard(canPlayWithTalon));
         drawCardShineEffect(isHovered, cardPosition);
     }
 }
@@ -2594,6 +2704,12 @@ auto drawOfferButton() -> void
             = ctx().settingsMenu.loadedColorScheme == "dracula" ? BASE_COLOR_NORMAL : TEXT_COLOR_NORMAL;
         ctx().fontAwesomeXL.DrawText(
             isLeft ? LeftArrowIcon : RightArrowIcon, arrow, arrowSize, getGuiColor(arrowStyle));
+    } else if (ctx().stage == GameStage::PLAYING) {
+        static const auto arrowSize = ctx().fontSizeXL();
+        const auto arrow = r::Vector2{rect.x + rect.width, rect.y};
+        const auto arrowStyle
+            = ctx().settingsMenu.loadedColorScheme == "dracula" ? BASE_COLOR_NORMAL : TEXT_COLOR_NORMAL;
+        ctx().fontAwesomeXL.DrawText(DownArrowIcon, arrow, arrowSize * .9f, getGuiColor(arrowStyle));
     }
     GuiLabel(rect, text.c_str());
     return textY;
@@ -2730,6 +2846,20 @@ auto drawPlayedCards() -> void
     }
 }
 
+auto drawPendingTalonReveal() -> void
+{
+    if (std::empty(ctx().pendingTalonReveal)) { return; }
+    static constexpr auto gap = CardWidth / 5.f;
+    const auto count = static_cast<float>(std::size(ctx().pendingTalonReveal));
+    const auto totalWidth = CardWidth * count + gap * std::max(0.f, count - 1.f);
+    const auto x = (VirtualW - totalWidth) * 0.5f;
+    const auto y = (VirtualH - CardHeight) * 0.5f;
+    for (const auto [i, cardName] : ctx().pendingTalonReveal | rv::enumerate) {
+        const auto pos = r::Vector2{x + static_cast<float>(i) * (CardWidth + gap), y};
+        getCard(cardName).texture.Draw(pos);
+    }
+}
+
 #define PREF_GUI_PROPERTY(PREF_PREFIX, PREF_STATE)                                                                     \
     std::invoke([&] {                                                                                                  \
         switch (PREF_STATE) {                                                                                          \
@@ -2750,6 +2880,7 @@ auto drawPlayedCards() -> void
 {
     const auto myFirstBid = std::empty(myBid);
     return (bid == PREF_PASS and finalBid) // Pass final bid
+        or (bid == PREF_NINE_WT and finalBid) // Nine WT not allowed as final bid
         or (bid != PREF_PASS and currentRank != AllRanks and currentRank >= rank) // Rank restriction
         or (bid == PREF_MISER and not myFirstBid and myBid != PREF_MISER) // Miser first bid restrictions
         or (bid == PREF_MISER_WT
@@ -3026,6 +3157,46 @@ auto drawHowToPlayMenu() -> void
         []([[maybe_unused]] const GameText _) { return true; });
 }
 
+[[nodiscard]] auto isTalonDiscardSelected(const CardNameView name) -> bool
+{
+    return rng::contains(ctx().discardedTalon, name);
+}
+
+auto removeCardsFromHand(Player& player, const std::vector<CardNameView>& cardNames) -> void
+{
+    for (const auto name : cardNames) {
+        const auto it = rng::find_if(player.hand, [&](const Card* card) { return card->name == name; });
+        if (it == player.hand.end()) { continue; }
+        ctx().cardPositions.erase(name);
+        player.hand.erase(it);
+    }
+}
+
+auto handleTalonCardClick(std::list<const Card*>& hand) -> void
+{
+    if (not r::Mouse::IsButtonPressed(MOUSE_LEFT_BUTTON)) { return; }
+    const auto mousePos = r::Mouse::GetPosition();
+    const auto hit = [&](const Card* c) {
+        return r::Rectangle{ctx().cardPositions[c->name], c->texture.GetSize()}.CheckCollision(mousePos);
+    };
+    const auto reversed = hand | rv::reverse;
+    if (const auto rit = rng::find_if(reversed, hit); rit != rng::cend(reversed)) {
+        const auto it = std::next(rit).base();
+        const auto cardName = (*it)->name;
+        if (const auto selectedIt = rng::find(ctx().discardedTalon, cardName);
+            selectedIt != rng::end(ctx().discardedTalon)) {
+            ctx().discardedTalon.erase(selectedIt);
+            if (std::size(ctx().discardedTalon) < 2) { ctx().talonDiscardPopUp.isVisible = false; }
+            ctx().needsDraw = true;
+            return;
+        }
+        if (std::size(ctx().discardedTalon) >= 2) { return; }
+        ctx().discardedTalon.push_back(cardName);
+        if (std::size(ctx().discardedTalon) == 2) { ctx().talonDiscardPopUp.isVisible = true; }
+        ctx().needsDraw = true;
+    }
+}
+
 auto handleCardClick(
     std::list<const Card*>& hand,
     std::invocable<const Card&> auto act,
@@ -3095,7 +3266,7 @@ auto handleCardClick(
 
 [[nodiscard]] auto makeAwesomeLargeCodepoints()
 {
-    return std::array{LeftArrowIcon, RightArrowIcon};
+    return std::array{LeftArrowIcon, RightArrowIcon, DownArrowIcon};
 }
 
 auto loadFonts() -> void
@@ -4006,15 +4177,9 @@ auto handleMousePress() -> void
     } else {
         if (not isMyTurn()) { return; }
     }
-    if ((ctx().stage != GameStage::TALON_PICKING) or (std::size(ctx().discardedTalon) >= 2)) { return; }
-    handleCardClick(ctx().myPlayer().hand, [&](const Card& card) { ctx().discardedTalon.push_back(card.name); });
-    if (std::size(ctx().discardedTalon) != 2) { return; }
-    if (const auto isSixSpade = ctx().bidding.rank == 0; isSixSpade) {
-        ctx().bidding.rank = AllRanks;
-    } else if (const auto isNotAllPassed = ctx().bidding.rank != AllRanks; isNotAllPassed) {
-        --ctx().bidding.rank;
-    }
-    ctx().bidding.isVisible = true;
+    if (ctx().stage != GameStage::TALON_PICKING) { return; }
+    if (not std::empty(ctx().pendingTalonReveal)) { return; }
+    handleTalonCardClick(ctx().myPlayer().hand);
 }
 
 // TODO: Prevent interaction with other buttons during settings menu movement
@@ -4066,6 +4231,7 @@ auto needsDraw() -> bool
 auto updateDrawFrame([[maybe_unused]] void* ud) -> void
 {
     if (not needsDraw()) { return; }
+    applyPendingTalonReveal();
     if (GuiIsLocked()
         and not ctx().settingsMenu.moving
         and not ctx().speechBubbleMenu.moving
@@ -4088,10 +4254,12 @@ auto updateDrawFrame([[maybe_unused]] void* ud) -> void
         drawBiddingMenu();
         drawMiserCards();
         drawMyHand();
+        drawTalonDiscardPopUp();
         drawOfferButton();
         drawRightHand();
         drawLeftHand();
         drawPlayedCards();
+        drawPendingTalonReveal();
         drawScoreSheetButton();
         drawScoreSheet();
         drawLastTrickOrTalon();

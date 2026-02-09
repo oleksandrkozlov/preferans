@@ -60,7 +60,7 @@ auto main(const int argc, const char* const argv[]) -> int
         const auto args = docopt::docopt(pref::Usage, {std::next(argv), std::next(argv, argc)});
         auto const address = net::ip::make_address(args.at("<address>").asString());
         auto const port = gsl::narrow<std::uint16_t>(args.at("<port>").asLong());
-        spdlog::set_pattern("[%^%l%$][%t][%!] %v");
+        spdlog::set_pattern("[%Y-%m-%d %H:%M:%S][%^%l%$][%t][%!] %v");
         auto pool = execpools::asio_thread_pool{1};
         auto ex = pool.get_executor();
         auto& ctx = pref::ctx(ex);

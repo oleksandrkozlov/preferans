@@ -23,6 +23,7 @@
 #endif // PREF_SSL
 
 #include <cassert>
+#include <array>
 #include <chrono>
 #include <coroutine>
 #include <iterator>
@@ -70,7 +71,30 @@ template<class T = void>
 using task = ex::task<T>; // NOLINT(readability-identifier-naming)
 
 inline constexpr auto PrintError = [](const std::string_view func, const std::exception_ptr& eptr) {
-    const auto logErr = [func](const auto& error) { PREF_W("[{}] {}", func, PREF_V(error)); };
+    const auto shouldSuppress = [](const std::string_view message) {
+        static constexpr auto suppressed = std::to_array<std::string_view>(
+            {"Connection reset by peer",
+             "The WebSocket handshake",
+             "bad method",
+             "bad target",
+             "bad version",
+             "http request",
+             "no shared cipher",
+             "packet length too long",
+             "ssl/tls alert handshake failure",
+             "stream truncated",
+             "unexpected body",
+             "unexpected message",
+             "unexpected record",
+             "unknown protocol",
+             "unsupported protocol",
+             "version too low",
+             "wrong version number"});
+        return rng::any_of(suppressed, [message](const std::string_view text) { return message.contains(text); });
+    };
+    const auto logErr = [func, shouldSuppress](const auto& error) {
+        if (not shouldSuppress(error)) { PREF_W("[{}] {}", func, PREF_V(error)); };
+    };
     if (not eptr) {
         logErr("success");
         return;
@@ -86,7 +110,7 @@ inline constexpr auto PrintError = [](const std::string_view func, const std::ex
         }
         logErr(error.code().message());
     } catch (const std::exception& error) {
-        logErr(error);
+        logErr(error.what());
     } catch (...) {
         logErr("unknown");
     }

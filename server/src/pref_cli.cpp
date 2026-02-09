@@ -11,6 +11,8 @@
 #include <docopt/docopt.h>
 #include <range/v3/all.hpp>
 
+#include <charconv>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <iterator>
@@ -34,6 +36,7 @@ Usage:
   pref-cli <path> show --tokens <id>
   pref-cli <path> remove --user <id>
   pref-cli <path> remove --games <id>
+  pref-cli <path> remove --game <id> <game>
   pref-cli <path> remove --tokens <id> [--token=<token>]
   pref-cli (-h | --help)
 )";
@@ -41,10 +44,16 @@ Usage:
 constexpr auto LogOnNone
     = [](const PlayerIdView playerId) { return OnNone([playerId] { PREF_W("{} not found", PREF_V(playerId)); }); };
 
+constexpr auto sum = []<typename Rng>(Rng&& rng) { return rng::fold_left(std::forward<Rng>(rng), 0, std::plus{}); };
+
 auto listUsers(const GameData& data) -> void
 {
-    rng::for_each(
-        data.users(), [](const auto& user) { std::println("{} | {}", user.player_id(), user.player_name()); });
+    auto nameWidth = std::size_t{};
+    for (const auto& user : data.users()) { nameWidth = std::max(nameWidth, user.player_name().size()); }
+    rng::for_each(data.users(), [nameWidth](const auto& user) {
+        auto mmr = sum(user.games() | rv::transform([](auto&& game) { return game.mmr(); }));
+        std::println("{} | {:<{}} | {:+d}", user.player_id(), user.player_name(), nameWidth, mmr);
+    });
 }
 
 auto showUser(const GameData& data, const PlayerIdView playerId) -> void
@@ -133,6 +142,20 @@ auto removeGames(GameData& data, const PlayerNameView playerId) -> void
     });
 }
 
+auto removeGame(GameData& data, const PlayerNameView playerId, const std::int32_t game) -> void
+{
+    userByPlayerId(data, playerId) | LogOnNone(playerId) | OnValue([playerId, game](User& user) {
+        auto& games = *user.mutable_games();
+        const auto it = rng::remove(games, game, &UserGame::id);
+        if (it == rng::end(games)) {
+            PREF_W("{} for {} not found", PREF_V(game), PREF_V(playerId));
+            return;
+        }
+        games.erase(it, rng::end(games));
+        PREF_I("Removed {} for {}", PREF_V(game), PREF_V(playerId));
+    });
+}
+
 } // namespace
 } // namespace pref
 
@@ -161,6 +184,17 @@ auto main(int argc, char** argv) -> int
                 pref::removeUser(data, args.at("<id>").asString());
             } else if (args.at("--games").asBool()) {
                 pref::removeGames(data, args.at("<id>").asString());
+            } else if (args.at("--game").asBool()) {
+                const auto game = args.at("<game>").asString();
+                auto num = std::int32_t{};
+                const auto first = std::data(game);
+                const auto last = std::next(first, std::ssize(game));
+                if (std::from_chars(first, last, num).ec != std::errc{}) {
+                    PREF_W("Invalid {}", PREF_V(game));
+                    return 1;
+                } else {
+                    pref::removeGame(data, args.at("<id>").asString(), num);
+                }
             }
             pref::storeGameData(path, data);
         } else if (args.at("add").asBool()) {
