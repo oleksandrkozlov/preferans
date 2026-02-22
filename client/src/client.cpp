@@ -2718,7 +2718,7 @@ auto drawOfferButton() -> void
 [[nodiscard]] auto drawWhist(const r::Vector2& pos, const Player& player, const Shift shift) -> bool
 {
     const auto choice = std::invoke([&]() -> std::string {
-        if (not isMiser()) {
+        if (isMiser()) {
             if (player.whistingChoice == PREF_PASS) { return PREF_TRUST; }
             if (player.whistingChoice == PREF_WHIST) { return PREF_CATCH; };
         }
