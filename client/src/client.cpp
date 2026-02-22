@@ -2717,7 +2717,14 @@ auto drawOfferButton() -> void
 
 [[nodiscard]] auto drawWhist(const r::Vector2& pos, const Player& player, const Shift shift) -> bool
 {
-    return drawGameText(pos, ctx().localizeText(whistingChoiceToGameText(player.whistingChoice)), shift).first;
+    const auto choice = std::invoke([&]() -> std::string {
+        if (not isMiser()) {
+            if (player.whistingChoice == PREF_PASS) { return PREF_TRUST; }
+            if (player.whistingChoice == PREF_WHIST) { return PREF_CATCH; };
+        }
+        return player.whistingChoice;
+    });
+    return drawGameText(pos, ctx().localizeText(whistingChoiceToGameText(choice)), shift).first;
 }
 
 [[nodiscard]] auto cardCount(const std::list<const Card*>& hand, const DrawPosition drawPosition) -> int
